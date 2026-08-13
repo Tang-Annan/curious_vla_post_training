@@ -272,6 +272,7 @@
 
 - 状态：通过，不改变保存频率或训练过程。
 - 代码与配置：E1–E4 继续每 50 steps 保存、最多保留 2 个 checkpoint；阶段完成前新增硬验收，要求 tracker 的 `last_global_step=250` 且 `global_step_250/actor` 存在。
+- 原始证据：本地全套相关测试为 14 passed、4 skipped，`git diff --check` 通过；提交后的最新启动器在服务器 `/tmp` 隔离路径通过 `bash -n`，随后删除临时文件，未触碰 D0 checkout 或 GPU。
 - 分析：final dev 在 step 250 训练结束后执行，而中途 `val_freq=-1`，因此 tracker 中早期保存时形成的 `best_global_step` 不构成同条件模型选择证据。正式比较统一使用 final `global_step_250`，不误用 step 50。
 - 决策：冻结 step 250 为 E1–E4 唯一正式 checkpoint；若缺失则阶段失败，不用较早 checkpoint 兜底。
 - 下一动作：等待 D0 完整验收，随后用最新正式启动器执行 E1。
