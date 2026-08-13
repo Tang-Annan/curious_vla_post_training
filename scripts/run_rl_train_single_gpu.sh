@@ -13,15 +13,21 @@ REWARD_FUNCTION="${REWARD_FUNCTION:-./verl/utils/reward_score/navsim/navsim_rewa
 ADV_ESTIMATOR="${ADV_ESTIMATOR:-grpo}"
 STD_FLOOR="${STD_FLOOR:-0.05}"
 MAX_STEPS="${MAX_STEPS:-5}"
-SESSION_NAME="curious_reward_$$"
 
 for path in "$MODEL_PATH" "$DATA_PATH" "$FILTER_FILE" "$CACHE_PATH/metadata"; do
     [[ -e "$path" ]] || { echo "Missing required path: $path" >&2; exit 1; }
 done
 
-trap 'tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true' EXIT
-tmux new-session -d -s "$SESSION_NAME" \
-    "export PROJECT_ROOT='$PROJECT_ROOT' DATA_ROOT='$PROJECT_ROOT/datasets/navsim' CACHE_PATH='$CACHE_PATH' REWARD_SERVER_PORT='$REWARD_SERVER_PORT' NAVSIM_SERVER_WORKERS=1; cd '$PROJECT_ROOT/navsim_eval'; '$WORKSPACE_ROOT/envs/navsim/bin/gunicorn' navsim.planning.script.run_gunicorn_server:app -w 1 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:'$REWARD_SERVER_PORT' --timeout 150"
+(
+    export PROJECT_ROOT DATA_ROOT="$PROJECT_ROOT/datasets/navsim" CACHE_PATH REWARD_SERVER_PORT
+    cd "$PROJECT_ROOT/navsim_eval"
+    exec "$WORKSPACE_ROOT/envs/navsim/bin/gunicorn" \
+        navsim.planning.script.run_gunicorn_server:app \
+        -w 1 -k uvicorn.workers.UvicornWorker \
+        -b "0.0.0.0:$REWARD_SERVER_PORT" --timeout 150
+) &
+REWARD_SERVER_PID=$!
+trap 'kill "$REWARD_SERVER_PID" 2>/dev/null || true; wait "$REWARD_SERVER_PID" 2>/dev/null || true' EXIT
 
 for _ in $(seq 1 30); do
     curl -fsS "http://127.0.0.1:$REWARD_SERVER_PORT/ping" >/dev/null && break
