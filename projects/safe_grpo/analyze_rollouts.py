@@ -10,6 +10,19 @@ from pathlib import Path
 import numpy as np
 
 
+AGGREGATE_METRICS = (
+    "pdms_scaled",
+    "pdms",
+    "safe",
+    "no_at_fault_collisions",
+    "drivable_area_compliance",
+    "ego_progress",
+    "time_to_collision_within_bound",
+    "history_comfort",
+    "reward_latency_ms",
+)
+
+
 def pairwise_distance(rows: list[dict], point_index: int | None = None) -> float | None:
     valid = [np.asarray(row["poses"], dtype=float) for row in rows if row.get("parsed_ok", True)]
     distances = []
@@ -35,6 +48,7 @@ def analyze(
     std_threshold: float,
     manifest: Path | None = None,
     expected_rollouts: int | None = None,
+    max_response_length: int = 512,
 ) -> dict:
     allowed = set(load_manifest(manifest)) if manifest is not None else None
     groups: dict[str, list[dict]] = defaultdict(list)
@@ -67,6 +81,7 @@ def analyze(
         rewards = np.asarray(
             [row["pdms_scaled"] if "pdms_scaled" in row else row["overall"] for row in rows], dtype=float
         )
+        safe_values = [float(row["safe"]) for row in rows if "safe" in row]
         summaries.append(
             {
                 "token": token,
@@ -77,14 +92,35 @@ def analyze(
                 "reward_max": float(rewards.max()),
                 "headroom": float(rewards.max() - rewards.mean()),
                 "parse_success_rate": float(np.mean([bool(row.get("parsed_ok", True)) for row in rows])),
+                "safe_rate": float(np.mean(safe_values)) if safe_values else None,
                 "pairwise_ade": pairwise_distance(rows),
                 "pairwise_fde": pairwise_distance(rows, -1),
             }
         )
 
     stds = np.asarray([row["reward_std"] for row in summaries], dtype=float)
+    all_rows = [row for rows in groups.values() for row in rows]
+    rewards = np.asarray(
+        [
+            row["pdms_scaled"] if "pdms_scaled" in row else row["overall"]
+            for row in all_rows
+        ],
+        dtype=float,
+    )
+    headrooms = np.asarray([row["headroom"] for row in summaries], dtype=float)
+    pairwise_ades = np.asarray(
+        [row["pairwise_ade"] for row in summaries if row["pairwise_ade"] is not None], dtype=float
+    )
+    pairwise_fdes = np.asarray(
+        [row["pairwise_fde"] for row in summaries if row["pairwise_fde"] is not None], dtype=float
+    )
+    metric_means = {
+        key: float(np.mean([float(row[key]) for row in all_rows if key in row]))
+        for key in AGGREGATE_METRICS
+        if any(key in row for row in all_rows)
+    }
     lengths = np.asarray(
-        [row["response_length"] for rows in groups.values() for row in rows if "response_length" in row],
+        [row["response_length"] for row in all_rows if "response_length" in row],
         dtype=float,
     )
     return {
@@ -94,16 +130,25 @@ def analyze(
         "low_nonzero_std_ratio": float(np.mean((stds > 0.0) & (stds < std_threshold))) if len(stds) else None,
         "below_threshold_std_ratio": float(np.mean(stds < std_threshold)) if len(stds) else None,
         "std_threshold": std_threshold,
+        "reward_mean": float(rewards.mean()) if len(rewards) else None,
+        "reward_std": float(rewards.std()) if len(rewards) else None,
+        "headroom_mean": float(headrooms.mean()) if len(headrooms) else None,
+        "pairwise_ade_mean": float(pairwise_ades.mean()) if len(pairwise_ades) else None,
+        "pairwise_fde_mean": float(pairwise_fdes.mean()) if len(pairwise_fdes) else None,
         "response_length_percentiles": {
             f"p{percentile}": float(np.percentile(lengths, percentile)) for percentile in (50, 90, 95, 99)
         }
         if len(lengths)
         else None,
+        "response_length_mean": float(lengths.mean()) if len(lengths) else None,
+        "clipped_responses": int(np.sum(lengths >= max_response_length)) if len(lengths) else None,
         "parse_success_rate": float(
-            np.mean([bool(row.get("parsed_ok", True)) for rows in groups.values() for row in rows])
+            np.mean([bool(row.get("parsed_ok", True)) for row in all_rows])
         )
         if groups
         else None,
+        "safe_rate": metric_means.get("safe"),
+        "metric_means": metric_means,
         "group_metrics": summaries,
     }
 
@@ -114,8 +159,15 @@ def main() -> None:
     parser.add_argument("--std-threshold", type=float, default=0.05)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--expected-rollouts", type=int)
+    parser.add_argument("--max-response-length", type=int, default=512)
     args = parser.parse_args()
-    report = analyze(args.jsonl, args.std_threshold, args.manifest, args.expected_rollouts)
+    report = analyze(
+        args.jsonl,
+        args.std_threshold,
+        args.manifest,
+        args.expected_rollouts,
+        args.max_response_length,
+    )
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 

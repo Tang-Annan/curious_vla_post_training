@@ -161,9 +161,30 @@ else
         trainer.save_limit=2 \
         trainer.save_checkpoint_path="$RUN_DIR/checkpoints"
 
-    mapfile -t rollout_files < <(find "checkpoints/debug/$EXP_NAME" -maxdepth 1 -name 'generations_*.jsonl' -type f)
-    [[ ${#rollout_files[@]} -eq 1 ]] || { echo "Expected one E1 rollout file, found ${#rollout_files[@]}." >&2; exit 1; }
-    cp "${rollout_files[0]}" "$RUN_DIR/rollouts.jsonl"
+    mapfile -t rollout_files < <(find "checkpoints/debug/$EXP_NAME" -maxdepth 1 -name 'generations_*.jsonl' -type f | sort)
+    [[ ${#rollout_files[@]} -ge 1 ]] || { echo "Expected at least one E1 rollout file." >&2; exit 1; }
+    for rollout_file in "${rollout_files[@]}"; do
+        cat "$rollout_file"
+    done > "$RUN_DIR/raw_rollouts.jsonl"
+    "$WORKSPACE_ROOT/envs/curious/bin/python" "$PROJECT_ROOT/projects/safe_grpo/split_rollouts.py" \
+        "$RUN_DIR/raw_rollouts.jsonl" \
+        --train-manifest "$ITERATION_MANIFEST" \
+        --dev-manifest "$DEV_MANIFEST" \
+        --train-output "$RUN_DIR/train_rollouts.jsonl" \
+        --dev-output "$RUN_DIR/dev_rollouts.jsonl" \
+        --expected-train-rollouts 2 \
+        --expected-dev-rollouts 1 \
+        > "$RUN_DIR/rollout_coverage.json"
+    "$WORKSPACE_ROOT/envs/curious/bin/python" "$PROJECT_ROOT/projects/safe_grpo/analyze_rollouts.py" \
+        "$RUN_DIR/train_rollouts.jsonl" \
+        --manifest "$ITERATION_MANIFEST" \
+        --expected-rollouts 2 \
+        > "$RUN_DIR/train_diagnosis.json"
+    "$WORKSPACE_ROOT/envs/curious/bin/python" "$PROJECT_ROOT/projects/safe_grpo/analyze_rollouts.py" \
+        "$RUN_DIR/dev_rollouts.jsonl" \
+        --manifest "$DEV_MANIFEST" \
+        --expected-rollouts 1 \
+        > "$RUN_DIR/final_dev_metrics.json"
 fi
 
 touch "$RUN_DIR/COMPLETE"

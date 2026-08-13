@@ -117,7 +117,16 @@ def test_rollout_analysis_enforces_manifest_coverage(tmp_path):
     manifest.write_text("a\nb\n", encoding="utf-8")
     rollouts = tmp_path / "rollouts.jsonl"
     rows = [
-        {"token": token, "pdms_scaled": reward, "poses": [[0.0, 0.0, 0.0]], "parsed_ok": True}
+        {
+            "token": token,
+            "pdms_scaled": reward,
+            "poses": [[0.0, 0.0, 0.0]],
+            "parsed_ok": True,
+            "response_length": 512 if token == "a" and reward == 0.4 else 100,
+            "pdms": reward + 0.1,
+            "safe": float(token == "a"),
+            "no_at_fault_collisions": 1.0,
+        }
         for token in ("a", "b")
         for reward in (0.4, 0.4, 0.41, 0.42)
     ]
@@ -127,6 +136,17 @@ def test_rollout_analysis_enforces_manifest_coverage(tmp_path):
     assert report["rollouts"] == 8
     assert report["exact_zero_std_ratio"] == pytest.approx(0.0)
     assert report["low_nonzero_std_ratio"] == pytest.approx(1.0)
+    assert report["reward_mean"] == pytest.approx(0.4075)
+    assert report["reward_std"] == pytest.approx(0.0082915619759)
+    assert report["headroom_mean"] == pytest.approx(0.0125)
+    assert report["pairwise_ade_mean"] == pytest.approx(0.0)
+    assert report["pairwise_fde_mean"] == pytest.approx(0.0)
+    assert report["safe_rate"] == pytest.approx(0.5)
+    assert report["response_length_mean"] == pytest.approx(203.0)
+    assert report["clipped_responses"] == 2
+    assert report["metric_means"]["pdms_scaled"] == pytest.approx(0.4075)
+    assert report["metric_means"]["pdms"] == pytest.approx(0.5075)
+    assert report["metric_means"]["no_at_fault_collisions"] == pytest.approx(1.0)
 
 
 def test_rollout_analysis_rejects_rows_outside_manifest(tmp_path):
@@ -141,6 +161,39 @@ def test_rollout_analysis_rejects_rows_outside_manifest(tmp_path):
     )
     with pytest.raises(ValueError, match="outside the manifest"):
         analysis.analyze(rollouts, 0.05, manifest)
+
+
+def test_split_rollouts_enforces_train_and_final_dev_coverage(tmp_path):
+    splitter = load_module(ROOT / "projects/safe_grpo/split_rollouts.py", "split_rollouts")
+    train_manifest = tmp_path / "train.txt"
+    dev_manifest = tmp_path / "dev.txt"
+    source = tmp_path / "raw.jsonl"
+    train_manifest.write_text("train_a\ntrain_b\n", encoding="utf-8")
+    dev_manifest.write_text("dev_a\n", encoding="utf-8")
+    rows = [
+        {"token": token, "pdms_scaled": 0.5}
+        for token in ("train_a", "train_b")
+        for _ in range(2)
+    ] + [{"token": "dev_a", "pdms_scaled": 0.6}]
+    source.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    train_rows, dev_rows = splitter.split_rollouts(source, train_manifest, dev_manifest, 2, 1)
+
+    assert len(train_rows) == 4
+    assert len(dev_rows) == 1
+
+
+def test_split_rollouts_rejects_unknown_token(tmp_path):
+    splitter = load_module(ROOT / "projects/safe_grpo/split_rollouts.py", "split_rollouts_unknown")
+    train_manifest = tmp_path / "train.txt"
+    dev_manifest = tmp_path / "dev.txt"
+    source = tmp_path / "raw.jsonl"
+    train_manifest.write_text("train\n", encoding="utf-8")
+    dev_manifest.write_text("dev\n", encoding="utf-8")
+    source.write_text(json.dumps({"token": "held_out"}) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="outside both manifests"):
+        splitter.split_rollouts(source, train_manifest, dev_manifest, 1, 1)
 
 
 def test_adas_preserves_manifest_and_final_partial_batch():
