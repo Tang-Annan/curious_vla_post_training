@@ -43,7 +43,7 @@ worker:
       attn_implementation: sdpa
       enable_gradient_checkpointing: true
       trust_remote_code: true
-      freeze_vision_tower: true
+      freeze_vision_tower: false
       lora:
         rank: 8
         alpha: 16
