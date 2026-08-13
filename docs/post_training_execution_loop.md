@@ -4,13 +4,13 @@
 
 ## 1. 当前快照
 
-- 最后更新：2026-08-13 22:38 CST
+- 最后更新：2026-08-14 01:45 CST
 - 开发分支：`codex/post-training-analysis`
 - 开发分支同步状态：已推送，具体 revision 以 `codex/post-training-analysis` 的 Git HEAD 为准
 - D0 source commit：`7c8adda`（运行期间未更新 checkout）
 - 固定随机种子：`20260812`
-- 当前动作：E1 Vanilla LoRA-GRPO 正式训练
-- 下一科学实验：E1 Vanilla LoRA-GRPO
+- 当前动作：启动 E2 FALS-only LoRA-GRPO
+- 下一科学实验：E2 FALS-only LoRA-GRPO
 - 正式实验顺序：`E0 → D0 → E1 → E2 → E3 → E4（条件门控）→ E5 → F0`
 
 | 阶段 | 状态 | 当前结论 | 下一动作 |
@@ -19,8 +19,8 @@
 | A0 validation 加速隔离测试 | 完成 | 保持 batch 4 / token budget 4608；拒绝独立 flash-attn、LRU 和 batch 8 | A1 只实现无损 reward 并发 |
 | A1 reward 并发回归 | 延期 | 候选尚未完成端到端远程回归，不进入正式路线 | 仅在 E5 吞吐阶段重新评估 |
 | D0 train rollout diagnosis | 完成 | 4,525×4 完整通过；存在可学习方差与 headroom | 保留为 E1–E4 train 诊断基线 |
-| E1 Vanilla LoRA-GRPO | 启动中 | 固定随机 train 1k、250 steps，其余配置不变 | 完成后按 final dev 验收 |
-| E2 FALS only | 待执行 | 唯一 train-only top-1000 manifest 已冻结 | E1 完成并写回后启动 |
+| E1 Vanilla LoRA-GRPO | 完成 | 产物完整，但 final-dev 低于 E0，不作为最终候选 | 保留为 vanilla 对照 |
+| E2 FALS only | 启动中 | 唯一 train-only top-1000 manifest 已冻结 | 仅改变训练样本选择并复现实验预算 |
 | E3 SLDR only | 待执行 | 不提前判断效果 | 与 E1 保持其余变量一致 |
 | E4 Std-Floor GRPO | 条件待执行 | 受低非零方差占比门控 | E3 中至少 10% group 满足 `0 < std < 0.05` 才运行 |
 | E5 grouped reward throughput | 待执行 | A0 仅提供候选配置 | 对最终候选做正式吞吐与等价性验证 |
@@ -299,6 +299,19 @@
 - 启动健康：`RUNNING`、run.env、train/dev manifest 和 source 证据均已落盘；trainer 占用约 18,994 MiB，reward 8901 返回 HTTP 200，主进程持续运行。
 - 决策：按冻结协议继续 E1，不插入配置或加速探索；正常状态静默。
 - 下一动作：按 ETA 四档规则监控 E1；完成后先核验 step-250 checkpoint、1,000×2 train rollout、566×1 final dev、指标和资源回收，再写回并推进 E2。
+
+### 记录 011：E1 Vanilla LoRA-GRPO 完成
+
+- 状态：技术验收通过，效果未超过 E0；保留为必要对照，不进入最终候选。
+- 代码与配置：source commit `b5a63401813009e43adb11c9506665166561b030`，source status 为空；使用冻结随机 train 1k、250 steps、rank-8 LoRA 与 2.1 节生成/reward 协议。tracker 的 `last_global_step=250`，`global_step_250/actor` 模型、optimizer、extra state、dataloader 和 LoRA adapter 文件完整。
+- 原始证据：服务器 `experiments/safe_grpo/e1_vanilla_lora_1k_seed20260812/`；运行时间 2026-08-13 22:37:45 至 2026-08-14 01:34:15 CST，约 2 小时 56 分 30 秒；`COMPLETE` 存在、`exit_code=0`，无 `RUNNING/FAILED`。
+- 覆盖与完整性：raw rollout 2,566 行；train 为 2,000 行、1,000 个唯一 token、每 token 2 条；final dev 为 566 行、566 个唯一 token、每 token 1 条。train/dev 均无缺失、未知 token、相互重叠或 held-out 重叠。主 PID、trainer、Ray、Gunicorn/8901 已退出，GPU 回收至 0 MiB；日志无 OOM、traceback、fatal 或 exception。
+- train diagnosis：reward mean/std `0.61446/0.45183`，exact-zero std `46.30%`，`0 < std < 0.05` 为 `13.60%`，平均 headroom `0.17365`，pairwise ADE/FDE `0.65745/1.47647`，safe rate `65.55%`，parse success `99.90%`（2/2,000 失败），无 clipping。
+- final dev：PDMS scaled `0.64281`、PDMS `0.66691`、safe rate `0.70671`、collision compliance `0.95936`、drivable-area compliance `0.74205`、ego progress `0.91071`、TTC compliance `0.94170`、comfort `0.91873`、parse success `1.0`、clipping `0`。
+- 与 E0 同协议差值：PDMS scaled `-0.01657`、PDMS `-0.01670`、safe rate `-0.01767`、collision `-0.00707`、drivable area `-0.01060`、progress `-0.00064`、TTC `-0.00707`、comfort `-0.00177`。各质量指标均未改善；reward latency 下降 `31.70 ms/sample` 不是模型质量收益，也不用于模型选择。
+- 分析：E1 证明当前预算下随机 1k vanilla GRPO 没有改善冻结 baseline；1k train rollout 的 exact-zero std 高达 46.30%，表明随机采样浪费了大量相对优势为零的 group。这与 D0 的 FALS 动机一致，但不能预先断言 E2 会改善。
+- 决策：接受 E1 作为完整、可复现的负结果，不调参、不重跑、不改变已冻结协议；按原顺序运行只改变样本选择的 E2 FALS-only。最终候选仍由 dev 比较决定，held-out 继续封存。
+- 下一动作：确认唯一 FALS top-1,000 manifest 与记录的 SHA-256 一致，服务器 source 干净、GPU/8901/E2 目录空闲后启动 E2。
 
 ## 6. 后续记录模板
 
