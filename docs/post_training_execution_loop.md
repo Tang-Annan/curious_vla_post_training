@@ -4,11 +4,11 @@
 
 ## 1. 当前快照
 
-- 最后更新：2026-08-13 19:14 CST
+- 最后更新：2026-08-13 19:22 CST
 - 开发分支：`codex/post-training-analysis`
 - 已同步提交：`79f1386`
 - 固定随机种子：`20260812`
-- 当前动作：A1 无损 reward 并发实现与回归
+- 当前动作：D0 冻结 train rollout 诊断
 - 下一科学实验：D0 冻结 train rollout 诊断
 - 正式实验顺序：`E0 → D0 → E1 → E2 → E3 → E4（条件门控）→ E5 → F0`
 
@@ -16,8 +16,8 @@
 | --- | --- | --- | --- |
 | E0 Stage-2 dev baseline | 完成 | 566/566 dev baseline 已冻结 | 作为同协议 dev 比较基线 |
 | A0 validation 加速隔离测试 | 完成 | 保持 batch 4 / token budget 4608；拒绝独立 flash-attn、LRU 和 batch 8 | A1 只实现无损 reward 并发 |
-| A1 reward 并发回归 | 进行中 | 原服务 4 workers + 4 client concurrency 为唯一候选 | 同协议 64-token 回归通过后写入正式脚本 |
-| D0 train rollout diagnosis | 待执行 | 尚无正式诊断结果 | A1 收敛且正式协议稳定后启动 |
+| A1 reward 并发回归 | 延期 | 候选尚未完成端到端远程回归，不进入正式路线 | 仅在 E5 吞吐阶段重新评估 |
+| D0 train rollout diagnosis | 进行中 | 已按冻结配置和提交 `7c8adda` 启动 | 完成 4,525×4 覆盖后分析并写回 |
 | E1 Vanilla LoRA-GRPO | 待执行 | 不提前判断效果 | 根据 D0 诊断执行固定 1k 训练 |
 | E2 FALS only | 待执行 | 阈值和预算尚未选择 | 仅依据 D0 train rollout 选择 |
 | E3 SLDR only | 待执行 | 不提前判断效果 | 与 E1 保持其余变量一致 |
@@ -35,6 +35,27 @@
 6. 单卡 24 GB 环境中，E0/D0 保留 rank-8、零初始化的 LoRA wrapper。PEFT 的 LoRA B 初始为零，因此不改变 Stage-2 初始输出；移除 wrapper 已被实测证明会突破 hybrid-engine 显存预算。
 7. 每个正式阶段必须保存 source commit、source status、resolved config、seed、manifest、日志、rollout、指标和退出状态。证据不完整时不得标记完成。
 8. 监控只读。预计剩余时间大于 10 分钟时每 10 分钟检查；小于等于 10 分钟时每 5 分钟检查。正常状态不写入对话和本文档，只有完成、失败或决策相关事件进入台账。
+
+### 2.1 已冻结的正式配置
+
+以下配置在 E0 和 A0 中已完成验证，从 D0 起固定，不再重复做 FlashAttention、batch size、token budget、LRU 或 reward 并发探索：
+
+| 项目 | 固定值 |
+| --- | --- |
+| source baseline | `7c8adda`（后续功能提交必须保持相同协议） |
+| seed | `20260812` |
+| model | `models/sft_stage2` |
+| LoRA | rank 8, alpha 16, `q/k/v/o_proj`, exclude visual |
+| actor attention | `sdpa`；不另装 `flash_attn` |
+| validation rollout backend | vLLM 0.11.0 内置 `FLASH_ATTN` |
+| max response length | 512 |
+| train / validation batch | 4 / 4 |
+| vLLM CUDA Graph | enabled (`enforce_eager=false`) |
+| vLLM memory utilization | 0.55 |
+| max num batched tokens | 4608 |
+| reward server | 原始实现，1 Gunicorn worker，串行 grouped request |
+
+只有正式阶段出现 OOM、错误、覆盖失败或无法完成时，才能重新打开相关配置；单纯追求可能的速度收益不再构成变更理由。本地环境缺少依赖或无法代表 GPU/NAVSIM 行为时，直接在服务器当前完整环境执行最小相关测试，不为本地兼容添加代码路径。
 
 ## 3. 闭环推进规则
 
@@ -207,6 +228,15 @@
 - 分析：validation sampling 是随机生成；改变 batch 或 scheduler token budget 会改变随机数消费/调度并形成不同输出协议。batch 8 的小规模墙钟收益不足以抵消重跑正式 E0 和破坏已冻结比较协议的成本；8192 token budget 没有速度收益。
 - 决策：正式生成协议保持 `val_batch_size=4`、`max_num_batched_tokens=4608`，现有 E0 继续有效。A0 完成，不安装独立 `flash_attn`，不采用 LRU，不采用 batch 8/8192。
 - 下一动作：A1 只实现“原 reward 服务 4 workers + 每 batch 最多 4 路 client concurrency”，默认在正式编排中显式启用；以同协议 64-token validation 检查覆盖、输出、reward、墙钟和资源回收。若生成或 reward 与 batch-4 基线不一致，回退该实现并直接进入 D0。
+
+### 记录 004：终止 A1，进入正式 D0
+
+- 状态：A1 按项目优先级延期；D0 已启动。
+- 代码与配置：服务器继续使用已完整远程验证的 `7c8adda`，未同步 A1 并发实现；正式参数见 2.1。
+- 原始证据：D0 目录 `experiments/safe_grpo/d0_stage2_train_n4_seed20260812/`，launcher `logs/d0_stage2_train_n4_seed20260812.launcher.log`，启动 PID `259785`。
+- 分析：A0 已足够回答 FlashAttention 和 validation 参数问题；A1 尚无端到端远程回归，继续让它阻塞 D0 会偏离后训练主目标。
+- 决策：撤回开发分支上的 A1 实验代码；不再重复 A0。reward throughput 优化只保留到原计划 E5 再评估。
+- 下一动作：只读监控 D0；完成后验证 4,525 个 train token、每 token 4 rollout、18,100 行、dev/held-out 为 0 和 `diagnosis.json`，再依据诊断确定 E1/E2 行为。
 
 ## 6. 后续记录模板
 
