@@ -11,6 +11,8 @@ Evidence files on the server live under:
 
 GPU experiments must run in this order: E0 Stage-2 baseline, D0 frozen-train rollout diagnosis, E1 vanilla LoRA-GRPO, E2 FALS only, E3 SLDR only, E4 Std-Floor GRPO, E5 grouped reward throughput. Do not assign FALS thresholds or claim improvements before rollout evidence exists. D0 must cover all 4,525 frozen train tokens with four rollouts each; dev and held-out tokens are forbidden.
 
+On a 24 GB GPU, E0 and D0 keep the rank-8 LoRA wrapper at its zero-effect initialization. PEFT initializes the LoRA B projection to zero, so the adapter does not change the Stage-2 output before training; removing the wrapper instead makes the full actor exceed the single-GPU hybrid-engine memory budget.
+
 Experiment switches:
 
 - Vanilla grouped reward: `REWARD_FUNCTION=./verl/utils/reward_score/navsim/navsim_reward_grouped.py:compute_score_group_fast`

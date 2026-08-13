@@ -149,6 +149,11 @@ def test_adas_preserves_manifest_and_final_partial_batch():
     assert "train_drop_last=False" in source
 
 
+def test_e0_and_d0_keep_zero_effect_lora_wrapper():
+    source = (ROOT / "scripts/run_safe_grpo_experiment.sh").read_text(encoding="utf-8")
+    assert "worker.actor.model.lora.rank=0" not in source
+
+
 def test_inference_loader_keeps_final_partial_batch(monkeypatch, tmp_path):
     pytest.importorskip("torch")
     data_loader = importlib.import_module("verl.trainer.data_loader")

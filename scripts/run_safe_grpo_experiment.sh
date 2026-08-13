@@ -127,7 +127,6 @@ if [[ "$STAGE" == e0 ]]; then
         "${COMMON_ARGS[@]}" \
         data.token_filter_file="$ITERATION_MANIFEST" \
         algorithm.disable_kl=true \
-        worker.actor.model.lora.rank=0 \
         trainer.val_before_train=true \
         trainer.val_only=true \
         trainer.save_checkpoint_path="$RUN_DIR/tracker"
@@ -140,7 +139,6 @@ elif [[ "$STAGE" == d0 ]]; then
         "${COMMON_ARGS[@]}" \
         data.token_filter_file="$TRAIN_MANIFEST" \
         data.shuffle=false \
-        worker.actor.model.lora.rank=0 \
         worker.rollout.n=4
 
     cp "checkpoints/adas/$EXP_NAME/adas_scores.csv" "$RUN_DIR/adas_scores.csv"
