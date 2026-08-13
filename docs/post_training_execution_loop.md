@@ -4,19 +4,20 @@
 
 ## 1. 当前快照
 
-- 最后更新：2026-08-13 19:00 CST
+- 最后更新：2026-08-13 19:14 CST
 - 开发分支：`codex/post-training-analysis`
-- 已同步提交：`7c8adda`
+- 已同步提交：`79f1386`
 - 固定随机种子：`20260812`
-- 当前动作：A0 validation 加速隔离测试
+- 当前动作：A1 无损 reward 并发实现与回归
 - 下一科学实验：D0 冻结 train rollout 诊断
 - 正式实验顺序：`E0 → D0 → E1 → E2 → E3 → E4（条件门控）→ E5 → F0`
 
 | 阶段 | 状态 | 当前结论 | 下一动作 |
 | --- | --- | --- | --- |
 | E0 Stage-2 dev baseline | 完成 | 566/566 dev baseline 已冻结 | 作为同协议 dev 比较基线 |
-| A0 validation 加速隔离测试 | 进行中 | vLLM 已使用内置 FlashAttention；reward 侧存在并发提速证据 | 完成 batch/token matrix，决定是否应用无损优化 |
-| D0 train rollout diagnosis | 待执行 | 尚无正式诊断结果 | A0 收敛且正式协议稳定后启动 |
+| A0 validation 加速隔离测试 | 完成 | 保持 batch 4 / token budget 4608；拒绝独立 flash-attn、LRU 和 batch 8 | A1 只实现无损 reward 并发 |
+| A1 reward 并发回归 | 进行中 | 原服务 4 workers + 4 client concurrency 为唯一候选 | 同协议 64-token 回归通过后写入正式脚本 |
+| D0 train rollout diagnosis | 待执行 | 尚无正式诊断结果 | A1 收敛且正式协议稳定后启动 |
 | E1 Vanilla LoRA-GRPO | 待执行 | 不提前判断效果 | 根据 D0 诊断执行固定 1k 训练 |
 | E2 FALS only | 待执行 | 阈值和预算尚未选择 | 仅依据 D0 train rollout 选择 |
 | E3 SLDR only | 待执行 | 不提前判断效果 | 与 E1 保持其余变量一致 |
@@ -184,7 +185,7 @@
 
 ### 记录 003：A0 attention backend 与 reward 候选筛选
 
-- 状态：部分完成，batch/token matrix 仍在运行。
+- 状态：通过，候选已收敛。
 - 隔离证据：远程 `experiments/benchmarks/`；独立端口 18901–18903；未修改现有环境。
 - attention 事实：当前 vLLM 0.11.0 在 RTX 4090 上自动选择 `vllm.v1.attention.backends.flash_attn.FlashAttentionBackend`。环境没有独立 `flash-attn` 包，但 vLLM 自带并已使用其 FlashAttention backend。
 - attention 决策：不安装独立 `flash_attn`；它不会替换当前 validation 的 vLLM 生成路径，且 244 MiB wheel 会给稳定环境增加无证据收益的变更。
@@ -199,8 +200,13 @@
   - 原服务 4 workers：7.61 samples/s，3.46×，公共 reward 指标逐项一致；
   - 实验 LRU 4 workers：9.83 samples/s，但至少一个样本出现指标漂移。
 - 决策：拒绝 LRU 实验实现；保留“原服务 4 workers + 有界 client 并发”为候选，必须在正式应用前补生产路径测试。Gunicorn worker 数单独增加不能加速当前串行 client，因此两侧必须配套验证。
-- 当前运行：64-token validation matrix，顺序为 `bs4_tok4608 → bs8_tok4608 → bs8_tok8192`。第一组已完成：64/64、wall 239 s、parse 1.0；其余组等待终态。
-- 下一动作：完成三组覆盖、数值/生成差异、耗时和显存分析；按第 3 节规则决定保持现协议、应用无损 reward 并发，或重跑新协议 E0。
+- validation matrix 证据：远程 `experiments/benchmarks/validation_batch_20260813_1855/`。三组均为 64/64 唯一 token、parse 1.0、无 clipping/OOM/traceback、`exit_code=0`；顶层 `COMPLETE` 和 `exit_code=0` 存在，进程、18903 和 GPU 已回收。
+  - batch 4 / token 4608：239 s，PDMS scaled `0.673721445`，PDMS `0.691845499`；
+  - batch 8 / token 4608：206 s，较基线快 13.8%，但仅 27/64 token 的 pose 完全一致，45/64 token 的全部 reward 指标一致；
+  - batch 8 / token 8192：282 s，较基线慢 18.0%，仅 24/64 token 的 pose 完全一致，46/64 token 的全部 reward 指标一致。
+- 分析：validation sampling 是随机生成；改变 batch 或 scheduler token budget 会改变随机数消费/调度并形成不同输出协议。batch 8 的小规模墙钟收益不足以抵消重跑正式 E0 和破坏已冻结比较协议的成本；8192 token budget 没有速度收益。
+- 决策：正式生成协议保持 `val_batch_size=4`、`max_num_batched_tokens=4608`，现有 E0 继续有效。A0 完成，不安装独立 `flash_attn`，不采用 LRU，不采用 batch 8/8192。
+- 下一动作：A1 只实现“原 reward 服务 4 workers + 每 batch 最多 4 路 client concurrency”，默认在正式编排中显式启用；以同协议 64-token validation 检查覆盖、输出、reward、墙钟和资源回收。若生成或 reward 与 batch-4 基线不一致，回退该实现并直接进入 D0。
 
 ## 6. 后续记录模板
 

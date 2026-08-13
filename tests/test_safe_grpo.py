@@ -2,6 +2,9 @@ import importlib
 import importlib.util
 import json
 import sys
+import threading
+import time
+import types
 from pathlib import Path
 
 import pytest
@@ -192,3 +195,75 @@ def test_data_config_resolves_validation_manifest(tmp_path):
     config = DataConfig(val_token_filter_file=str(manifest))
     config.post_init()
     assert config.val_token_filter_file == str(manifest.resolve())
+
+
+def test_grouped_reward_concurrency_preserves_input_order(monkeypatch, tmp_path):
+    helper = types.ModuleType("verl.utils.reward_score.navsim.helper")
+    helper.denormalize = lambda poses: poses
+    helper.get_trajectory_parser = lambda: lambda response: [[0.0, 0.0, 0.0]] * 8
+    safety = types.ModuleType("verl.utils.reward_score.navsim.safety_dense_reward")
+    safety.REQUIRED_METRICS = {
+        "no_at_fault_collisions",
+        "drivable_area_compliance",
+        "ego_progress",
+        "time_to_collision_within_bound",
+        "history_comfort",
+        "pdms",
+        "pdms_scaled",
+    }
+    safety.compute_sldr = lambda values: values["pdms_scaled"]
+    for name in ("verl", "verl.utils", "verl.utils.reward_score", "verl.utils.reward_score.navsim"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, helper.__name__, helper)
+    monkeypatch.setitem(sys.modules, safety.__name__, safety)
+    reward = load_module(
+        ROOT / "EasyR1/verl/utils/reward_score/navsim/navsim_reward_grouped.py", "grouped_reward_concurrency"
+    )
+    active = 0
+    peak_active = 0
+    lock = threading.Lock()
+
+    class Response:
+        def __init__(self, token):
+            self.token = token
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            value = {"a": 0.25, "b": 0.75}[self.token]
+            return [metrics(pdms=value, pdms_scaled=value)]
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def post(self, url, json):
+            nonlocal active, peak_active
+            with lock:
+                active += 1
+                peak_active = max(peak_active, active)
+            time.sleep(0.02)
+            with lock:
+                active -= 1
+            return Response(json["token"])
+
+    monkeypatch.setattr(reward.httpx, "Client", Client)
+    monkeypatch.setattr(reward, "get_trajectory_parser", lambda: lambda response: [[0.0, 0.0, 0.0]] * 8)
+    monkeypatch.setattr(reward, "denormalize", lambda poses: poses)
+    monkeypatch.setattr(reward, "_concurrency", 2)
+    monkeypatch.setattr(reward, "_log_path", str(tmp_path / "rollouts.jsonl"))
+    scores = reward.compute_score_group_fast(
+        [
+            {"response": "first", "response_length": 1, "ground_truth": {"token": "a"}},
+            {"response": "second", "response_length": 1, "ground_truth": {"token": "b"}},
+        ]
+    )
+    assert peak_active == 2
+    assert [score["overall"] for score in scores] == [0.25, 0.75]

@@ -14,6 +14,8 @@ CACHE_PATH="$WORKSPACE_ROOT/exp_root/metric_cache_released_5656"
 EXPERIMENT_ROOT="$WORKSPACE_ROOT/experiments/safe_grpo"
 SEED=20260812
 REWARD_SERVER_PORT="${REWARD_SERVER_PORT:-8901}"
+REWARD_SERVER_WORKERS="${REWARD_SERVER_WORKERS:-4}"
+NAVSIM_REWARD_CONCURRENCY="${NAVSIM_REWARD_CONCURRENCY:-4}"
 REWARD_FUNCTION=./verl/utils/reward_score/navsim/navsim_reward_grouped.py:compute_score_group_fast
 
 case "$STAGE" in
@@ -59,7 +61,8 @@ if [[ "$STAGE" == d0 ]]; then
 elif [[ "$STAGE" == e1 ]]; then
     cp "$ITERATION_MANIFEST" "$RUN_DIR/train_tokens.txt"
 fi
-printf 'stage=%s\nexperiment=%s\nseed=%s\n' "$STAGE" "$EXP_NAME" "$SEED" > "$RUN_DIR/run.env"
+printf 'stage=%s\nexperiment=%s\nseed=%s\nreward_server_workers=%s\nreward_concurrency=%s\n' \
+    "$STAGE" "$EXP_NAME" "$SEED" "$REWARD_SERVER_WORKERS" "$NAVSIM_REWARD_CONCURRENCY" > "$RUN_DIR/run.env"
 exec > "$RUN_DIR/run.log" 2>&1
 
 cleanup() {
@@ -88,7 +91,7 @@ fi
     cd "$PROJECT_ROOT/navsim_eval"
     exec "$WORKSPACE_ROOT/envs/navsim/bin/gunicorn" \
         navsim.planning.script.run_gunicorn_server:app \
-        -w 1 -k uvicorn.workers.UvicornWorker \
+        -w "$REWARD_SERVER_WORKERS" -k uvicorn.workers.UvicornWorker \
         -b "127.0.0.1:$REWARD_SERVER_PORT" --timeout 150
 ) > "$RUN_DIR/reward_server.log" 2>&1 &
 REWARD_SERVER_PID=$!
@@ -99,7 +102,7 @@ for _ in $(seq 1 60); do
 done
 curl -fsS "http://127.0.0.1:$REWARD_SERVER_PORT/ping" >/dev/null
 
-export EXP_NAME NAVSIM_STAT_PATH="$PROJECT_ROOT/stats/trajectory_stats_train.json"
+export EXP_NAME NAVSIM_REWARD_CONCURRENCY NAVSIM_STAT_PATH="$PROJECT_ROOT/stats/trajectory_stats_train.json"
 export NAVSIM_TRAJ_PARSER_FUNC=verl.utils.reward_score.navsim.helper:parse_trajectory_string_after_tag
 export NAVSIM_REWARD_URL="http://127.0.0.1:$REWARD_SERVER_PORT"
 cd "$EASYR1_ROOT"

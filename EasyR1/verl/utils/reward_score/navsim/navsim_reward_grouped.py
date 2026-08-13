@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
@@ -19,6 +20,9 @@ REWARD_TYPE = "batch"
 
 _server_url = os.environ.get("NAVSIM_REWARD_URL", "http://127.0.0.1:8901").rstrip("/")
 _timeout = float(os.environ.get("NAVSIM_REWARD_TIMEOUT", "120"))
+_concurrency = int(os.environ.get("NAVSIM_REWARD_CONCURRENCY", "1"))
+if _concurrency < 1:
+    raise ValueError("NAVSIM_REWARD_CONCURRENCY must be at least 1.")
 _log_dir = os.path.join("checkpoints", "debug", os.environ.get("EXP_NAME", "default_exp"))
 os.makedirs(_log_dir, exist_ok=True)
 _log_path = os.path.join(_log_dir, f"generations_{datetime.now():%m%d%H%M}.jsonl")
@@ -71,19 +75,28 @@ def _score_groups(reward_inputs: list[dict[str, Any]], reward_mode: str) -> list
             continue
         groups[token].append((index, response_length, denormalize(poses)))
 
-    with httpx.Client(trust_env=False, timeout=_timeout) as client:
-        for token, items in groups.items():
-            started = time.perf_counter()
-            response = client.post(
-                f"{_server_url}/score_group",
-                json={"token": token, "poses": [poses for _, _, poses in items], "verbose": False},
-            )
-            response.raise_for_status()
-            metrics_list = response.json()
-            if len(metrics_list) != len(items):
-                raise RuntimeError(f"score_group returned {len(metrics_list)} results for {len(items)} poses")
-            latency_ms = (time.perf_counter() - started) * 1000.0
+    def request_group(client: httpx.Client, group: tuple[str, list[tuple[int, int, list[list[float]]]]]):
+        token, items = group
+        started = time.perf_counter()
+        response = client.post(
+            f"{_server_url}/score_group",
+            json={"token": token, "poses": [poses for _, _, poses in items], "verbose": False},
+        )
+        response.raise_for_status()
+        metrics_list = response.json()
+        if len(metrics_list) != len(items):
+            raise RuntimeError(f"score_group returned {len(metrics_list)} results for {len(items)} poses")
+        return items, metrics_list, (time.perf_counter() - started) * 1000.0
 
+    grouped_items = list(groups.items())
+    with httpx.Client(trust_env=False, timeout=_timeout) as client:
+        if _concurrency == 1 or len(grouped_items) <= 1:
+            group_results = [request_group(client, group) for group in grouped_items]
+        else:
+            with ThreadPoolExecutor(max_workers=min(_concurrency, len(grouped_items))) as executor:
+                group_results = list(executor.map(lambda group: request_group(client, group), grouped_items))
+
+        for items, metrics_list, latency_ms in group_results:
             for (index, response_length, poses), metrics in zip(items, metrics_list):
                 missing = [key for key in REQUIRED_METRICS if key not in metrics]
                 if missing:
