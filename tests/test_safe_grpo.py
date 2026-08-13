@@ -108,3 +108,14 @@ def test_rollout_pairwise_distances():
     ]
     assert analysis.pairwise_distance(rows) == pytest.approx(1.5)
     assert analysis.pairwise_distance(rows, -1) == pytest.approx(2.0)
+
+
+def test_data_config_resolves_validation_manifest(tmp_path):
+    pytest.importorskip("torch")
+    from verl.trainer.config import DataConfig
+
+    manifest = tmp_path / "dev_tokens.txt"
+    manifest.write_text("token\n", encoding="utf-8")
+    config = DataConfig(val_token_filter_file=str(manifest))
+    config.post_init()
+    assert config.val_token_filter_file == str(manifest.resolve())

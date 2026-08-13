@@ -82,6 +82,8 @@ def create_dataloader(config: DataConfig, tokenizer: PreTrainedTokenizer, proces
         min_pixels=config.min_pixels,
         max_pixels=config.max_pixels,
         filter_overlong_prompts=config.filter_overlong_prompts,
+        filter_overlong_prompts_workers=config.filter_overlong_prompts_workers,
+        token_filter_file=config.val_token_filter_file,
     )
 
     if config.val_batch_size == -1:
