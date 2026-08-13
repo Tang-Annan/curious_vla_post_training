@@ -35,11 +35,12 @@ worker:
     micro_batch_size_per_device_for_update: 1
     micro_batch_size_per_device_for_experience: 1
     max_grad_norm: 1.0
-    padding_free: true
+    padding_free: false
     dynamic_batching: true
     ulysses_size: 1
     model:
       model_path: null
+      attn_implementation: sdpa
       enable_gradient_checkpointing: true
       trust_remote_code: true
       freeze_vision_tower: true
