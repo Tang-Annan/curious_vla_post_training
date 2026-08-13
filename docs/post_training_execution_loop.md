@@ -6,7 +6,7 @@
 
 - 最后更新：2026-08-13 20:03 CST
 - 开发分支：`codex/post-training-analysis`
-- 开发分支已同步提交：`0c0d010`
+- 开发分支同步状态：已推送，具体 revision 以 `codex/post-training-analysis` 的 Git HEAD 为准
 - 当前 D0 source commit：`7c8adda`（运行期间不更新 checkout）
 - 固定随机种子：`20260812`
 - 当前动作：D0 冻结 train rollout 诊断
@@ -238,6 +238,16 @@
 - 分析：A0 已足够回答 FlashAttention 和 validation 参数问题；A1 尚无端到端远程回归，继续让它阻塞 D0 会偏离后训练主目标。
 - 决策：撤回开发分支上的 A1 实验代码；不再重复 A0。reward throughput 优化只保留到原计划 E5 再评估。
 - 下一动作：只读监控 D0；完成后验证 4,525 个 train token、每 token 4 rollout、18,100 行、dev/held-out 为 0 和 `diagnosis.json`，再依据诊断确定 E1/E2 行为。
+
+### 记录 005：冻结正式路线并补齐 E1 验收产物
+
+- 状态：通过，不改变实验协议。
+- 代码与配置：功能提交 `d3f5083`；E1 仍固定 1k train manifest、250 steps、每个 train token 2 个 rollout、566-token final dev、rank-8 LoRA 和 2.1 节生成/reward 配置。
+- 原始证据：本地 `tests/test_safe_grpo.py`，显式工作区临时目录运行结果为 11 passed、4 skipped；`git diff --check` 通过。跳过项是本地缺少可选运行依赖，不涉及新增的 rollout 拆分和覆盖测试。
+- 覆盖与完整性：E1 结束时将混合原始日志严格拆分为 train/dev 产物；要求 train 1,000×2、dev 566×1，拒绝两个 manifest 重叠、未知 token、缺失或重复覆盖，并分别生成 train diagnosis 与 final-dev metrics。
+- 分析：原启动器已经执行 250-step 训练、定期 checkpoint 和最终 dev，但此前只复制混合 rollout 日志，无法单独证明训练与最终验证覆盖。新增逻辑仅在训练结束后整理和验收产物，不改变模型、采样、reward、随机顺序或训练过程。
+- 决策：保留该最小验收补丁；D0 运行期间只推送开发分支，不热更新服务器运行 checkout。D0 完成后同步最新提交并在服务器完整环境做最小验证，再启动 E1。
+- 下一动作：按四档 ETA 规则只读监控 D0；D0 完整验收、分析和写回通过后，启动正式 E1。
 
 ## 6. 后续记录模板
 
