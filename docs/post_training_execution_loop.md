@@ -4,12 +4,12 @@
 
 ## 1. 当前快照
 
-- 最后更新：2026-08-14 01:45 CST
+- 最后更新：2026-08-14 01:47 CST
 - 开发分支：`codex/post-training-analysis`
 - 开发分支同步状态：已推送，具体 revision 以 `codex/post-training-analysis` 的 Git HEAD 为准
 - D0 source commit：`7c8adda`（运行期间未更新 checkout）
 - 固定随机种子：`20260812`
-- 当前动作：启动 E2 FALS-only LoRA-GRPO
+- 当前动作：E2 FALS-only LoRA-GRPO 正式训练
 - 下一科学实验：E2 FALS-only LoRA-GRPO
 - 正式实验顺序：`E0 → D0 → E1 → E2 → E3 → E4（条件门控）→ E5 → F0`
 
@@ -312,6 +312,16 @@
 - 分析：E1 证明当前预算下随机 1k vanilla GRPO 没有改善冻结 baseline；1k train rollout 的 exact-zero std 高达 46.30%，表明随机采样浪费了大量相对优势为零的 group。这与 D0 的 FALS 动机一致，但不能预先断言 E2 会改善。
 - 决策：接受 E1 作为完整、可复现的负结果，不调参、不重跑、不改变已冻结协议；按原顺序运行只改变样本选择的 E2 FALS-only。最终候选仍由 dev 比较决定，held-out 继续封存。
 - 下一动作：确认唯一 FALS top-1,000 manifest 与记录的 SHA-256 一致，服务器 source 干净、GPU/8901/E2 目录空闲后启动 E2。
+
+### 记录 012：E2 FALS-only LoRA-GRPO 正式启动
+
+- 状态：运行中，启动门控与健康检查通过。
+- 代码与配置：source commit `89ac72049f8da921e2dd46f82888742ae0eeec0c`，source status 为空；250 steps、rank-8 LoRA、GRPO reward、生成与 final-dev 协议均与 E1 相同，唯一实验变量是 train manifest 改为 D0 冻结的 FALS top-1,000。
+- 原始证据：实验目录 `experiments/safe_grpo/e2_fals_lora_1k_seed20260812/`，launcher `logs/e2_fals_lora_1k_seed20260812.launcher.log`，启动 PID `97965`。
+- 启动门控：实际 train manifest SHA-256 为 `fd62a6f204806beff51fa7e1fb0f853027655b4b47f00f9633c787b04e0ffed0`；1,000 个唯一 token 全部属于 train，与 dev/held-out 重叠为 0。服务器启动器语法、18 项相关测试、source clean、GPU/8901 和 E2 目录门控均通过。
+- 启动健康：`RUNNING`、source、run.env 和 train/dev manifest 已落盘；run.env 确认 `reward_function=compute_score_group_fast`、`adv_estimator=grpo` 和唯一 FALS manifest。Ray/trainer/vLLM 与 Gunicorn/8901 正常，模型已加载至 GPU，日志无异常并进入 250-step loop。
+- 决策：保持唯一变量为 FALS 样本选择，不做加速、参数或解析器变更；正常运行静默。
+- 下一动作：按 ETA 四档规则监控 E2；完成后按与 E1 相同的 checkpoint、覆盖、final-dev 和资源回收标准验收，并比较 E0/E1/E2 后再推进 E3。
 
 ## 6. 后续记录模板
 
