@@ -251,6 +251,8 @@ def test_formal_launcher_keeps_e2_e3_e4_as_single_factor_ablations():
     assert 'algorithm.adv_estimator="$ADV_ESTIMATOR"' in source
     assert 'comm -12 <(sort "$ITERATION_MANIFEST") <(sort "$HELDOUT_MANIFEST")' in source
     assert 'ACTIVE_MANIFEST="$TRAIN_MANIFEST"' in source
+    assert 'tracker.get("last_global_step") != 250' in source
+    assert '"global_step_250" / "actor"' in source
 
 
 def test_inference_loader_keeps_final_partial_batch(monkeypatch, tmp_path):

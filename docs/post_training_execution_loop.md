@@ -268,6 +268,14 @@
 - 决策：保留强失败边界；D0 完成后仅在全量覆盖和 train/dev/held-out 隔离均通过时生成 FALS manifest。
 - 下一动作：保持 D0 自适应只读监控；完整验收后写回 D0 诊断并启动 E1。
 
+### 记录 008：冻结正式 checkpoint 选择语义
+
+- 状态：通过，不改变保存频率或训练过程。
+- 代码与配置：E1–E4 继续每 50 steps 保存、最多保留 2 个 checkpoint；阶段完成前新增硬验收，要求 tracker 的 `last_global_step=250` 且 `global_step_250/actor` 存在。
+- 分析：final dev 在 step 250 训练结束后执行，而中途 `val_freq=-1`，因此 tracker 中早期保存时形成的 `best_global_step` 不构成同条件模型选择证据。正式比较统一使用 final `global_step_250`，不误用 step 50。
+- 决策：冻结 step 250 为 E1–E4 唯一正式 checkpoint；若缺失则阶段失败，不用较早 checkpoint 兜底。
+- 下一动作：等待 D0 完整验收，随后用最新正式启动器执行 E1。
+
 ## 6. 后续记录模板
 
 每个新结果按以下格式追加，不改写历史事实；“当前快照”同步更新：

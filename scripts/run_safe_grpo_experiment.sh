@@ -242,6 +242,19 @@ else
         --manifest "$DEV_MANIFEST" \
         --expected-rollouts 1 \
         > "$RUN_DIR/final_dev_metrics.json"
+    "$WORKSPACE_ROOT/envs/curious/bin/python" - "$RUN_DIR/checkpoints/checkpoint_tracker.json" <<'PY'
+import json
+import pathlib
+import sys
+
+tracker_path = pathlib.Path(sys.argv[1])
+with tracker_path.open(encoding="utf-8") as handle:
+    tracker = json.load(handle)
+if tracker.get("last_global_step") != 250:
+    raise SystemExit(f"Expected final checkpoint at step 250, got {tracker.get('last_global_step')!r}.")
+if not (tracker_path.parent / "global_step_250" / "actor").is_dir():
+    raise SystemExit("Final actor checkpoint global_step_250 is missing.")
+PY
 fi
 
 touch "$RUN_DIR/COMPLETE"
