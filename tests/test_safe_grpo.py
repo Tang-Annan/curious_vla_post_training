@@ -163,6 +163,25 @@ def test_rollout_analysis_rejects_rows_outside_manifest(tmp_path):
         analysis.analyze(rollouts, 0.05, manifest)
 
 
+def test_rollout_analysis_uses_training_reward_and_sample_group_std(tmp_path):
+    pytest.importorskip("numpy")
+    analysis = load_module(ROOT / "projects/safe_grpo/analyze_rollouts.py", "analyze_training_reward")
+    manifest = tmp_path / "train.txt"
+    rollouts = tmp_path / "rollouts.jsonl"
+    manifest.write_text("a\n", encoding="utf-8")
+    rows = [
+        {"token": "a", "training_reward": reward, "pdms_scaled": 0.5, "poses": []}
+        for reward in (0.0, 0.1)
+    ]
+    rollouts.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    report = analysis.analyze(rollouts, 0.08, manifest, expected_rollouts=2)
+
+    assert report["reward_mean"] == pytest.approx(0.05)
+    assert report["group_metrics"][0]["reward_std"] == pytest.approx(0.070710678)
+    assert report["low_nonzero_std_ratio"] == pytest.approx(1.0)
+
+
 def test_split_rollouts_enforces_train_and_final_dev_coverage(tmp_path):
     splitter = load_module(ROOT / "projects/safe_grpo/split_rollouts.py", "split_rollouts")
     train_manifest = tmp_path / "train.txt"
@@ -205,6 +224,18 @@ def test_adas_preserves_manifest_and_final_partial_batch():
 def test_e0_and_d0_keep_zero_effect_lora_wrapper():
     source = (ROOT / "scripts/run_safe_grpo_experiment.sh").read_text(encoding="utf-8")
     assert "worker.actor.model.lora.rank=0" not in source
+
+
+def test_formal_launcher_keeps_e2_e3_e4_as_single_factor_ablations():
+    source = (ROOT / "scripts/run_safe_grpo_experiment.sh").read_text(encoding="utf-8")
+    assert 'e2)\n        EXP_NAME=e2_fals_lora_1k_seed20260812' in source
+    assert 'ITERATION_MANIFEST="$FALS_MANIFEST"' in source
+    assert 'e3)\n        EXP_NAME=e3_sldr_lora_1k_seed20260812' in source
+    assert "compute_score_sldr" in source
+    assert 'e4)\n        EXP_NAME=e4_std_floor_lora_1k_seed20260812' in source
+    assert "ratio < 0.10" in source
+    assert "ADV_ESTIMATOR=std_floor_grpo" in source
+    assert 'algorithm.adv_estimator="$ADV_ESTIMATOR"' in source
 
 
 def test_inference_loader_keeps_final_partial_batch(monkeypatch, tmp_path):

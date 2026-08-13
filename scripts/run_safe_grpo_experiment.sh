@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-STAGE="${1:?Usage: run_safe_grpo_experiment.sh <e0|d0|e1>}"
+STAGE="${1:?Usage: run_safe_grpo_experiment.sh <e0|d0|e1|e2|e3|e4>}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/autodl-tmp/curious-vla-workspace}"
 PROJECT_ROOT="${PROJECT_ROOT:-$WORKSPACE_ROOT/src/curious_vla_post_training}"
 EASYR1_ROOT="$PROJECT_ROOT/EasyR1"
@@ -10,11 +10,14 @@ DATA_PATH="$EASYR1_ROOT/data/QA_navtrain_poutine_style_full"
 TRAIN_MANIFEST="$WORKSPACE_ROOT/manifests/train_tokens.txt"
 DEV_MANIFEST="$WORKSPACE_ROOT/manifests/dev_tokens.txt"
 ITERATION_MANIFEST="$WORKSPACE_ROOT/manifests/dev_subsets/train_seed20260812_1000.txt"
+FALS_MANIFEST="${FALS_MANIFEST:-}"
 CACHE_PATH="$WORKSPACE_ROOT/exp_root/metric_cache_released_5656"
 EXPERIMENT_ROOT="$WORKSPACE_ROOT/experiments/safe_grpo"
+E3_DIAGNOSIS="${E3_DIAGNOSIS:-$EXPERIMENT_ROOT/e3_sldr_lora_1k_seed20260812/train_diagnosis.json}"
 SEED=20260812
 REWARD_SERVER_PORT="${REWARD_SERVER_PORT:-8901}"
 REWARD_FUNCTION=./verl/utils/reward_score/navsim/navsim_reward_grouped.py:compute_score_group_fast
+ADV_ESTIMATOR=grpo
 
 case "$STAGE" in
     e0)
@@ -26,6 +29,29 @@ case "$STAGE" in
     e1)
         EXP_NAME=e1_vanilla_lora_1k_seed20260812
         ;;
+    e2)
+        EXP_NAME=e2_fals_lora_1k_seed20260812
+        [[ -n "$FALS_MANIFEST" ]] || { echo "FALS_MANIFEST is required for E2." >&2; exit 1; }
+        ITERATION_MANIFEST="$FALS_MANIFEST"
+        ;;
+    e3)
+        EXP_NAME=e3_sldr_lora_1k_seed20260812
+        REWARD_FUNCTION=./verl/utils/reward_score/navsim/navsim_reward_grouped.py:compute_score_sldr
+        ;;
+    e4)
+        EXP_NAME=e4_std_floor_lora_1k_seed20260812
+        REWARD_FUNCTION=./verl/utils/reward_score/navsim/navsim_reward_grouped.py:compute_score_sldr
+        ADV_ESTIMATOR=std_floor_grpo
+        "$WORKSPACE_ROOT/envs/curious/bin/python" - "$E3_DIAGNOSIS" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    ratio = json.load(handle)["low_nonzero_std_ratio"]
+if ratio is None or ratio < 0.10:
+    raise SystemExit(f"E4 gate failed: E3 low_nonzero_std_ratio={ratio!r} < 0.10")
+PY
+        ;;
     *)
         echo "Unknown stage: $STAGE" >&2
         exit 2
@@ -36,8 +62,24 @@ RUN_DIR="$EXPERIMENT_ROOT/$EXP_NAME"
 for path in "$MODEL_PATH" "$DATA_PATH" "$TRAIN_MANIFEST" "$DEV_MANIFEST" "$CACHE_PATH/metadata"; do
     [[ -e "$path" ]] || { echo "Missing required path: $path" >&2; exit 1; }
 done
-if [[ "$STAGE" == e1 ]]; then
+if [[ "$STAGE" =~ ^e[1-4]$ ]]; then
     [[ -e "$ITERATION_MANIFEST" ]] || { echo "Missing required path: $ITERATION_MANIFEST" >&2; exit 1; }
+    [[ $(grep -cve '^[[:space:]]*$' "$ITERATION_MANIFEST") -eq 1000 ]] || {
+        echo "Training manifest must contain exactly 1000 non-empty tokens." >&2
+        exit 1
+    }
+    [[ $(grep -ve '^[[:space:]]*$' "$ITERATION_MANIFEST" | sort -u | wc -l) -eq 1000 ]] || {
+        echo "Training manifest must contain 1000 unique tokens." >&2
+        exit 1
+    }
+    [[ -z $(comm -23 <(sort "$ITERATION_MANIFEST") <(sort "$TRAIN_MANIFEST")) ]] || {
+        echo "Training manifest contains tokens outside the frozen train split." >&2
+        exit 1
+    }
+    [[ -z $(comm -12 <(sort "$ITERATION_MANIFEST") <(sort "$DEV_MANIFEST")) ]] || {
+        echo "Training manifest overlaps the frozen dev split." >&2
+        exit 1
+    }
 fi
 if [[ -e "$RUN_DIR" ]]; then
     echo "Refusing to overwrite experiment directory: $RUN_DIR" >&2
@@ -56,10 +98,12 @@ git -C "$PROJECT_ROOT" status --porcelain > "$RUN_DIR/source_status.txt"
 cp "$DEV_MANIFEST" "$RUN_DIR/dev_tokens.txt"
 if [[ "$STAGE" == d0 ]]; then
     cp "$TRAIN_MANIFEST" "$RUN_DIR/train_tokens.txt"
-elif [[ "$STAGE" == e1 ]]; then
+elif [[ "$STAGE" =~ ^e[1-4]$ ]]; then
     cp "$ITERATION_MANIFEST" "$RUN_DIR/train_tokens.txt"
 fi
-printf 'stage=%s\nexperiment=%s\nseed=%s\n' "$STAGE" "$EXP_NAME" "$SEED" > "$RUN_DIR/run.env"
+printf 'stage=%s\nexperiment=%s\nseed=%s\ntrain_manifest=%s\nreward_function=%s\nadv_estimator=%s\n' \
+    "$STAGE" "$EXP_NAME" "$SEED" "$ITERATION_MANIFEST" "$REWARD_FUNCTION" "$ADV_ESTIMATOR" \
+    > "$RUN_DIR/run.env"
 exec > "$RUN_DIR/run.log" 2>&1
 
 cleanup() {
@@ -154,6 +198,8 @@ else
     "$WORKSPACE_ROOT/envs/curious/bin/python" -m verl.trainer.main \
         "${COMMON_ARGS[@]}" \
         data.token_filter_file="$ITERATION_MANIFEST" \
+        algorithm.adv_estimator="$ADV_ESTIMATOR" \
+        algorithm.std_floor=0.05 \
         trainer.max_steps=250 \
         trainer.val_before_train=false \
         trainer.val_freq=-1 \
@@ -162,7 +208,7 @@ else
         trainer.save_checkpoint_path="$RUN_DIR/checkpoints"
 
     mapfile -t rollout_files < <(find "checkpoints/debug/$EXP_NAME" -maxdepth 1 -name 'generations_*.jsonl' -type f | sort)
-    [[ ${#rollout_files[@]} -ge 1 ]] || { echo "Expected at least one E1 rollout file." >&2; exit 1; }
+    [[ ${#rollout_files[@]} -ge 1 ]] || { echo "Expected at least one $STAGE rollout file." >&2; exit 1; }
     for rollout_file in "${rollout_files[@]}"; do
         cat "$rollout_file"
     done > "$RUN_DIR/raw_rollouts.jsonl"

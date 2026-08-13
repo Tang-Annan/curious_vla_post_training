@@ -249,6 +249,16 @@
 - 决策：保留该最小验收补丁；D0 运行期间只推送开发分支，不热更新服务器运行 checkout。D0 完成后同步最新提交并在服务器完整环境做最小验证，再启动 E1。
 - 下一动作：按四档 ETA 规则只读监控 D0；D0 完整验收、分析和写回通过后，启动正式 E1。
 
+### 记录 006：补齐 E2–E4 正式启动门控
+
+- 状态：通过，尚未启动 E2–E4，也未提前选择 E2 manifest。
+- 代码与配置：正式启动器增加 E2 FALS-only、E3 SLDR-only、E4 SLDR + Std-Floor 入口；所有阶段复用 E1 的 1k/250-step/checkpoint/final-dev 路径。E2 只允许显式传入 D0 后生成的 1k FALS manifest；E3 只切换训练 reward；E4 只在 E3 `low_nonzero_std_ratio >= 0.10` 时切换 `adv_estimator=std_floor_grpo`、`std_floor=0.05`，并保持 E3 的 SLDR reward。
+- 原始证据：本地 `tests/test_safe_grpo.py` 结果为 13 passed、4 skipped，`git diff --check` 通过；服务器 `/tmp` 隔离路径的 `bash -n`、Python `py_compile` 以及 E4 门控阈值 0.10/0.099 正反例通过，未修改 D0 checkout 或使用 GPU。
+- 覆盖与完整性：E1–E4 启动前均强制 1,000 个非空唯一 token，要求属于冻结 train split 且与 dev 无重叠；run.env 记录实际 manifest、reward function 和 advantage estimator。
+- 分析：SLDR 日志同时保存 `training_reward` 与 `pdms_scaled`。E3/E4 的 group std 必须使用实际 `training_reward`，并与 PyTorch GRPO 一致采用 sample std；原诊断逻辑已相应修正，否则 E4 门控会读取错误信号。
+- 决策：保留正式入口和强门控；不从当前代码预设 E2 选择结果，仍只依据 D0 完整诊断生成唯一 FALS 1k manifest。
+- 下一动作：继续按 ETA 四档规则监控 D0；完成后先写回 D0 事实与 E2 manifest 决策，再启动 E1。
+
 ## 6. 后续记录模板
 
 每个新结果按以下格式追加，不改写历史事实；“当前快照”同步更新：

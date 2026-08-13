@@ -23,6 +23,13 @@ AGGREGATE_METRICS = (
 )
 
 
+def training_reward(row: dict) -> float:
+    for key in ("training_reward", "pdms_scaled", "overall"):
+        if key in row:
+            return float(row[key])
+    raise KeyError("Rollout row has no training_reward, pdms_scaled, or overall value.")
+
+
 def pairwise_distance(rows: list[dict], point_index: int | None = None) -> float | None:
     valid = [np.asarray(row["poses"], dtype=float) for row in rows if row.get("parsed_ok", True)]
     distances = []
@@ -78,16 +85,14 @@ def analyze(
 
     summaries = []
     for token, rows in groups.items():
-        rewards = np.asarray(
-            [row["pdms_scaled"] if "pdms_scaled" in row else row["overall"] for row in rows], dtype=float
-        )
+        rewards = np.asarray([training_reward(row) for row in rows], dtype=float)
         safe_values = [float(row["safe"]) for row in rows if "safe" in row]
         summaries.append(
             {
                 "token": token,
                 "n": len(rows),
                 "reward_mean": float(rewards.mean()),
-                "reward_std": float(rewards.std()),
+                "reward_std": float(rewards.std(ddof=1)) if len(rewards) > 1 else 0.0,
                 "reward_min": float(rewards.min()),
                 "reward_max": float(rewards.max()),
                 "headroom": float(rewards.max() - rewards.mean()),
@@ -100,13 +105,7 @@ def analyze(
 
     stds = np.asarray([row["reward_std"] for row in summaries], dtype=float)
     all_rows = [row for rows in groups.values() for row in rows]
-    rewards = np.asarray(
-        [
-            row["pdms_scaled"] if "pdms_scaled" in row else row["overall"]
-            for row in all_rows
-        ],
-        dtype=float,
-    )
+    rewards = np.asarray([training_reward(row) for row in all_rows], dtype=float)
     headrooms = np.asarray([row["headroom"] for row in summaries], dtype=float)
     pairwise_ades = np.asarray(
         [row["pairwise_ade"] for row in summaries if row["pairwise_ade"] is not None], dtype=float
