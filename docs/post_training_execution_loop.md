@@ -4,12 +4,12 @@
 
 ## 1. 当前快照
 
-- 最后更新：2026-08-14 04:45 CST
+- 最后更新：2026-08-14 04:49 CST
 - 开发分支：`codex/post-training-analysis`
 - 开发分支同步状态：已推送，具体 revision 以 `codex/post-training-analysis` 的 Git HEAD 为准
 - D0 source commit：`7c8adda`（运行期间未更新 checkout）
 - 固定随机种子：`20260812`
-- 当前动作：启动 E3 SLDR-only LoRA-GRPO
+- 当前动作：E3 SLDR-only LoRA-GRPO 正式训练
 - 下一科学实验：E3 SLDR-only LoRA-GRPO
 - 正式实验顺序：`E0 → D0 → E1 → E2 → E3 → E4（条件门控）→ E5 → F0`
 
@@ -335,6 +335,16 @@
 - 分析：E2 比 E1 降低零方差 group 比例 `7.5` 个百分点，并将平均 headroom 从 `0.17365` 提高到 `0.24294`，符合 FALS 将预算移向困难且可学习样本的设计。唯一轻微 trade-off 是 ego progress 相对 E0 下降 `0.00197`，不足以抵消安全与综合分数改善，但需保留在最终报告。
 - 决策：接受 E2 为当前 dev 最佳候选，不提前访问 held-out；继续执行 E3 SLDR-only 独立消融。E3 仍使用与 E1 相同的随机 train 1k，不叠加 FALS，确保仅改变训练 reward。
 - 下一动作：服务器同步最新台账提交，确认 source clean、随机 train 1k、GPU/8901/E3 目录与测试门控后启动 E3。
+
+### 记录 014：E3 SLDR-only LoRA-GRPO 正式启动
+
+- 状态：运行中，启动门控与健康检查通过。
+- 代码与配置：source commit `650548b02c529fd67baa7c03f1e0a2468d862918`，source status 为空；继续使用 E1 的随机 train 1k、250 steps、rank-8 LoRA、GRPO 与相同生成/final-dev 协议。唯一实验变量是训练 reward 切换为 `compute_score_sldr`，未叠加 FALS 或 std-floor。
+- 原始证据：实验目录 `experiments/safe_grpo/e3_sldr_lora_1k_seed20260812/`，launcher `logs/e3_sldr_lora_1k_seed20260812.launcher.log`，启动 PID `332016`。
+- 启动门控：随机 train manifest 为 1,000 个唯一 train token，与 dev/held-out 重叠为 0；服务器启动器语法、18 项相关测试、source clean、GPU/8901 和 E3 目录门控均通过。
+- 启动健康：`RUNNING`、source、run.env 和 train/dev manifest 已落盘；run.env 确认 `reward_function=compute_score_sldr`、`adv_estimator=grpo`。Ray/trainer/vLLM 与 Gunicorn/8901 正常，GPU 训练已进入 step loop，首步约 `39.8s/step`，日志无异常。
+- 决策：保持唯一变量为 SLDR reward；正常运行静默。E4 是否执行仍只由 E3 完成后的实际 train diagnosis 门控。
+- 下一动作：按 ETA 四档规则监控 E3；完成后比较 E0/E1/E2/E3，并仅在 E3 `low_nonzero_std_ratio >= 0.10` 时启动 E4。
 
 ## 6. 后续记录模板
 
