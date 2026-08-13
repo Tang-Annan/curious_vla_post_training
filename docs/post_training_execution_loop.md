@@ -4,13 +4,13 @@
 
 ## 1. 当前快照
 
-- 最后更新：2026-08-14 04:49 CST
+- 最后更新：2026-08-14 07:40 CST
 - 开发分支：`codex/post-training-analysis`
 - 开发分支同步状态：已推送，具体 revision 以 `codex/post-training-analysis` 的 Git HEAD 为准
 - D0 source commit：`7c8adda`（运行期间未更新 checkout）
 - 固定随机种子：`20260812`
-- 当前动作：E3 SLDR-only LoRA-GRPO 正式训练
-- 下一科学实验：E3 SLDR-only LoRA-GRPO
+- 当前动作：启动 E4 SLDR + Std-Floor GRPO
+- 下一科学实验：E4 SLDR + Std-Floor GRPO
 - 正式实验顺序：`E0 → D0 → E1 → E2 → E3 → E4（条件门控）→ E5 → F0`
 
 | 阶段 | 状态 | 当前结论 | 下一动作 |
@@ -21,8 +21,8 @@
 | D0 train rollout diagnosis | 完成 | 4,525×4 完整通过；存在可学习方差与 headroom | 保留为 E1–E4 train 诊断基线 |
 | E1 Vanilla LoRA-GRPO | 完成 | 产物完整，但 final-dev 低于 E0，不作为最终候选 | 保留为 vanilla 对照 |
 | E2 FALS only | 完成 | final-dev 超过 E0/E1，支持 FALS 独立贡献 | 保留为当前最佳候选 |
-| E3 SLDR only | 启动中 | 仅切换训练 reward，其余与 E1 一致 | 完成后检验 SLDR 独立贡献与 E4 门控 |
-| E4 Std-Floor GRPO | 条件待执行 | 受低非零方差占比门控 | E3 中至少 10% group 满足 `0 < std < 0.05` 才运行 |
+| E3 SLDR only | 完成 | final-dev 低于 E0/E1/E2，SLDR 独立贡献为负 | 保留为 E4 对照，不作为候选 |
+| E4 Std-Floor GRPO | 启动中 | E3 低非零方差占比 15.4%，门控通过 | 仅增加 std-floor，检验其补救作用 |
 | E5 grouped reward throughput | 待执行 | A0 仅提供候选配置 | 对最终候选做正式吞吐与等价性验证 |
 | F0 最终审计与 held-out | 待执行 | held-out 保持封存 | dev 完成选型后一次性评估 |
 
@@ -345,6 +345,19 @@
 - 启动健康：`RUNNING`、source、run.env 和 train/dev manifest 已落盘；run.env 确认 `reward_function=compute_score_sldr`、`adv_estimator=grpo`。Ray/trainer/vLLM 与 Gunicorn/8901 正常，GPU 训练已进入 step loop，首步约 `39.8s/step`，日志无异常。
 - 决策：保持唯一变量为 SLDR reward；正常运行静默。E4 是否执行仍只由 E3 完成后的实际 train diagnosis 门控。
 - 下一动作：按 ETA 四档规则监控 E3；完成后比较 E0/E1/E2/E3，并仅在 E3 `low_nonzero_std_ratio >= 0.10` 时启动 E4。
+
+### 记录 015：E3 SLDR-only 完成并通过 E4 门控
+
+- 状态：技术验收通过，效果为负；E4 预注册门控通过。
+- 代码与配置：source commit `650548b02c529fd67baa7c03f1e0a2468d862918`，source status 为空；随机 train 1k、250 steps、rank-8 LoRA、GRPO 和生成/final-dev 协议与 E1 相同，唯一实验变量为 SLDR train reward。tracker `last_global_step=250` 且 `global_step_250/actor` 完整。
+- 原始证据：服务器 `experiments/safe_grpo/e3_sldr_lora_1k_seed20260812/`；运行时间 2026-08-14 04:40:11 至 07:30:56 CST，约 2 小时 50 分 44 秒；`COMPLETE` 存在、`exit_code=0`，无 `RUNNING/FAILED`。
+- 覆盖与完整性：raw 2,566 行；train 2,000 行、1,000×2；final dev 566 行、566×1。无缺失、未知 token、train/dev 或 held-out 重叠。主 PID、trainer、Ray、Gunicorn/8901 已退出，GPU 0 MiB；日志无 OOM、traceback、fatal 或 exception。
+- train diagnosis：SLDR reward mean/std `0.66047/0.42596`，PDMS scaled `0.61283`，exact-zero std `44.60%`，`0 < std < 0.05` 为 `15.40%`，平均 headroom `0.16895`，pairwise ADE/FDE `0.65106/1.45392`，safe `65.40%`，parse success `99.90%`（2/2,000 失败），无 clipping。
+- final dev：PDMS scaled `0.62994`、PDMS `0.65266`、safe `0.68905`、collision `0.95760`、drivable area `0.72792`、progress `0.90941`、TTC `0.93816`、comfort `0.91873`、parse `1.0`、clipping `0`。
+- 同协议差值：相对 E0，PDMS scaled `-0.02945`、PDMS `-0.03095`、safe `-0.03534`；相对 E1 分别为 `-0.01288/-0.01425/-0.01767`；相对 E2 为 `-0.04236/-0.04493/-0.05124`。SLDR-only 未改善任何主要质量指标，不能进入当前候选。
+- 门控与分析：E3 有 `15.40%` group 满足 `0 < std < 0.05`，高于预注册阈值 `10%`，因此 E4 必须执行。该门控只证明存在足够的低非零方差样本，不代表 std-floor 必然补救 SLDR；E4 需要与 E3 直接比较。
+- 决策：保留 E3 为 SLDR-only 负对照，不调参、不重跑；执行 E4，保持 SLDR、随机 train 1k 和其余协议不变，仅将 advantage estimator 切换为 `std_floor_grpo`、`std_floor=0.05`。
+- 下一动作：同步台账提交，确认 E3 diagnosis 门控、source、测试、GPU/8901 与 E4 目录后启动 E4。
 
 ## 6. 后续记录模板
 
