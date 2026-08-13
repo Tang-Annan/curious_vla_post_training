@@ -110,6 +110,74 @@ def test_rollout_pairwise_distances():
     assert analysis.pairwise_distance(rows, -1) == pytest.approx(2.0)
 
 
+def test_rollout_analysis_enforces_manifest_coverage(tmp_path):
+    pytest.importorskip("numpy")
+    analysis = load_module(ROOT / "projects/safe_grpo/analyze_rollouts.py", "analyze_rollouts_manifest")
+    manifest = tmp_path / "train.txt"
+    manifest.write_text("a\nb\n", encoding="utf-8")
+    rollouts = tmp_path / "rollouts.jsonl"
+    rows = [
+        {"token": token, "pdms_scaled": reward, "poses": [[0.0, 0.0, 0.0]], "parsed_ok": True}
+        for token in ("a", "b")
+        for reward in (0.4, 0.4, 0.41, 0.42)
+    ]
+    rollouts.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    report = analysis.analyze(rollouts, 0.05, manifest, expected_rollouts=4)
+    assert report["groups"] == 2
+    assert report["rollouts"] == 8
+    assert report["exact_zero_std_ratio"] == pytest.approx(0.0)
+    assert report["low_nonzero_std_ratio"] == pytest.approx(1.0)
+
+
+def test_rollout_analysis_rejects_rows_outside_manifest(tmp_path):
+    pytest.importorskip("numpy")
+    analysis = load_module(ROOT / "projects/safe_grpo/analyze_rollouts.py", "analyze_rollouts_leakage")
+    manifest = tmp_path / "train.txt"
+    manifest.write_text("a\n", encoding="utf-8")
+    rollouts = tmp_path / "rollouts.jsonl"
+    rollouts.write_text(
+        "".join(json.dumps({"token": token, "pdms_scaled": 0.5}) + "\n" for token in ("a", "heldout")),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="outside the manifest"):
+        analysis.analyze(rollouts, 0.05, manifest)
+
+
+def test_adas_preserves_manifest_and_final_partial_batch():
+    source = (ROOT / "EasyR1/verl/trainer/main_adas.py").read_text(encoding="utf-8")
+    assert "ppo_config.data.token_filter_file = None" not in source
+    assert "train_drop_last=False" in source
+
+
+def test_inference_loader_keeps_final_partial_batch(monkeypatch, tmp_path):
+    pytest.importorskip("torch")
+    data_loader = importlib.import_module("verl.trainer.data_loader")
+    dataset = list(range(5))
+
+    class FakeDataset:
+        def __init__(self, **kwargs):
+            self.rows = dataset
+
+        def __len__(self):
+            return len(self.rows)
+
+        def __getitem__(self, index):
+            return {"value": self.rows[index]}
+
+    monkeypatch.setattr(data_loader, "RLHFDataset", FakeDataset)
+    monkeypatch.setattr(data_loader, "collate_fn", lambda rows: rows)
+    config = data_loader.DataConfig(
+        train_files="train",
+        val_files="val",
+        rollout_batch_size=4,
+        mini_rollout_batch_size=4,
+        val_batch_size=4,
+        filter_overlong_prompts=False,
+    )
+    train, _ = data_loader.create_dataloader(config, tokenizer=None, processor=None, train_drop_last=False)
+    assert [len(batch) for batch in train] == [4, 1]
+
+
 def test_data_config_resolves_validation_manifest(tmp_path):
     pytest.importorskip("torch")
     from verl.trainer.config import DataConfig

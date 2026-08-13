@@ -23,17 +23,44 @@ def pairwise_distance(rows: list[dict], point_index: int | None = None) -> float
     return float(np.mean(distances)) if distances else None
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("jsonl", type=Path)
-    parser.add_argument("--std-threshold", type=float, default=0.05)
-    args = parser.parse_args()
+def load_manifest(path: Path) -> list[str]:
+    tokens = [line.strip() for line in path.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
+    if len(tokens) != len(set(tokens)):
+        raise ValueError("Manifest contains duplicate tokens.")
+    return tokens
 
+
+def analyze(
+    jsonl: Path,
+    std_threshold: float,
+    manifest: Path | None = None,
+    expected_rollouts: int | None = None,
+) -> dict:
+    allowed = set(load_manifest(manifest)) if manifest is not None else None
     groups: dict[str, list[dict]] = defaultdict(list)
-    with args.jsonl.open(encoding="utf-8-sig") as handle:
+    unknown_rows = 0
+    with jsonl.open(encoding="utf-8-sig") as handle:
         for line in handle:
             row = json.loads(line)
-            groups[row["token"]].append(row)
+            token = str(row["token"])
+            if allowed is not None and token not in allowed:
+                unknown_rows += 1
+                continue
+            groups[token].append(row)
+
+    if allowed is not None:
+        missing = allowed - groups.keys()
+        if missing:
+            raise ValueError(f"Manifest coverage is missing {len(missing)} tokens.")
+        if unknown_rows:
+            raise ValueError(f"Rollout file contains {unknown_rows} rows outside the manifest.")
+
+    if expected_rollouts is not None:
+        mismatched = [token for token, rows in groups.items() if len(rows) != expected_rollouts]
+        if mismatched:
+            raise ValueError(
+                f"Expected {expected_rollouts} rollouts per token; {len(mismatched)} tokens have different coverage."
+            )
 
     summaries = []
     for token, rows in groups.items():
@@ -56,18 +83,21 @@ def main() -> None:
         )
 
     stds = np.asarray([row["reward_std"] for row in summaries], dtype=float)
-    report = {
+    lengths = np.asarray(
+        [row["response_length"] for rows in groups.values() for row in rows if "response_length" in row],
+        dtype=float,
+    )
+    return {
         "groups": len(summaries),
         "rollouts": sum(row["n"] for row in summaries),
-        "zero_signal_ratio": float(np.mean(stds < args.std_threshold)) if len(stds) else None,
-        "std_threshold": args.std_threshold,
+        "exact_zero_std_ratio": float(np.mean(stds == 0.0)) if len(stds) else None,
+        "low_nonzero_std_ratio": float(np.mean((stds > 0.0) & (stds < std_threshold))) if len(stds) else None,
+        "below_threshold_std_ratio": float(np.mean(stds < std_threshold)) if len(stds) else None,
+        "std_threshold": std_threshold,
         "response_length_percentiles": {
-            f"p{percentile}": float(np.percentile(lengths, percentile))
-            for percentile in (50, 90, 95, 99)
+            f"p{percentile}": float(np.percentile(lengths, percentile)) for percentile in (50, 90, 95, 99)
         }
-        if len(lengths := np.asarray([
-            row["response_length"] for rows in groups.values() for row in rows if "response_length" in row
-        ], dtype=float))
+        if len(lengths)
         else None,
         "parse_success_rate": float(
             np.mean([bool(row.get("parsed_ok", True)) for rows in groups.values() for row in rows])
@@ -76,6 +106,16 @@ def main() -> None:
         else None,
         "group_metrics": summaries,
     }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("jsonl", type=Path)
+    parser.add_argument("--std-threshold", type=float, default=0.05)
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--expected-rollouts", type=int)
+    args = parser.parse_args()
+    report = analyze(args.jsonl, args.std_threshold, args.manifest, args.expected_rollouts)
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 

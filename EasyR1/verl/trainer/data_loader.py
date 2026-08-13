@@ -23,7 +23,12 @@ from ..utils.dataset import RLHFDataset, collate_fn
 from .config import DataConfig
 
 
-def create_dataloader(config: DataConfig, tokenizer: PreTrainedTokenizer, processor: Optional[ProcessorMixin]) -> None:
+def create_dataloader(
+    config: DataConfig,
+    tokenizer: PreTrainedTokenizer,
+    processor: Optional[ProcessorMixin],
+    train_drop_last: bool = True,
+) -> None:
     train_dataset = RLHFDataset(
         data_path=config.train_files,
         tokenizer=tokenizer,
@@ -63,7 +68,7 @@ def create_dataloader(config: DataConfig, tokenizer: PreTrainedTokenizer, proces
         num_workers=8,
         collate_fn=collate_fn,
         pin_memory=False,
-        drop_last=True,
+        drop_last=train_drop_last,
     )
 
     val_dataset = RLHFDataset(

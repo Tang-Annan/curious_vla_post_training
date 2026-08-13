@@ -96,7 +96,7 @@ class AdasRunner:
         reward_fn = RemoteRewardManager.remote(config.worker.reward, tokenizer)
 
         # --- Dataloader (reuse create_dataloader; val is unused but kept for similarity with main.py) ---
-        train_dataloader, _ = create_dataloader(config.data, tokenizer, processor)
+        train_dataloader, _ = create_dataloader(config.data, tokenizer, processor, train_drop_last=False)
 
         # --- Output setup ---
         output_dir = os.path.join("checkpoints", "adas", config.trainer.experiment_name)
@@ -171,7 +171,6 @@ def main():
     # Force settings for inference-only mode
     ppo_config.algorithm.adv_estimator = "grpo"
     ppo_config.algorithm.disable_kl = True
-    ppo_config.data.token_filter_file = None
     ppo_config.data.shuffle = False
 
     ppo_config: PPOConfig = OmegaConf.to_object(ppo_config)

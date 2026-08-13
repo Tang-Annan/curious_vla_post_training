@@ -9,7 +9,7 @@ Evidence files on the server live under:
 - `logs/`: installation, cache, rollout, reward and training logs
 - `experiments/<name>/`: resolved config, source commit, seed, checkpoint and metrics
 
-GPU experiments must run in this order: E0 Stage-2 baseline, E1 vanilla LoRA-GRPO, E2 FALS only, E3 SLDR only, E4 Std-Floor GRPO, E5 grouped reward throughput. Do not assign FALS thresholds or claim improvements before rollout evidence exists.
+GPU experiments must run in this order: E0 Stage-2 baseline, D0 frozen-train rollout diagnosis, E1 vanilla LoRA-GRPO, E2 FALS only, E3 SLDR only, E4 Std-Floor GRPO, E5 grouped reward throughput. Do not assign FALS thresholds or claim improvements before rollout evidence exists. D0 must cover all 4,525 frozen train tokens with four rollouts each; dev and held-out tokens are forbidden.
 
 Experiment switches:
 
