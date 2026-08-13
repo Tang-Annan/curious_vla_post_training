@@ -6,7 +6,8 @@
 
 - 最后更新：2026-08-13 19:22 CST
 - 开发分支：`codex/post-training-analysis`
-- 已同步提交：`79f1386`
+- 开发分支已同步提交：`d82db32`
+- 当前 D0 source commit：`7c8adda`（运行期间不更新 checkout）
 - 固定随机种子：`20260812`
 - 当前动作：D0 冻结 train rollout 诊断
 - 下一科学实验：D0 冻结 train rollout 诊断
