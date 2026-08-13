@@ -4,13 +4,13 @@
 
 ## 1. 当前快照
 
-- 最后更新：2026-08-13 20:03 CST
+- 最后更新：2026-08-13 22:30 CST
 - 开发分支：`codex/post-training-analysis`
 - 开发分支同步状态：已推送，具体 revision 以 `codex/post-training-analysis` 的 Git HEAD 为准
-- 当前 D0 source commit：`7c8adda`（运行期间不更新 checkout）
+- D0 source commit：`7c8adda`（运行期间未更新 checkout）
 - 固定随机种子：`20260812`
-- 当前动作：D0 冻结 train rollout 诊断
-- 下一科学实验：D0 冻结 train rollout 诊断
+- 当前动作：同步服务器并启动 E1 Vanilla LoRA-GRPO
+- 下一科学实验：E1 Vanilla LoRA-GRPO
 - 正式实验顺序：`E0 → D0 → E1 → E2 → E3 → E4（条件门控）→ E5 → F0`
 
 | 阶段 | 状态 | 当前结论 | 下一动作 |
@@ -18,9 +18,9 @@
 | E0 Stage-2 dev baseline | 完成 | 566/566 dev baseline 已冻结 | 作为同协议 dev 比较基线 |
 | A0 validation 加速隔离测试 | 完成 | 保持 batch 4 / token budget 4608；拒绝独立 flash-attn、LRU 和 batch 8 | A1 只实现无损 reward 并发 |
 | A1 reward 并发回归 | 延期 | 候选尚未完成端到端远程回归，不进入正式路线 | 仅在 E5 吞吐阶段重新评估 |
-| D0 train rollout diagnosis | 进行中 | 已按冻结配置和提交 `7c8adda` 启动 | 完成 4,525×4 覆盖后分析并写回 |
-| E1 Vanilla LoRA-GRPO | 待执行 | 不提前判断效果 | 根据 D0 诊断执行固定 1k 训练 |
-| E2 FALS only | 待执行 | 阈值和预算尚未选择 | 仅依据 D0 train rollout 选择 |
+| D0 train rollout diagnosis | 完成 | 4,525×4 完整通过；存在可学习方差与 headroom | 保留为 E1–E4 train 诊断基线 |
+| E1 Vanilla LoRA-GRPO | 启动中 | 固定随机 train 1k、250 steps，其余配置不变 | 完成后按 final dev 验收 |
+| E2 FALS only | 待执行 | 唯一 train-only top-1000 manifest 已冻结 | E1 完成并写回后启动 |
 | E3 SLDR only | 待执行 | 不提前判断效果 | 与 E1 保持其余变量一致 |
 | E4 Std-Floor GRPO | 条件待执行 | 受低非零方差占比门控 | E3 中至少 10% group 满足 `0 < std < 0.05` 才运行 |
 | E5 grouped reward throughput | 待执行 | A0 仅提供候选配置 | 对最终候选做正式吞吐与等价性验证 |
@@ -276,6 +276,19 @@
 - 分析：final dev 在 step 250 训练结束后执行，而中途 `val_freq=-1`，因此 tracker 中早期保存时形成的 `best_global_step` 不构成同条件模型选择证据。正式比较统一使用 final `global_step_250`，不误用 step 50。
 - 决策：冻结 step 250 为 E1–E4 唯一正式 checkpoint；若缺失则阶段失败，不用较早 checkpoint 兜底。
 - 下一动作：等待 D0 完整验收，随后用最新正式启动器执行 E1。
+
+### 记录 009：D0 冻结 train rollout 诊断完成并冻结 E2 输入
+
+- 状态：通过；D0 无需重跑，允许推进 E1。
+- 代码与配置：D0 使用提交 `7c8adda90451dbdd8bc8bd9cc8360c4f4d896abc`、seed `20260812`、每 token 4 rollout 和 2.1 节冻结协议；source status 为空。运行时原始 `diagnosis.json` 保留未覆盖；使用开发分支最新版 `analyze_rollouts.py` 复算 sample std 到独立 `diagnosis_sample_std.json`。
+- 原始证据：服务器 `experiments/safe_grpo/d0_stage2_train_n4_seed20260812/`；`COMPLETE` 于 21:55:05 CST 写入，`exit_code=0`，无 `RUNNING/FAILED`。复算文件 SHA-256 为 `a3ffa6224e5b2668b2a1285d6cc9bc6c620c21cb564a405fc4fabb3722104944`。
+- 覆盖与完整性：`d0_train_rollouts.jsonl` 为 18,100 行、4,525 个唯一 train token，每 token 恰好 4 条；train 缺失 0，dev/held-out/manifest 外重叠均为 0。ADAS CSV 为 18,100 条 score。主 PID、trainer、Ray、Gunicorn 和端口 8901 已退出，GPU 为 0 MiB；无 OOM、traceback 或 fatal error。
+- 关键结果：sample-std 诊断为 exact-zero std `18.14%`、`0 < std < 0.05` 为 `16.24%`、`std < 0.05` 合计 `34.39%`；reward mean/std 为 `0.59636/0.43850`，平均 headroom `0.26838`，pairwise ADE/FDE 为 `0.67096/1.60331`。safe rate `65.71%`，PDMS `0.61825`，collision/drivable-area compliance 为 `0.93910/0.71031`。响应长度 mean/p50/p90/p95/p99 为 `367.59/367/377/379/385`，512-token clipping 为 0；parse success 为 `99.9337%`。
+- 解析失败分析：18,100 条中 12 条、涉及 11 个 token；均由输出未形成恰好 8 个可解析轨迹点而进入零分路径，response length 为 338–386，排除长度截断。单 token `4730affb7d4d5142` 失败 2 次，其余各 1 次；失败率仅 `0.0663%`，未改变覆盖或边界，不足以触发 D0 重跑。
+- E2 manifest：依据全量 D0 train rollout，用冻结公式 `(1 - mean_reward) * headroom` 生成唯一 top-1,000；服务器路径 `manifests/fals_d0_seed20260812/fals_top_1000.txt`，SHA-256 为 `fd62a6f204806beff51fa7e1fb0f853027655b4b47f00f9633c787b04e0ffed0`。清单为 1,000 个唯一 train token，train 外、dev、held-out 重叠均为 0；第 1,000 名 learnability 为 `0.25`，同分按 token 排序，选择规则未事后调整。
+- 分析：81.86% group 具有非零 reward 方差，平均 headroom 充足，GRPO 存在有效相对优势信号；与此同时，34.39% group 低于 std 0.05，支持后续分别检验 FALS 与 Std-Floor。D0 是 train 分布诊断，不能与 566-token E0 dev 均值直接作效果比较。
+- 决策：接受 D0；不修解析器、不更改冻结配置、不开展额外加速测试。E1 继续作为随机 1k vanilla 对照；E2 只使用上述唯一 top-1,000 manifest；E4 仍由 E3 自身 `low_nonzero_std_ratio >= 0.10` 门控，不能用 D0 代替。
+- 下一动作：服务器 checkout 以 Git fast-forward 同步开发分支，完成最小测试与启动门控后启动正式 E1；正常运行按四档 ETA 静默监控。
 
 ## 6. 后续记录模板
 
