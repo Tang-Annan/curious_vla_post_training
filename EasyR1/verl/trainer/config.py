@@ -71,7 +71,9 @@ class AlgorithmConfig:
     lam: float = 1.0
     """lambda value for ppo gae advantage estimator"""
     adv_estimator: str = "grpo"
-    """advantage estimator, support `gae`, `grpo`, `reinforce_plus_plus`, `remax`, `rloo`"""
+    """advantage estimator, including `grpo` and `std_floor_grpo`"""
+    std_floor: float = 0.05
+    """minimum group reward standard deviation used by `std_floor_grpo`"""
     disable_kl: bool = False
     """disable reference model"""
     use_kl_loss: bool = False
@@ -94,6 +96,10 @@ class AlgorithmConfig:
     """filter out low reward samples if online filtering"""
     filter_high: float = 0.99
     """filter out high reward samples if online filtering"""
+
+    def post_init(self):
+        if self.std_floor <= 0:
+            raise ValueError("algorithm.std_floor must be positive.")
 
 
 @dataclass

@@ -2,13 +2,17 @@
 set -euo pipefail
 
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/autodl-tmp/curious-vla-workspace}"
-PROJECT_ROOT="$WORKSPACE_ROOT/src/curious_vla"
+PROJECT_ROOT="${PROJECT_ROOT:-$WORKSPACE_ROOT/src/curious_vla_post_training}"
 MODEL_PATH="$WORKSPACE_ROOT/models/sft_stage2"
 DATA_PATH="$PROJECT_ROOT/EasyR1/data/QA_navtrain_poutine_style_full"
 FILTER_FILE="${FILTER_FILE:-$WORKSPACE_ROOT/manifests/dev_subsets/train_seed20260812_500.txt}"
 CACHE_PATH="$WORKSPACE_ROOT/exp_root/metric_cache_released_5656"
 EXP_NAME="${EXP_NAME:-e1_vanilla_lora_smoke}"
 REWARD_SERVER_PORT="${REWARD_SERVER_PORT:-8901}"
+REWARD_FUNCTION="${REWARD_FUNCTION:-./verl/utils/reward_score/navsim/navsim_reward_grouped.py:compute_score_group_fast}"
+ADV_ESTIMATOR="${ADV_ESTIMATOR:-grpo}"
+STD_FLOOR="${STD_FLOOR:-0.05}"
+MAX_STEPS="${MAX_STEPS:-5}"
 SESSION_NAME="curious_reward_$$"
 
 for path in "$MODEL_PATH" "$DATA_PATH" "$FILTER_FILE" "$CACHE_PATH/metadata"; do
@@ -36,4 +40,8 @@ cd "$PROJECT_ROOT/EasyR1"
     data.image_dir="$PROJECT_ROOT/datasets" \
     data.token_filter_file="$FILTER_FILE" \
     worker.actor.model.model_path="$MODEL_PATH" \
+    worker.reward.reward_function="$REWARD_FUNCTION" \
+    algorithm.adv_estimator="$ADV_ESTIMATOR" \
+    algorithm.std_floor="$STD_FLOOR" \
+    trainer.max_steps="$MAX_STEPS" \
     trainer.experiment_name="$EXP_NAME"

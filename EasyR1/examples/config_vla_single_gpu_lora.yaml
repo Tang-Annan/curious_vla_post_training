@@ -21,6 +21,7 @@ data:
 
 algorithm:
   adv_estimator: grpo
+  std_floor: 0.05
   disable_kl: false
   use_kl_loss: true
   kl_penalty: low_var_kl

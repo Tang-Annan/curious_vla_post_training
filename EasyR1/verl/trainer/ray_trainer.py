@@ -134,7 +134,13 @@ def apply_kl_penalty(data: DataProto, kl_ctrl: KLController, kl_penalty="kl"):
     return data, metrics
 
 
-def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma: float = 1.0, lam: float = 1.0):
+def compute_advantage(
+    data: DataProto,
+    adv_estimator: AdvantageEstimator,
+    gamma: float = 1.0,
+    lam: float = 1.0,
+    std_floor: float = 0.05,
+):
     """Compute advantage estimates for policy optimization."""
     adv_inputs = {
         "token_level_rewards": data.batch["token_level_rewards"],
@@ -142,6 +148,7 @@ def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma:
         "index": data.non_tensor_batch["uid"],
         "gamma": gamma,
         "lam": lam,
+        "std_floor": std_floor,
     }
     if "values" in data.batch:
         adv_inputs["values"] = data.batch["values"]
@@ -230,10 +237,11 @@ class RayPPOTrainer:
                 )
 
         if (
-            config.algorithm.adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.RLOO)
+            config.algorithm.adv_estimator
+            in (AdvantageEstimator.GRPO, AdvantageEstimator.STD_FLOOR_GRPO, AdvantageEstimator.RLOO)
             and config.worker.rollout.n == 1
         ):
-            raise ValueError("GRPO and RLOO algorithm need `config.worker.rollout.n > 1`.")
+            raise ValueError("Group-relative advantage estimators need `config.worker.rollout.n > 1`.")
 
         if config.trainer.max_steps is not None:
             self.training_steps = config.trainer.max_steps
@@ -645,6 +653,7 @@ class RayPPOTrainer:
                         adv_estimator=self.config.algorithm.adv_estimator,
                         gamma=self.config.algorithm.gamma,
                         lam=self.config.algorithm.lam,
+                        std_floor=self.config.algorithm.std_floor,
                     )
 
                 # update critic

@@ -80,6 +80,7 @@ class AdvantageEstimator(str, Enum):
 
     GAE = "gae"
     GRPO = "grpo"
+    STD_FLOOR_GRPO = "std_floor_grpo"
     GRPO_PASSK = "grpo_passk"
     REINFORCE_PLUS_PLUS = "reinforce_plus_plus"
     REMAX = "remax"
@@ -213,6 +214,39 @@ def compute_grpo_outcome_advantage(
         scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + eps)
 
     returns = scores.unsqueeze(-1) * response_mask
+    return returns, returns
+
+
+@register_adv_estimator(AdvantageEstimator.STD_FLOOR_GRPO)
+def compute_std_floor_grpo_outcome_advantage(
+    token_level_rewards: torch.Tensor,
+    response_mask: torch.Tensor,
+    index: torch.Tensor,
+    std_floor: float = 0.05,
+    **kwargs,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute GRPO advantages without amplifying differences below ``std_floor``."""
+    if std_floor <= 0:
+        raise ValueError("std_floor must be positive.")
+
+    scores = token_level_rewards.sum(dim=-1)
+    grouped_scores = defaultdict(list)
+    for i in range(scores.shape[0]):
+        grouped_scores[index[i]].append(scores[i])
+
+    group_stats = {}
+    for idx, values in grouped_scores.items():
+        if len(values) <= 1:
+            raise AssertionError("Std-Floor GRPO needs rollout.n > 1.")
+        stacked = torch.stack(values)
+        group_stats[idx] = (stacked.mean(), stacked.std())
+
+    advantages = torch.empty_like(scores)
+    for i in range(scores.shape[0]):
+        mean, std = group_stats[index[i]]
+        advantages[i] = (scores[i] - mean) / torch.clamp(std, min=std_floor)
+
+    returns = advantages.unsqueeze(-1) * response_mask
     return returns, returns
 
 
