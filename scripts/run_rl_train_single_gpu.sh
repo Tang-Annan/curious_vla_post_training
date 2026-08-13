@@ -20,6 +20,8 @@ done
 
 (
     export PROJECT_ROOT DATA_ROOT="$PROJECT_ROOT/datasets/navsim" CACHE_PATH REWARD_SERVER_PORT
+    export OPENSCENE_DATA_ROOT="$PROJECT_ROOT/datasets/navsim"
+    export NAVSIM_EXP_ROOT="$WORKSPACE_ROOT/exp_root"
     cd "$PROJECT_ROOT/navsim_eval"
     exec "$WORKSPACE_ROOT/envs/navsim/bin/gunicorn" \
         navsim.planning.script.run_gunicorn_server:app \
