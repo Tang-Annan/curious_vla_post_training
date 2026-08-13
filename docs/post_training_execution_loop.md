@@ -4,12 +4,12 @@
 
 ## 1. 当前快照
 
-- 最后更新：2026-08-13 22:30 CST
+- 最后更新：2026-08-13 22:38 CST
 - 开发分支：`codex/post-training-analysis`
 - 开发分支同步状态：已推送，具体 revision 以 `codex/post-training-analysis` 的 Git HEAD 为准
 - D0 source commit：`7c8adda`（运行期间未更新 checkout）
 - 固定随机种子：`20260812`
-- 当前动作：同步服务器并启动 E1 Vanilla LoRA-GRPO
+- 当前动作：E1 Vanilla LoRA-GRPO 正式训练
 - 下一科学实验：E1 Vanilla LoRA-GRPO
 - 正式实验顺序：`E0 → D0 → E1 → E2 → E3 → E4（条件门控）→ E5 → F0`
 
@@ -289,6 +289,16 @@
 - 分析：81.86% group 具有非零 reward 方差，平均 headroom 充足，GRPO 存在有效相对优势信号；与此同时，34.39% group 低于 std 0.05，支持后续分别检验 FALS 与 Std-Floor。D0 是 train 分布诊断，不能与 566-token E0 dev 均值直接作效果比较。
 - 决策：接受 D0；不修解析器、不更改冻结配置、不开展额外加速测试。E1 继续作为随机 1k vanilla 对照；E2 只使用上述唯一 top-1,000 manifest；E4 仍由 E3 自身 `low_nonzero_std_ratio >= 0.10` 门控，不能用 D0 代替。
 - 下一动作：服务器 checkout 以 Git fast-forward 同步开发分支，完成最小测试与启动门控后启动正式 E1；正常运行按四档 ETA 静默监控。
+
+### 记录 010：E1 Vanilla LoRA-GRPO 正式启动
+
+- 状态：运行中，启动健康检查通过。
+- 代码与配置：服务器 checkout 以 Git fast-forward 同步至 `b5a63401813009e43adb11c9506665166561b030`，source status 为空；继续使用冻结随机 train 1k、250 steps、rank-8 LoRA、batch 4、token budget 4608、CUDA Graph、vLLM 内置 FlashAttention、显存比例 0.55 和串行 grouped reward。
+- 原始证据：实验目录 `experiments/safe_grpo/e1_vanilla_lora_1k_seed20260812/`，launcher `logs/e1_vanilla_lora_1k_seed20260812.launcher.log`，启动 PID `862991`。
+- 启动门控：服务器 `bash -n`、三个 Python 文件 `py_compile` 及 `tests/test_safe_grpo.py` 的 18 项测试全部通过；启动前 GPU、8901 和 E1 目录均空闲。
+- 启动健康：`RUNNING`、run.env、train/dev manifest 和 source 证据均已落盘；trainer 占用约 18,994 MiB，reward 8901 返回 HTTP 200，主进程持续运行。
+- 决策：按冻结协议继续 E1，不插入配置或加速探索；正常状态静默。
+- 下一动作：按 ETA 四档规则监控 E1；完成后先核验 step-250 checkpoint、1,000×2 train rollout、566×1 final dev、指标和资源回收，再写回并推进 E2。
 
 ## 6. 后续记录模板
 
