@@ -17,7 +17,7 @@ export CACHE_PATH="${CACHE_PATH:-$NAVSIM_EXP_ROOT/metric_cache_${CACHE_SPLIT}}"
 
 HOST="0.0.0.0"
 PORT="${REWARD_SERVER_PORT:-8901}"
-NUM_WORKERS=$(nproc)
+NUM_WORKERS="${NAVSIM_SERVER_WORKERS:-1}"
 
 echo "[INFO] Starting Gunicorn server on $HOST:$PORT with $NUM_WORKERS workers..."
 
