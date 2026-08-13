@@ -4,13 +4,13 @@
 
 ## 1. 当前快照
 
-- 最后更新：2026-08-14 01:47 CST
+- 最后更新：2026-08-14 04:45 CST
 - 开发分支：`codex/post-training-analysis`
 - 开发分支同步状态：已推送，具体 revision 以 `codex/post-training-analysis` 的 Git HEAD 为准
 - D0 source commit：`7c8adda`（运行期间未更新 checkout）
 - 固定随机种子：`20260812`
-- 当前动作：E2 FALS-only LoRA-GRPO 正式训练
-- 下一科学实验：E2 FALS-only LoRA-GRPO
+- 当前动作：启动 E3 SLDR-only LoRA-GRPO
+- 下一科学实验：E3 SLDR-only LoRA-GRPO
 - 正式实验顺序：`E0 → D0 → E1 → E2 → E3 → E4（条件门控）→ E5 → F0`
 
 | 阶段 | 状态 | 当前结论 | 下一动作 |
@@ -20,8 +20,8 @@
 | A1 reward 并发回归 | 延期 | 候选尚未完成端到端远程回归，不进入正式路线 | 仅在 E5 吞吐阶段重新评估 |
 | D0 train rollout diagnosis | 完成 | 4,525×4 完整通过；存在可学习方差与 headroom | 保留为 E1–E4 train 诊断基线 |
 | E1 Vanilla LoRA-GRPO | 完成 | 产物完整，但 final-dev 低于 E0，不作为最终候选 | 保留为 vanilla 对照 |
-| E2 FALS only | 启动中 | 唯一 train-only top-1000 manifest 已冻结 | 仅改变训练样本选择并复现实验预算 |
-| E3 SLDR only | 待执行 | 不提前判断效果 | 与 E1 保持其余变量一致 |
+| E2 FALS only | 完成 | final-dev 超过 E0/E1，支持 FALS 独立贡献 | 保留为当前最佳候选 |
+| E3 SLDR only | 启动中 | 仅切换训练 reward，其余与 E1 一致 | 完成后检验 SLDR 独立贡献与 E4 门控 |
 | E4 Std-Floor GRPO | 条件待执行 | 受低非零方差占比门控 | E3 中至少 10% group 满足 `0 < std < 0.05` 才运行 |
 | E5 grouped reward throughput | 待执行 | A0 仅提供候选配置 | 对最终候选做正式吞吐与等价性验证 |
 | F0 最终审计与 held-out | 待执行 | held-out 保持封存 | dev 完成选型后一次性评估 |
@@ -322,6 +322,19 @@
 - 启动健康：`RUNNING`、source、run.env 和 train/dev manifest 已落盘；run.env 确认 `reward_function=compute_score_group_fast`、`adv_estimator=grpo` 和唯一 FALS manifest。Ray/trainer/vLLM 与 Gunicorn/8901 正常，模型已加载至 GPU，日志无异常并进入 250-step loop。
 - 决策：保持唯一变量为 FALS 样本选择，不做加速、参数或解析器变更；正常运行静默。
 - 下一动作：按 ETA 四档规则监控 E2；完成后按与 E1 相同的 checkpoint、覆盖、final-dev 和资源回收标准验收，并比较 E0/E1/E2 后再推进 E3。
+
+### 记录 013：E2 FALS-only LoRA-GRPO 完成
+
+- 状态：通过；E2 final-dev 超过 E0 与 E1，保留为当前最佳候选。
+- 代码与配置：source commit `89ac72049f8da921e2dd46f82888742ae0eeec0c`，source status 为空；实际 train manifest SHA-256 为 `fd62a6f204806beff51fa7e1fb0f853027655b4b47f00f9633c787b04e0ffed0`。除 FALS train 1k 外，训练预算、GRPO reward、LoRA、生成和 final-dev 协议均与 E1 一致。tracker 的 `last_global_step=250` 且 `global_step_250/actor` 完整。
+- 原始证据：服务器 `experiments/safe_grpo/e2_fals_lora_1k_seed20260812/`；运行时间 2026-08-14 01:43:32 至 04:34:58 CST，约 2 小时 51 分 26 秒；`COMPLETE` 存在、`exit_code=0`，无 `RUNNING/FAILED`。
+- 覆盖与完整性：raw rollout 2,566 行；train 为 2,000 行、1,000 个唯一 FALS token、每 token 2 条；final dev 为 566 行、566 个唯一 token、每 token 1 条。train/dev 均无缺失、未知 token、相互重叠或 held-out 重叠。主 PID、trainer、Ray、Gunicorn/8901 已退出，GPU 回收至 0 MiB；日志无 OOM、traceback、fatal 或 exception。
+- train diagnosis：reward mean/std `0.35843/0.45048`，exact-zero std `38.80%`，`0 < std < 0.05` 为 `6.70%`，平均 headroom `0.24294`，pairwise ADE/FDE `0.68908/1.58960`，safe rate `39.25%`，parse success `99.95%`（1/2,000 失败），无 clipping。低 train reward 是 FALS 主动集中困难样本的预期结果，不能与 E1 随机 train 均值直接解释为模型退化。
+- final dev：PDMS scaled `0.67230`、PDMS `0.69758`、safe rate `0.74028`、collision compliance `0.96908`、drivable-area compliance `0.76678`、ego progress `0.90938`、TTC compliance `0.95406`、comfort `0.92049`、parse success `1.0`、clipping `0`。
+- 同协议差值：相对 E0，PDMS scaled `+0.01292`、PDMS `+0.01397`、safe `+0.01590`、collision `+0.00265`、drivable area `+0.01413`、TTC `+0.00530`，comfort 持平，progress `-0.00197`；相对 E1，PDMS scaled `+0.02949`、PDMS `+0.03067`、safe `+0.03357`。主要质量指标的一致改善支持 FALS 的独立贡献，但单 seed 结果仍需在最终审计中如实注明。
+- 分析：E2 比 E1 降低零方差 group 比例 `7.5` 个百分点，并将平均 headroom 从 `0.17365` 提高到 `0.24294`，符合 FALS 将预算移向困难且可学习样本的设计。唯一轻微 trade-off 是 ego progress 相对 E0 下降 `0.00197`，不足以抵消安全与综合分数改善，但需保留在最终报告。
+- 决策：接受 E2 为当前 dev 最佳候选，不提前访问 held-out；继续执行 E3 SLDR-only 独立消融。E3 仍使用与 E1 相同的随机 train 1k，不叠加 FALS，确保仅改变训练 reward。
+- 下一动作：服务器同步最新台账提交，确认 source clean、随机 train 1k、GPU/8901/E3 目录与测试门控后启动 E3。
 
 ## 6. 后续记录模板
 
