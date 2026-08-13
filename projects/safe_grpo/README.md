@@ -1,5 +1,9 @@
 # Failure-Aware Safety GRPO
 
+The live plan, experiment gates, evidence summaries, and adaptive next-step decisions are tracked in
+[`docs/post_training_execution_loop.md`](../../docs/post_training_execution_loop.md). Update that document after each
+completed stage before starting the next one.
+
 Frozen experiment seed: `20260812`.
 
 Evidence files on the server live under:

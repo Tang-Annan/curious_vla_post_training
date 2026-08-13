@@ -1,0 +1,220 @@
+# Curious-VLA 后训练计划执行闭环
+
+> 本文档是后训练阶段的唯一执行台账，不包含环境、数据下载、切分生成等前期准备。每个阶段结束后，必须先在本文档记录证据、分析和决策，再启动下一阶段。实验目录中的日志和产物是原始证据，本文档保存结论及其推导链。
+
+## 1. 当前快照
+
+- 最后更新：2026-08-13 19:00 CST
+- 开发分支：`codex/post-training-analysis`
+- 已同步提交：`7c8adda`
+- 固定随机种子：`20260812`
+- 当前动作：A0 validation 加速隔离测试
+- 下一科学实验：D0 冻结 train rollout 诊断
+- 正式实验顺序：`E0 → D0 → E1 → E2 → E3 → E4（条件门控）→ E5 → F0`
+
+| 阶段 | 状态 | 当前结论 | 下一动作 |
+| --- | --- | --- | --- |
+| E0 Stage-2 dev baseline | 完成 | 566/566 dev baseline 已冻结 | 作为同协议 dev 比较基线 |
+| A0 validation 加速隔离测试 | 进行中 | vLLM 已使用内置 FlashAttention；reward 侧存在并发提速证据 | 完成 batch/token matrix，决定是否应用无损优化 |
+| D0 train rollout diagnosis | 待执行 | 尚无正式诊断结果 | A0 收敛且正式协议稳定后启动 |
+| E1 Vanilla LoRA-GRPO | 待执行 | 不提前判断效果 | 根据 D0 诊断执行固定 1k 训练 |
+| E2 FALS only | 待执行 | 阈值和预算尚未选择 | 仅依据 D0 train rollout 选择 |
+| E3 SLDR only | 待执行 | 不提前判断效果 | 与 E1 保持其余变量一致 |
+| E4 Std-Floor GRPO | 条件待执行 | 受低非零方差占比门控 | E3 中至少 10% group 满足 `0 < std < 0.05` 才运行 |
+| E5 grouped reward throughput | 待执行 | A0 仅提供候选配置 | 对最终候选做正式吞吐与等价性验证 |
+| F0 最终审计与 held-out | 待执行 | held-out 保持封存 | dev 完成选型后一次性评估 |
+
+## 2. 不可变实验约束
+
+1. train/dev/held-out 严格隔离。held-out 不得参与训练、FALS、阈值选择、checkpoint 选择或超参数调整。
+2. 正式 dev 比较固定为 566 个 token；D0 固定覆盖 4,525 个 train token，每 token 4 个 rollout，共 18,100 行。
+3. 正式比较统一使用 `max_response_length=512`、seed `20260812`、vLLM CUDA Graph 和冻结的 token manifest。
+4. 任何可能改变生成随机序列或输出分布的协议变更，不能直接与现有 E0 比较。若决定采用，必须用新协议重跑并重新冻结 E0。
+5. 只允许依据 train rollout 构建 FALS；dev 只用于模型选择和消融比较；held-out 只用于最终一次性确认。
+6. 单卡 24 GB 环境中，E0/D0 保留 rank-8、零初始化的 LoRA wrapper。PEFT 的 LoRA B 初始为零，因此不改变 Stage-2 初始输出；移除 wrapper 已被实测证明会突破 hybrid-engine 显存预算。
+7. 每个正式阶段必须保存 source commit、source status、resolved config、seed、manifest、日志、rollout、指标和退出状态。证据不完整时不得标记完成。
+8. 监控只读。预计剩余时间大于 10 分钟时每 10 分钟检查；小于等于 10 分钟时每 5 分钟检查。正常状态不写入对话和本文档，只有完成、失败或决策相关事件进入台账。
+
+## 3. 闭环推进规则
+
+每个阶段按以下顺序闭环，不能跳过“分析与决策”直接启动下一步：
+
+1. **执行**：使用冻结配置和唯一实验目录启动；禁止覆盖已有正式产物。
+2. **验收**：核对退出码、覆盖数量、manifest 边界、日志异常、进程/端口/GPU 回收和必要指标。
+3. **分析**：区分事实、解释和仍未确定的部分；只在同协议结果之间声明提升或退化。
+4. **决策**：依据本节门控选择“推进、重试、回退、跳过或重跑基线”。
+5. **写回**：更新“当前快照”和对应执行记录，附原始证据路径与关键数值。
+6. **调整**：将新证据转成下一阶段的具体参数、门控或停止条件，然后才启动下一阶段。
+
+决策规则：
+
+- **通过**：全部硬门控成立，推进到计划中的下一阶段。
+- **失败且原因明确**：保留失败目录，实施一个最小修复后以新目录重试；不得覆盖失败证据。
+- **证据不足**：不作效果结论，补充最小必要测试。
+- **协议发生变化**：标记现有跨协议比较无效，先重跑对应 baseline。
+- **E4 门控不成立**：记录“按计划跳过”，直接进入 E5，不为了运行 E4 而降低门槛。
+- **候选方法在 dev 无优势**：保留消融结果，不进入 held-out；选择 dev 上满足主指标与安全约束的候选。
+
+## 4. 分阶段实施路线与门控
+
+### A0. validation 加速隔离测试
+
+目标：缩短验证墙钟时间，同时不改变正式结果，不污染当前环境与实验产物。
+
+执行项：
+
+1. 核实 vLLM 实际 attention backend，判断独立安装 `flash_attn` 是否会覆盖当前路径。
+2. 用冻结 E0 rollout 测试 reward client 并发、Gunicorn worker 数和缓存候选。
+3. 用固定 64-token dev 子集测试：
+   - `val_batch_size=4`, `max_num_batched_tokens=4608`；
+   - `val_batch_size=8`, `max_num_batched_tokens=4608`；
+   - `val_batch_size=8`, `max_num_batched_tokens=8192`。
+4. 比较 wall time、覆盖、parse、生成输出/pose、reward 指标、异常和显存。
+
+硬门控：
+
+- 独立目录和端口；正式 E0/D0 目录、现有 Python 环境和代码 checkout 不被修改。
+- 64/64 token 覆盖，无 OOM/traceback，结束后进程、端口和 GPU 回收。
+- reward 并发优化必须逐样本指标等价；任何缓存实现只要出现指标漂移就拒绝。
+- batch/token 参数若改变生成结果，只能作为新协议候选，不能直接应用到 E1；采用前须重跑 E0。
+
+通过后的动作：优先应用不改变生成协议的 reward 并发优化；是否改变 batch/token 参数由速度收益与重跑 E0 的成本共同决定。
+
+### E0. Stage-2 冻结 dev baseline
+
+目标：建立所有后续训练方法的同协议 dev 基线。
+
+验收：566 个唯一 dev token、parse success、完整 reward 组件、无 clipping、退出与资源回收正常。
+
+### D0. 冻结 train rollout 诊断
+
+目标：判断 reward 方差、探索空间和可学习 headroom，为 E1–E4 的具体行为提供数据依据。
+
+验收：
+
+- 4,525 个 train token，每个恰好 4 个 rollout，总计 18,100 行；
+- dev/held-out token 数均为 0；
+- `diagnosis.json` 成功生成；
+- 报告 exact-zero std、low-nonzero std、reward/headroom、pairwise ADE/FDE、parse rate 和 safe rate。
+
+自适应决策：
+
+- 根据非零方差和 headroom 分布决定 E2 的 FALS budget/排序范围，不预设阈值结论。
+- 若 parse failure 显著，先修正格式/生成问题并重跑 D0，不让解析失败主导 FALS。
+- 若绝大多数 group 零方差，记录窄策略证据；E1 仍作为必要 vanilla 对照，E2 优先选择有方差且有 headroom 的场景。
+
+### E1. Vanilla LoRA-GRPO
+
+目标：建立普通 GRPO 后训练对照。
+
+固定项：冻结的 train 1k manifest、250 steps、相同生成/验证协议、相同 LoRA 和 reward。
+
+验收与分析：保存 checkpoint/rollout/final dev；与 E0 比较 PDMS scaled、PDMS、safe rate、collision、drivable area、progress、TTC、comfort、parse 和 clipping。若 A0 改变生成协议，先重跑 E0 后再比较。
+
+### E2. FALS only
+
+目标：只改变样本选择，验证 failure-aware sampling 的独立贡献。
+
+固定项：训练预算、step、reward、LoRA、生成和 dev 协议与 E1 一致。FALS manifest 只能由 D0 train rollout 生成。
+
+决策：根据 D0 排名分布选择与 E1 等预算的主实验；若需要第二预算，只能作为预先记录的补充消融，不能用 held-out 选择。
+
+### E3. SLDR only
+
+目标：只改变训练 reward 为 SLDR，验证 safety-dense reward 的独立贡献。
+
+固定项：使用与 E1 相同的随机 train 1k manifest 和训练预算；不得同时引入 FALS 或 std-floor。
+
+分析：除 dev 总分外，重点检查 unsafe rollout 排序、safe rate、collision、drivable area，以及 group reward std 分布。
+
+### E4. Std-Floor GRPO
+
+目标：验证 std floor 对低但非零 group 方差的稳定作用。
+
+启动门控：E3 rollout 中至少 10% group 满足 `0 < std < 0.05`。否则按计划跳过。
+
+固定项：除 advantage estimator 和 `std_floor=0.05` 外，其余变量与对应对照保持一致。
+
+### E5. grouped reward throughput
+
+目标：在最终训练配置上验证 reward 服务吞吐优化，形成可复用的生产配置。
+
+验收：固定输入逐样本 reward 指标完全一致、无请求丢失/重排、吞吐和 p50/p90 latency 有重复测量、资源回收正常。A0 的 64-token 结果只能作为候选筛选，不能替代此正式验证。
+
+### F0. 最终审计与 held-out
+
+1. 仅使用 dev 结果确定最终候选和 checkpoint。
+2. 冻结代码、配置和 checkpoint 后，对 held-out 做一次性评估。
+3. 汇总 E0–E5 的效果、吞吐、显存、失败记录和适用边界。
+4. 核查所有正式实验可追溯到 source commit、manifest 和原始产物后，关闭计划。
+
+## 5. 执行记录
+
+### 记录 001：E0 首次 full-actor 尝试失败
+
+- 状态：已归档，不计为正式 baseline。
+- 证据：远程 `experiments/safe_grpo/e0_stage2_dev_seed20260812_failed_full_actor/`。
+- 事实：完整 actor 约占 15 GiB，vLLM 在 validation 前因单卡显存不足安全退出。
+- 分析：问题来自单卡 hybrid-engine 同驻留预算，不是数据或 reward 故障。
+- 决策：E0/D0 保留 rank-8 零初始化 LoRA wrapper；失败目录保留，不覆盖。
+- 下一动作：用同协议重跑 E0。
+
+### 记录 002：E0 正式 baseline 完成
+
+- 状态：通过。
+- 代码：`7c8adda`。
+- 证据：远程 `experiments/safe_grpo/e0_stage2_dev_seed20260812/`。
+- 覆盖：566 行、566 个唯一 dev token；`COMPLETE` 存在，`exit_code=0`。
+- 指标：
+  - PDMS scaled / overall：`0.659383745`
+  - PDMS：`0.683609782`
+  - safe rate：`0.724381625`
+  - collision compliance：`0.966431095`
+  - drivable-area compliance：`0.752650177`
+  - ego progress：`0.911352276`
+  - TTC compliance：`0.948763251`
+  - history comfort：`0.920494700`
+  - parse success：`1.0`
+  - reward latency：`260.40 ms/sample`
+  - response mean：`366.29`，clipping：`0`
+- 资源：主进程、Ray、Gunicorn 和端口 8901 均退出；GPU 回收至 0 MiB。日志观测显存峰值为 19.88 GiB，该值不是连续采样的严格峰值。
+- 分析：baseline 完整可信；不得与早期不同生成上限/随机协议的 E1 smoke 直接比较。
+- 决策：冻结为正式 E0；进入 D0 前先完成用户要求的 A0 加速测试。
+- 下一动作：A0。
+
+### 记录 003：A0 attention backend 与 reward 候选筛选
+
+- 状态：部分完成，batch/token matrix 仍在运行。
+- 隔离证据：远程 `experiments/benchmarks/`；独立端口 18901–18903；未修改现有环境。
+- attention 事实：当前 vLLM 0.11.0 在 RTX 4090 上自动选择 `vllm.v1.attention.backends.flash_attn.FlashAttentionBackend`。环境没有独立 `flash-attn` 包，但 vLLM 自带并已使用其 FlashAttention backend。
+- attention 决策：不安装独立 `flash_attn`；它不会替换当前 validation 的 vLLM 生成路径，且 244 MiB wheel 会给稳定环境增加无证据收益的变更。
+- 单 Gunicorn worker/client 并发结果（48 个固定样本，两次重复中位数）：
+  - concurrency 1：4.94 samples/s；
+  - concurrency 2：3.45 samples/s；
+  - concurrency 4：2.50 samples/s；
+  - concurrency 8：2.22 samples/s。
+- 分析：只提高 client 并发会在单 worker 内争用，拒绝该配置。
+- server matrix（64 个固定样本，4 路 client）：
+  - 原服务 1 worker：2.20 samples/s；
+  - 原服务 4 workers：7.61 samples/s，3.46×，公共 reward 指标逐项一致；
+  - 实验 LRU 4 workers：9.83 samples/s，但至少一个样本出现指标漂移。
+- 决策：拒绝 LRU 实验实现；保留“原服务 4 workers + 有界 client 并发”为候选，必须在正式应用前补生产路径测试。Gunicorn worker 数单独增加不能加速当前串行 client，因此两侧必须配套验证。
+- 当前运行：64-token validation matrix，顺序为 `bs4_tok4608 → bs8_tok4608 → bs8_tok8192`。第一组已完成：64/64、wall 239 s、parse 1.0；其余组等待终态。
+- 下一动作：完成三组覆盖、数值/生成差异、耗时和显存分析；按第 3 节规则决定保持现协议、应用无损 reward 并发，或重跑新协议 E0。
+
+## 6. 后续记录模板
+
+每个新结果按以下格式追加，不改写历史事实；“当前快照”同步更新：
+
+```text
+### 记录 NNN：<阶段与事件>
+
+- 状态：通过 / 失败 / 证据不足 / 按门控跳过
+- 代码与配置：<commit、关键参数>
+- 原始证据：<远程实验目录和文件>
+- 覆盖与完整性：<manifest、行数、退出码、资源回收>
+- 关键结果：<指标、耗时、显存>
+- 分析：<结果说明、限制、是否同协议>
+- 决策：<推进、重试、回退、跳过或重跑 baseline>
+- 下一动作：<唯一明确动作及启动门控>
+```
