@@ -9,6 +9,7 @@ MODEL_PATH="$WORKSPACE_ROOT/models/sft_stage2"
 DATA_PATH="$EASYR1_ROOT/data/QA_navtrain_poutine_style_full"
 TRAIN_MANIFEST="$WORKSPACE_ROOT/manifests/train_tokens.txt"
 DEV_MANIFEST="$WORKSPACE_ROOT/manifests/dev_tokens.txt"
+HELDOUT_MANIFEST="$WORKSPACE_ROOT/manifests/heldout_tokens.txt"
 ITERATION_MANIFEST="$WORKSPACE_ROOT/manifests/dev_subsets/train_seed20260812_1000.txt"
 FALS_MANIFEST="${FALS_MANIFEST:-}"
 CACHE_PATH="$WORKSPACE_ROOT/exp_root/metric_cache_released_5656"
@@ -59,7 +60,7 @@ PY
 esac
 
 RUN_DIR="$EXPERIMENT_ROOT/$EXP_NAME"
-for path in "$MODEL_PATH" "$DATA_PATH" "$TRAIN_MANIFEST" "$DEV_MANIFEST" "$CACHE_PATH/metadata"; do
+for path in "$MODEL_PATH" "$DATA_PATH" "$TRAIN_MANIFEST" "$DEV_MANIFEST" "$HELDOUT_MANIFEST" "$CACHE_PATH/metadata"; do
     [[ -e "$path" ]] || { echo "Missing required path: $path" >&2; exit 1; }
 done
 if [[ "$STAGE" =~ ^e[1-4]$ ]]; then
@@ -78,6 +79,10 @@ if [[ "$STAGE" =~ ^e[1-4]$ ]]; then
     }
     [[ -z $(comm -12 <(sort "$ITERATION_MANIFEST") <(sort "$DEV_MANIFEST")) ]] || {
         echo "Training manifest overlaps the frozen dev split." >&2
+        exit 1
+    }
+    [[ -z $(comm -12 <(sort "$ITERATION_MANIFEST") <(sort "$HELDOUT_MANIFEST")) ]] || {
+        echo "Training manifest overlaps the frozen held-out split." >&2
         exit 1
     }
 fi

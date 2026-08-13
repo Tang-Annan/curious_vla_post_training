@@ -236,6 +236,7 @@ def test_formal_launcher_keeps_e2_e3_e4_as_single_factor_ablations():
     assert "ratio < 0.10" in source
     assert "ADV_ESTIMATOR=std_floor_grpo" in source
     assert 'algorithm.adv_estimator="$ADV_ESTIMATOR"' in source
+    assert 'comm -12 <(sort "$ITERATION_MANIFEST") <(sort "$HELDOUT_MANIFEST")' in source
 
 
 def test_inference_loader_keeps_final_partial_batch(monkeypatch, tmp_path):
