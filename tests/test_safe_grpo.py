@@ -78,6 +78,19 @@ def test_fals_requires_complete_rollout_coverage(tmp_path):
         fals.build_ranking(rollout_path, ["a"], 4)
 
 
+def test_fals_rejects_rollouts_outside_train_manifest(tmp_path):
+    fals = load_module(ROOT / "EasyR1/scripts/adas/build_fals_filter.py", "build_fals_filter_leakage")
+    rollout_path = tmp_path / "rollouts.jsonl"
+    rows = [
+        {"token": token, "pdms_scaled": 0.5}
+        for token in ("train", "train", "train", "train", "held_out")
+    ]
+    rollout_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="outside the training manifest"):
+        fals.build_ranking(rollout_path, ["train"], 4)
+
+
 def test_std_floor_grpo_matches_grpo_above_floor_and_damps_small_std():
     torch = pytest.importorskip("torch")
     core = importlib.import_module("verl.trainer.core_algos")
@@ -237,6 +250,7 @@ def test_formal_launcher_keeps_e2_e3_e4_as_single_factor_ablations():
     assert "ADV_ESTIMATOR=std_floor_grpo" in source
     assert 'algorithm.adv_estimator="$ADV_ESTIMATOR"' in source
     assert 'comm -12 <(sort "$ITERATION_MANIFEST") <(sort "$HELDOUT_MANIFEST")' in source
+    assert 'ACTIVE_MANIFEST="$TRAIN_MANIFEST"' in source
 
 
 def test_inference_loader_keeps_final_partial_batch(monkeypatch, tmp_path):

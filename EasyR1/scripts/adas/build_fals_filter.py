@@ -19,13 +19,19 @@ def load_manifest(path: Path) -> list[str]:
 def build_ranking(rollouts: Path, tokens: list[str], expected_rollouts: int) -> list[dict[str, float | str | int]]:
     allowed = set(tokens)
     rewards: dict[str, list[float]] = defaultdict(list)
+    unknown_tokens = set()
     with rollouts.open(encoding="utf-8-sig") as handle:
         for line in handle:
             row = json.loads(line)
             token = str(row["token"])
-            if token in allowed:
-                reward = row["pdms_scaled"] if "pdms_scaled" in row else row["overall"]
-                rewards[token].append(float(reward))
+            if token not in allowed:
+                unknown_tokens.add(token)
+                continue
+            reward = row["pdms_scaled"] if "pdms_scaled" in row else row["overall"]
+            rewards[token].append(float(reward))
+
+    if unknown_tokens:
+        raise ValueError(f"Rollouts contain {len(unknown_tokens)} tokens outside the training manifest.")
 
     missing = [token for token in tokens if len(rewards[token]) != expected_rollouts]
     if missing:

@@ -259,6 +259,15 @@
 - 决策：保留正式入口和强门控；不从当前代码预设 E2 选择结果，仍只依据 D0 完整诊断生成唯一 FALS 1k manifest。
 - 下一动作：继续按 ETA 四档规则监控 D0；完成后先写回 D0 事实与 E2 manifest 决策，再启动 E1。
 
+### 记录 007：强化 FALS 输入边界
+
+- 状态：通过，不改变 FALS 排序公式或预算。
+- 代码与配置：FALS 构建器不再静默忽略 train manifest 外 rollout；发现 dev、held-out 或其他未知 token 时直接失败。正式 run.env 改为记录各阶段实际 active manifest，避免 E0/D0 元数据误指向 1k iteration manifest。
+- 原始证据：本地 `tests/test_safe_grpo.py` 结果为 14 passed、4 skipped，新增污染 rollout 反例通过；Python compile 与 `git diff --check` 通过。
+- 分析：D0 当前只读检查没有发现 train 外 token，但正式 E2 的数据来源边界必须由工具强制，而不能只依赖人工核对。
+- 决策：保留强失败边界；D0 完成后仅在全量覆盖和 train/dev/held-out 隔离均通过时生成 FALS manifest。
+- 下一动作：保持 D0 自适应只读监控；完整验收后写回 D0 诊断并启动 E1。
+
 ## 6. 后续记录模板
 
 每个新结果按以下格式追加，不改写历史事实；“当前快照”同步更新：

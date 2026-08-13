@@ -60,6 +60,12 @@ PY
 esac
 
 RUN_DIR="$EXPERIMENT_ROOT/$EXP_NAME"
+ACTIVE_MANIFEST="$ITERATION_MANIFEST"
+if [[ "$STAGE" == e0 ]]; then
+    ACTIVE_MANIFEST="$DEV_MANIFEST"
+elif [[ "$STAGE" == d0 ]]; then
+    ACTIVE_MANIFEST="$TRAIN_MANIFEST"
+fi
 for path in "$MODEL_PATH" "$DATA_PATH" "$TRAIN_MANIFEST" "$DEV_MANIFEST" "$HELDOUT_MANIFEST" "$CACHE_PATH/metadata"; do
     [[ -e "$path" ]] || { echo "Missing required path: $path" >&2; exit 1; }
 done
@@ -107,7 +113,7 @@ elif [[ "$STAGE" =~ ^e[1-4]$ ]]; then
     cp "$ITERATION_MANIFEST" "$RUN_DIR/train_tokens.txt"
 fi
 printf 'stage=%s\nexperiment=%s\nseed=%s\ntrain_manifest=%s\nreward_function=%s\nadv_estimator=%s\n' \
-    "$STAGE" "$EXP_NAME" "$SEED" "$ITERATION_MANIFEST" "$REWARD_FUNCTION" "$ADV_ESTIMATOR" \
+    "$STAGE" "$EXP_NAME" "$SEED" "$ACTIVE_MANIFEST" "$REWARD_FUNCTION" "$ADV_ESTIMATOR" \
     > "$RUN_DIR/run.env"
 exec > "$RUN_DIR/run.log" 2>&1
 
