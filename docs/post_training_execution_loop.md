@@ -5,9 +5,9 @@
 ## 1. 当前决策快照
 
 - 最后更新：2026-08-14
-- 开发分支：`codex/post-training-analysis`；R2-G 正式入口实现 commit `6ead3e3`；服务器实验 source commit `5e65b0b` 且 status clean
+- 开发分支：`codex/post-training-analysis`；R2-G 正式入口 `6ead3e3`、原始 checkpoint 轮转恢复 `1a2e39c`；运行中的服务器 source commit `1a2e39c` 且 status clean
 - 当前最佳已训练候选：E2 FALS-only `global_step_250/actor`
-- 当前执行动作：R2-P 已通过技术与成本门控；远程验证正式入口后，以 E2/GRPO 为父方法启动 250-step R2-G
+- 当前执行动作：250-step R2-G 已以 E2/GRPO 为父方法正常启动；Luna 按 ETA 分档静默监控
 - 当前封存动作：暂停 E2 step-50 dev 审计；held-out 继续完全封存
 - 保留的服务器核心证据：E0、D0、E2、全部 manifest，以及 E2 step 50/250 checkpoint
 - 已排除方向：继续调 SLDR、把 Std-Floor 直接叠加到 E2、为了吞吐改动正式生成协议
@@ -20,7 +20,7 @@
 | R1 | 技术通过、科学负向 | FALS + Dr.GRPO 单因素消融 | 不调参、不重跑、不叠加 |
 | 原 R2 gate | 已失败并冻结 | cap 5 的估计 raw rollout 开销 `2.02779× > 2.0×` | 不改写为通过 |
 | R2-P | 技术与成本通过 | 20-step 无 dev pilot 实测 exact-zero filtering 的可靠性与成本 | 证据冻结，不把 pilot reward 当效果结论 |
-| R2-D / R2-G | R2-D 跳过；R2-G 待启动 | R1 未晋级，因此只运行 E2 + Dynamic Sampling 的 250-step R2-G | 先远程验证 commit `6ead3e3`，不用 dev 调成本门槛 |
+| R2-D / R2-G | R2-D 跳过；R2-G 运行中 | R1 未晋级，因此只运行 E2 + Dynamic Sampling 的 250-step R2-G | 等待完成/异常信号，不用 dev 调成本门槛 |
 | R3 | 可选 | Failure-Guided Recovery 等预算可行性对照 | 核心 R1/R2 路线完成后再决定 |
 | C0 | 条件执行 | 最终新方法与 E2 的匹配训练种子确认 | 仅对达到晋级线的方法执行 |
 | F0 | 暂停 | 只审计最终胜出方法的预注册 checkpoint | 方法开发结束后恢复 |
@@ -434,6 +434,8 @@ feedback 只由 collision、DAC、TTC、progress、comfort 等 train reward comp
 - 若所有新方法均未晋级，则直接执行原 E2 step 50/250 审计。
 - F0 完成后冻结 source、config、manifest、seed 和唯一 checkpoint。
 
+记录 026 的用户方向只对 R2-G 覆盖前三项：R2-G 恢复原始 `save_limit=2` 后不再保留 step 50；若它晋级，直接冻结已预注册的正式 step 250，不事后补训、恢复或评估缺失的 step-50 checkpoint。E2 现存 step 50/250 与其 F0 审计规则不变。
+
 ### F1：一次性 held-out
 
 启动条件：
@@ -782,6 +784,20 @@ F1 只运行一次。无论结果好坏都不得再改模型、checkpoint 或阈
 - 正式入口：commit `6ead3e3` 新增 `r2g` stage，启动前硬检查已通过的 20-step pilot；正式阶段固定 250 steps、cap 5、平均 raw overhead 上限 `2.15×`、wall-time ratio 上限 `2.0×`，保留 step 50/250 并执行一次既定 final dev。raw train query 允许因补采出现可变覆盖，但 dev 仍要求 566 token 各恰好 1 条；被过滤 query 不得表述为 optimizer batch。
 - 决策：R2-D 因 R1 未晋级而跳过；启动 R2-G。正式结果只有同时满足 `Delta PDMS_scaled >= +0.01000`、Safe/Collision/TTC 不下降、parse/clipping 不退化及两项成本线时才晋级，否则回退 E2，不调 zero 阈值、不增加 cap、不重跑 discovery seed。
 - 下一动作：提交本记录，通过 Git 同步服务器，在隔离 worktree 执行 `bash -n`、Python compile 与完整测试；门控全部通过且 GPU/8901/目标目录 clean 后启动 R2-G。
+
+### 记录 026：恢复原始 checkpoint 策略、清理 R1 权重并重启 R2-G
+
+- 状态：首次 R2-G 健康启动后按用户方向停止；恢复原始 checkpoint 策略、清理已拒绝 R1 权重，并从 step 0 重新启动 R2-G。新运行已完成首个 optimizer step，held-out 继续封存。
+- 策略变化：正式入口初始 commit `6ead3e3` 使用项目原有 `save_freq=50, save_limit=2`。启动前曾因磁盘估算临时引入 step-50 保护 commit `378288c`；用户明确要求保留原策略后，commit `1a2e39c423df8d06f03c56987014c479f17fc9ba` 完整移除该保护，重新使用标准轮转。首次运行在尚未产生 checkpoint 时正常终止并删除目录，不与新运行混合或续训。
+- R1 清理：删除 `r1_fals_dr_grpo_lora_1k_seed20260812/checkpoints/global_step_50` 与 `global_step_250`，释放约 16 GB；远程权重不可恢复。保留 R1 的 `final_dev_metrics.json`、train/dev/raw rollout、paired comparison、诊断、resolved config、source、完整 run/reward 日志、`experiment_log.jsonl` 与 tracker，因此负结果及实现证据仍可复核。
+- 空间结果：`/root/autodl-tmp` 可用空间由约 32 GB 增至 47 GB。新 R2-G 按原始轮转最终预期只保留最近两个正式 checkpoint；不再承诺保留 R2-G step 50。若 R2-G 晋级，F0 对它保守地直接冻结正式 step 250，不作缺失的 step-50 事后补选；若回退 E2，则继续使用现存 E2 step 50/250 审计。
+- 代码与验证：服务器 source fast-forward 到 `1a2e39c` 且 status clean；`bash -n`、Python compile 与 `tests/test_safe_grpo.py` 为 `25 passed`。FALS SHA-256、pilot report、GPU、8901 与目标目录门控通过后，重新创建 `experiments/safe_grpo/r2g_e2_dynamic_lora_1k_seed20260812/`。
+- GitHub 边界：向上游 `Mashiroln/curious_vla` 推送因账号无写权限返回 HTTP 403，这不是网络故障，`network_turbo` 无法修复；随后按当前分支跟踪关系成功推送到 `Tang-Annan/curious_vla_post_training`。服务器直连 fetch 正常，本阶段未使用网络加速或 Git bundle。
+- 新运行配置：source `1a2e39c`；GRPO、FALS top-1,000、seed `20260812`、250 steps、4 informative groups/step、exact-zero filtering、cap 5、单 reward worker、final dev、`save_freq=50`、`save_limit=2`，无 `keep_checkpoint_steps`。
+- 新运行首步：`step=1/250`，step time `48.508s`；generated/kept/used/dropped groups 为 `8/7/4/1`，raw overhead `2.0×`，generation batches `2`；parse success `1.0`、response clip ratio `0`、gradient norm `0.02822`，无 OOM、traceback、cap exhaustion 或非有限指标，GPU 使用约 21.1 GB。
+- 监控：复用 `/root/luna_r2g_monitor` 只读接管新运行。每次在子代理内部显示 step、进度、ETA、健康状态与下一间隔；剩余 `>60/60–30/30–10/<=10` 分钟时分别按 `60/30/10/5` 分钟检查。常态不回传主对话，只在完成或异常时通知；原始轮转导致 step 50 被删除不判为异常。
+- 分析边界：重启由显式 checkpoint 策略变更触发，发生在首次运行尚无 checkpoint 时；不是根据 reward/dev 结果追分。首步只证明健康启动，不作效果判断。训练期间不再 fast-forward 服务器 source、不修改阈值或配置。
+- 下一动作：等待 Luna 的完成或异常信号；完成后先做技术、覆盖、成本和资源验收，再按预注册工程/科学门槛决定 C0 或回退 E2/F0。
 
 ## 10. 后续记录模板
 
