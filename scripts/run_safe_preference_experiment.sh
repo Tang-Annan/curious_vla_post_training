@@ -5,7 +5,7 @@ METHOD="${1:-}"
 MODE="${2:-}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/autodl-tmp/curious-vla-workspace}"
 REPO_ROOT="$WORKSPACE_ROOT/src/curious_vla_post_training"
-TRAIN_ENV="${TRAIN_ENV:-$WORKSPACE_ROOT/envs/llamafactory-gpu}"
+TRAIN_ENV="${TRAIN_ENV:-$WORKSPACE_ROOT/envs/llamafactory-gpu-py311}"
 M1_DIR="$WORKSPACE_ROOT/experiments/safe_preference/m1_matched_tier_a_seed20260812"
 
 case "$METHOD:$MODE" in
@@ -42,6 +42,9 @@ else
     mkdir -p "$RUN_ROOT"
     git rev-parse HEAD > "$RUN_ROOT/source_commit.txt"
     git status --short > "$RUN_ROOT/source_status.txt"
+    git -C "$REPO_ROOT/LLaMA-Factory" rev-parse HEAD > "$RUN_ROOT/llamafactory_commit.txt"
+    git -C "$REPO_ROOT/LLaMA-Factory" status --short > "$RUN_ROOT/llamafactory_status.txt"
+    test -z "$(cat "$RUN_ROOT/llamafactory_status.txt")"
     sha256sum "$CONFIG" > "$RUN_ROOT/config_sha256.txt"
     cp "$CONFIG" "$RUN_ROOT/resolved_config.yaml"
     cp "$M1_DIR/dataset_sha256.txt" "$RUN_ROOT/m1_dataset_sha256.txt"

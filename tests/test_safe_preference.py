@@ -412,6 +412,7 @@ def test_preference_training_configs_freeze_budget_and_method_variables():
         assert config["gradient_accumulation_steps"] == 16
         assert config["num_train_epochs"] == 3.0
         assert config["seed"] == config["data_seed"] == 20260812
+        assert not config["skip_memory_metrics"]
         assert 960 * config["num_train_epochs"] / config["gradient_accumulation_steps"] == 180
 
     assert m2["stage"] == "sft" and m2["learning_rate"] == 1.0e-5
