@@ -26,6 +26,15 @@ def load_analyzer():
     return module
 
 
+def load_matched_builder():
+    path = ROOT / "projects/safe_preference/build_matched_preference_dataset.py"
+    spec = importlib.util.spec_from_file_location("build_matched_preference_dataset", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 def parse_response(value):
     response = json.loads(value)
     points = response["future_trajectory"].split("[PT, ", 1)[1].split("]", 1)[0]
@@ -238,3 +247,122 @@ def test_pair_capacity_requires_ttc_for_safe_tier():
     assert report["N_B"] == 0
     assert report["B"] == 0
     assert report["decision"] == "close_offline_preference_route"
+
+
+def matched_metric_row(token, pdms, progress, *, safe, pose):
+    row = metric_row(token, pdms, safe=safe)
+    row.update(
+        {
+            "poses": [[pose, 0.0, 0.0] for _ in range(8)],
+            "ego_progress": progress,
+            "history_comfort": 1.0,
+            "pdms": pdms,
+        }
+    )
+    return row
+
+
+def test_matched_selection_freezes_common_chosen_and_distinct_unsafe_rejections():
+    builder = load_matched_builder()
+    rows = [
+        matched_metric_row("scene", 1.0, 1.0, safe=True, pose=0.0),
+        matched_metric_row("scene", 0.8, 0.8, safe=True, pose=1.0),
+        matched_metric_row("scene", 0.7, 0.9, safe=False, pose=2.0),
+        matched_metric_row("scene", 0.1, 0.1, safe=False, pose=3.0),
+    ]
+
+    selected, report = builder.select_matched_scenes(rows, expected_rollouts=4, pair_count=1)
+
+    assert report["strict_eligible"] == 1
+    assert selected[0]["chosen"]["rollout_index"] == 0
+    assert selected[0]["easy_rejected"]["rollout_index"] == 3
+    assert selected[0]["hard_rejected"]["rollout_index"] == 2
+
+
+def test_matched_quality_tie_break_prefers_lower_rollout_index():
+    builder = load_matched_builder()
+    row = matched_metric_row("scene", 0.5, 0.5, safe=False, pose=0.0)
+
+    assert builder.quality_tuple(row, 0) > builder.quality_tuple(row, 1)
+
+
+def test_matched_datasets_are_deterministic_with_same_chosen_and_different_rejected(tmp_path):
+    builder = load_matched_builder()
+    image_root, _, rl_rows, sft_rows = records(tmp_path)
+    rows = [
+        matched_metric_row("train", 1.0, 1.0, safe=True, pose=0.0),
+        matched_metric_row("train", 0.8, 0.8, safe=True, pose=1.0),
+        matched_metric_row("train", 0.7, 0.9, safe=False, pose=2.0),
+        matched_metric_row("train", 0.1, 0.1, safe=False, pose=3.0),
+    ]
+    selected, _ = builder.select_matched_scenes(rows, expected_rollouts=4, pair_count=1)
+
+    first, _ = builder.build_matched_datasets(
+        selected=selected,
+        rl_rows=rl_rows,
+        sft_rows=sft_rows,
+        means=np.zeros((8, 3)),
+        stds=np.ones((8, 3)),
+        parse_response=parse_response,
+    )
+    second, _ = builder.build_matched_datasets(
+        selected=selected,
+        rl_rows=rl_rows,
+        sft_rows=sft_rows,
+        means=np.zeros((8, 3)),
+        stds=np.ones((8, 3)),
+        parse_response=parse_response,
+    )
+    audit = builder.audit_datasets(
+        datasets=first,
+        selected=selected,
+        train_tokens={"train"},
+        dev_tokens={"dev"},
+        heldout_tokens={"heldout"},
+        means=np.zeros((8, 3)),
+        stds=np.ones((8, 3)),
+        parse_response=parse_response,
+        pair_count=1,
+    )
+
+    assert builder.serialize_json(first) == builder.serialize_json(second)
+    assert first["m2"][0]["conversations"][1]["value"] == first["m3"][0]["chosen"]["value"]
+    assert first["m3"][0]["chosen"]["value"] == first["m4"][0]["chosen"]["value"]
+    assert first["m3"][0]["rejected"]["value"] != first["m4"][0]["rejected"]["value"]
+    assert audit["all_core_gates_passed"]
+    assert audit["roundtrip_passed"] == 5
+
+
+def test_matched_audit_blocks_dev_leakage(tmp_path):
+    builder = load_matched_builder()
+    _, _, rl_rows, sft_rows = records(tmp_path)
+    rows = [
+        matched_metric_row("train", 1.0, 1.0, safe=True, pose=0.0),
+        matched_metric_row("train", 0.8, 0.8, safe=True, pose=1.0),
+        matched_metric_row("train", 0.7, 0.9, safe=False, pose=2.0),
+        matched_metric_row("train", 0.1, 0.1, safe=False, pose=3.0),
+    ]
+    selected, _ = builder.select_matched_scenes(rows, expected_rollouts=4, pair_count=1)
+    datasets, _ = builder.build_matched_datasets(
+        selected=selected,
+        rl_rows=rl_rows,
+        sft_rows=sft_rows,
+        means=np.zeros((8, 3)),
+        stds=np.ones((8, 3)),
+        parse_response=parse_response,
+    )
+
+    audit = builder.audit_datasets(
+        datasets=datasets,
+        selected=selected,
+        train_tokens={"train"},
+        dev_tokens={"train"},
+        heldout_tokens=set(),
+        means=np.zeros((8, 3)),
+        stds=np.ones((8, 3)),
+        parse_response=parse_response,
+        pair_count=1,
+    )
+
+    assert not audit["gates"]["zero_dev_overlap"]
+    assert not audit["all_core_gates_passed"]
