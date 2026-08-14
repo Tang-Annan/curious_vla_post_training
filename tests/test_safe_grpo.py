@@ -434,6 +434,59 @@ def test_dynamic_sampling_pilot_analysis_uses_preregistered_cost_gates(tmp_path)
     assert report["gates"]["passed"] is True
 
 
+def test_recovery_proxy_candidates_preserve_frozen_manifest_order(tmp_path):
+    preparation = load_module(
+        ROOT / "projects/safe_grpo/prepare_recovery_candidates.py", "prepare_recovery_candidates"
+    )
+    manifest = tmp_path / "manifest.txt"
+    rollouts = tmp_path / "rollouts.jsonl"
+    manifest.write_text("a\nb\nc\n", encoding="utf-8")
+    rows = []
+    for token, safe, pdms in (("a", 0.0, 0.0), ("b", 1.0, 0.5), ("c", 0.0, 0.0)):
+        rows.extend({"token": token, "safe": safe, "pdms_scaled": pdms} for _ in range(2))
+    rollouts.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    candidates, report = preparation.prepare(rollouts, manifest)
+
+    assert candidates == ["a", "c"]
+    assert report["proxy_candidates"] == 2
+
+
+def test_persistent_failure_gate_uses_four_rollouts_and_full_manifest_lower_bound(tmp_path):
+    analysis = load_module(
+        ROOT / "projects/safe_grpo/analyze_persistent_failures.py", "analyze_persistent_failures"
+    )
+    proxy = tmp_path / "proxy.txt"
+    full = tmp_path / "full.txt"
+    rollouts = tmp_path / "baseline.jsonl"
+    proxy.write_text("a\nc\n", encoding="utf-8")
+    full.write_text("a\nb\nc\nd\n", encoding="utf-8")
+    rows = []
+    rows.extend({"token": "a", "safe": 0.0, "pdms_scaled": 0.1} for _ in range(4))
+    rows.extend({"token": "c", "safe": 1.0, "pdms_scaled": 0.0} for _ in range(4))
+    rollouts.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    persistent, selected, report = analysis.analyze(
+        rollouts, proxy, full, minimum_persistent=2, selection_limit=1
+    )
+
+    assert persistent == ["a", "c"]
+    assert selected == ["a"]
+    assert report["persistent_failure_lower_bound_full_manifest"] == pytest.approx(0.5)
+    assert report["gate_passed"] is True
+
+
+def test_r3_baseline_launcher_uses_frozen_e2_checkpoint_and_four_rollouts():
+    source = (ROOT / "scripts/run_r3_recovery_baseline.sh").read_text(encoding="utf-8")
+    assert "E2_CHECKPOINT=\"$E2_RUN/checkpoints/global_step_250\"" in source
+    assert 'trainer.load_checkpoint_path="$E2_CHECKPOINT"' in source
+    assert "worker.rollout.n=4" in source
+    assert "--expected-candidates 345" in source
+    assert "--minimum-persistent 100" in source
+    assert "--selection-limit 200" in source
+    assert 'comm -12 <(sort "$RUN_DIR/proxy_candidates.txt") <(sort "$HELDOUT_MANIFEST")' in source
+
+
 def test_paired_rollout_comparison_preserves_token_pairing(tmp_path):
     comparison = load_module(
         ROOT / "projects/safe_grpo/compare_paired_rollouts.py", "compare_paired_rollouts"
