@@ -9,7 +9,7 @@
 - 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，P1-S 执行 source `fe6eac6`，P1-M 容量门控 source `9b5fdc1`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
 - 路线结论：停止围绕 GRPO estimator、sampling cap、reward coefficient 或 std normalization 继续追分；已完成的 E0–E4、R1–R3 作为前半段证据冻结。
 - 新核心问题：在固定 rollout / reward-query 预算下，能否把已有 trajectory-level safety/quality reward 转成离线 preference supervision，并以更低在线成本获得比 RSFT、普通 DPO 和现有 FALS-GRPO 更稳定的策略。
-- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；经用户明确授权，以新的科学问题启动 M0–M5 matched Tier-A 路线。当前进入 M1，只冻结 960 个同 token、同 chosen、不同 unsafe rejected 的 P2/P3/P4 数据，不启动 GPU。
+- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。当前进入 M2/M3/M4 配置审计与 M2 smoke，不读取 dev。
 - 冻结开发集：566 token；每个正式方法只允许一次最终 dev 评估，不用 dev 选择 pair 阈值或训练超参数。
 - 旧 565-token held-out 已访问 520 条并永久失去 unseen 资格；部分 rollout 已删除，`F1_HELDOUT_ACCESSED` 永久锁保留，禁止补跑剩余 45 条或把它用于最终确认。
 - P0 证明当前服务器资产无法建立合格的新 final set：旧 manifest 外 97,632 个 token 的 log 可用，但 CAM_F0 图像可用数为 0。P6 预注册为不执行 final-set 推理，除非用户未来明确扩展数据下载范围并在任何新方法 dev 结果产生前重新立项。
@@ -26,10 +26,10 @@
 | P5 | 按门控跳过 | 0 | policy 更新后刷新一次 pair 是否继续提升 | 无 P4 候选 |
 | P6 | 本路线不执行 | 0 | 第二 seed、behavior audit 与新 final set 是否确认结论 | 无 preference 候选且 P0 无新 final set |
 | M0 | 已预注册 | 0 | 如何在不篡改 P1-M 负结论下形成可辨识 DPO 对照 | matched Tier-A hard-negative 设计 |
-| M1 | 执行中 | 0 | 960 个严格 matched scene 能否生成确定性多模态数据 | 全量 schema/processor/泄漏/确定性验收 |
-| M2 | 被 M1 阻塞 | 低 | 同一 chosen-only RSFT 的收益 | 20-step smoke 后 3 epochs |
-| M3 | 被 M1 阻塞 | 中低 | worst-PDMS easy-negative DPO 是否优于 RSFT | 与 M4 同 token/chosen 的 DPO 对照 |
-| M4 | 被 M1 阻塞 | 中低 | hard-unsafe negative 是否优于 easy-negative | 唯一变量为 rejected trajectory |
+| M1 | 已完成 | 0 | 960 个严格 matched scene 能否生成确定性多模态数据 | 全门控通过，数据与 hash 冻结 |
+| M2 | 执行中 | 低 | 同一 chosen-only RSFT 的收益 | 冻结配置，20-step smoke 后 3 epochs |
+| M3 | 等待 M2 smoke | 中低 | worst-PDMS easy-negative DPO 是否优于 RSFT | 与 M4 同 token/chosen 的 DPO 对照 |
+| M4 | 等待 M2 smoke | 中低 | hard-unsafe negative 是否优于 easy-negative | 唯一变量为 rejected trajectory |
 | M5 | 被 M2–M4 阻塞 | 0 | DPO 是否形成正向、负向或证据不足闭环 | paired bootstrap 后停止或条件第二 seed |
 
 ## 2. 分支与代码处理决策
@@ -634,3 +634,12 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - 证据：若只执行“easy/hard rejected index 不同”，严格候选为 1,662，冻结前 960 后 hard−easy `ego_progress` 中位差为 `0.00000`，不能复现记录 004 的 987 / `+0.02417`。其中 675 个 scene 的 easy/hard 前五项 measured quality 完全相同，只因末项 `-rollout_index` tie-break 被分为不同 index。
 - 修正边界：在任何正式数据输出或 dev 访问前，把“去掉 `-rollout_index` 后 measured quality 必须严格不同”显式写入 M1。该条件精确得到 987 个候选，冻结前 960 的 hard−easy `ego_progress` 中位差为 `+0.0241652`，与记录 004 预审计一致；它不改变 `is_safe`、quality 排序、960 数量或训练超参，只排除没有可观测 quality 差异的 arbitrary tie-break。
 - 决策：补充对应回归测试并重新冻结 source 后执行 M1；不得使用 1,662-candidate 版本生成数据。M1 仍阻塞所有 YAML、GPU trainer 与训练。
+
+### 记录 006：M1 matched 数据冻结闭环
+
+- 状态：通过。正式 source `0d9f2cbaaf9162534aa5591d2369ec526f5fbddb`，pinned LLaMA-Factory `f28afaf6355af515454dfb16c97d728307c93897`；服务器 12 项 fixture/unit test 通过。正式目录为 `/root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m1_matched_tier_a_seed20260812/`，包含三份训练 JSON、共同 960-token manifest、pair manifest/stats、input/dataset hashes、source commits 与 30 条只读抽查。
+- selection 结果：4,525 scene 中 strict eligible 987，冻结前 960；排除 11 个 parse/shape failure、1,659 个非 mixed-safety、1,192 个 easy/hard rejected index 相同、675 个只因 index tie-break 不同、1 个 common chosen 不是 safe best 的 scene。chosen safe、easy rejected unsafe、hard rejected unsafe、两 rejected index 不同均为 960/960；hard−easy `ego_progress` mean/median 为 `+0.0372186/+0.0241652`。
+- 数据门控：M2/M3/M4 均为 960 行、960 unique train token，token/order/prompt/image/chosen 完全 matched；dev 与 legacy-held-out overlap 均为 0。M2/M3/M4 chosen byte-identical 960/960；M3/M4 rejected byte-different 且严格 unsafe 960/960。共 4,800 个 serialized response 通过 unique JSON 与官方 parser→denormalize round-trip，最大绝对误差 0。
+- processor 门控：Qwen2.5-VL processor 对 M2/M3/M4 各完成 960/960；response tokens 范围 388–431，完整输入 1,660–1,706，分别低于 512/4,096；image 为 960/960，`image_max_pixels=262144`。首次正式构建和第二个独立进程重复构建的 11 个文件列表及内容逐文件 byte-identical；三份数据 SHA-256 分别为 M2 `e04a1582...5a9a`、M3 `240a2f81...d44c`、M4 `ba4d24a3...5f95`。
+- 资源与边界：两次构建均 CPU-only，GPU 保持 0 MiB/0%；source clean，无 builder 残留，磁盘剩余约 60 GB。未读取 dev 指标、未访问 legacy-held-out 内容、未创建训练 YAML、未安装 GPU trainer，也未启动训练。
+- 决策：M1 全门控通过，冻结正式目录为后续唯一数据输入并进入 M2/M3/M4 配置与 smoke；不得重排 960 token、替换 pair 或从 `/tmp` repeat-check 目录训练。下一动作先审计 GPU trainer 依赖和 pinned LLaMA-Factory 对 Qwen2.5-VL LoRA SFT/DPO 的配置字段，再预注册 resolved YAML 并执行 M2 20-step smoke。
