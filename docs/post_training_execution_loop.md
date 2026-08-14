@@ -4,13 +4,13 @@
 
 ## 1. 当前快照
 
-- 最后更新：2026-08-14 07:45 CST
+- 最后更新：2026-08-14 11:15 CST
 - 开发分支：`codex/post-training-analysis`
 - 开发分支同步状态：已推送，具体 revision 以 `codex/post-training-analysis` 的 Git HEAD 为准
 - D0 source commit：`7c8adda`（运行期间未更新 checkout）
 - 固定随机种子：`20260812`
-- 当前动作：E4 SLDR + Std-Floor GRPO 正式训练
-- 下一科学实验：E4 SLDR + Std-Floor GRPO
+- 当前动作：E4 已完成验收；E2 保持 dev 最佳候选
+- 下一科学实验：E5 grouped reward throughput
 - 正式实验顺序：`E0 → D0 → E1 → E2 → E3 → E4（条件门控）→ E5 → F0`
 
 | 阶段 | 状态 | 当前结论 | 下一动作 |
@@ -22,8 +22,8 @@
 | E1 Vanilla LoRA-GRPO | 完成 | 产物完整，但 final-dev 低于 E0，不作为最终候选 | 保留为 vanilla 对照 |
 | E2 FALS only | 完成 | final-dev 超过 E0/E1，支持 FALS 独立贡献 | 保留为当前最佳候选 |
 | E3 SLDR only | 完成 | final-dev 低于 E0/E1/E2，SLDR 独立贡献为负 | 保留为 E4 对照，不作为候选 |
-| E4 Std-Floor GRPO | 启动中 | E3 低非零方差占比 15.4%，门控通过 | 仅增加 std-floor，检验其补救作用 |
-| E5 grouped reward throughput | 待执行 | A0 仅提供候选配置 | 对最终候选做正式吞吐与等价性验证 |
+| E4 Std-Floor GRPO | 完成 | 相对 E3 有补救，但仍低于 E0/E2，不进入最终候选 | 保留为 std-floor 正对照，E2 仍为最佳候选 |
+| E5 grouped reward throughput | 待执行 | 在 E2 候选上验证原 reward 服务 4 workers + 有界客户端并发 | 固定 E2 rollout 输入，完成严格等价性与吞吐回归 |
 | F0 最终审计与 held-out | 待执行 | held-out 保持封存 | dev 完成选型后一次性评估 |
 
 ## 2. 不可变实验约束
@@ -368,6 +368,19 @@
 - 启动健康：`RUNNING`、source、run.env、train/dev manifest 已落盘；run.env 确认 `compute_score_sldr` 与 `std_floor_grpo`。Ray/trainer/vLLM、Gunicorn/8901 和 GPU 正常，首步约 `39.0s/step`，日志无异常。
 - 决策：保持 std-floor 为唯一实验变量，不做额外配置或加速变更；正常状态静默。
 - 下一动作：按 ETA 四档规则监控 E4；完成后与 E3 直接比较 std-floor 贡献，并与 E0–E2 一并确定进入 E5 的候选。
+
+### 记录 017：E4 SLDR + Std-Floor 完成
+
+- 状态：技术验收通过；std-floor 相对 E3 有补救作用，但未超过 E0 或 E2，不进入最终候选。
+- 代码与配置：source commit `ddf3e64aec7311b20dc3b9cf74079ec342dd5bc5`，source status 为空；该 revision 相对 E3 source 仅更新本台账，执行代码未变化。E3/E4 的 train、dev manifest 逐字节一致，随机 train 1k、SLDR reward、250 steps、rank-8 LoRA、seed 与生成/final-dev 协议保持不变；resolved config 确认 E4 使用 `adv_estimator=std_floor_grpo`、`std_floor=0.05`，相对 E3 的唯一有效实验变化是启用 std-floor estimator。
+- 原始证据：服务器 `experiments/safe_grpo/e4_std_floor_lora_1k_seed20260812/`；运行时间 2026-08-14 07:41:50 至 11:06:27 CST，约 3 小时 24 分 37 秒；`COMPLETE` 存在、`exit_code=0`，无 `RUNNING/FAILED`。
+- 覆盖与完整性：tracker `last_global_step=250`，`global_step_250/actor` 中 model、optimizer、extra state、Hugging Face 配置与 LoRA adapter 完整。raw rollout 2,566 行；train 为 2,000 行、1,000 个唯一 token、每 token 2 条；final dev 为 566 行、566 个唯一 token、每 token 1 条。无缺失、未知 token、train/dev 重叠或 held-out 重叠。主 PID、trainer、Ray、Gunicorn/8901 已退出，GPU 回收至 0 MiB。run log 无 OOM、traceback、fatal 或 exception；reward worker 在正常清理阶段收到 SIGTERM，与 `exit_code=0`、完整产物和资源回收一致，不是训练失败。
+- train diagnosis：SLDR reward mean/std `0.65341/0.42762`，PDMS scaled `0.60482`，exact-zero std `43.70%`，`0 < std < 0.05` 为 `15.90%`，平均 headroom `0.16945`，pairwise ADE/FDE `0.64769/1.46148`，safe `64.75%`，parse success `99.85%`（3/2,000 失败），无 clipping。相对 E3，exact-zero std 下降 `0.90` 个百分点、低非零 std 上升 `0.50` 个百分点、headroom 上升 `0.00050`；train reward 与 safe 分别下降 `0.00706/0.00650`，训练诊断不呈单调改善。
+- final dev：PDMS scaled `0.64344`、PDMS `0.66691`、safe `0.70848`、collision `0.95760`、drivable area `0.74558`、progress `0.91016`、TTC `0.94346`、comfort `0.92049`、parse `1.0`、clipping `0`。
+- 同协议差值：相对 E3，PDMS scaled `+0.01350`、PDMS `+0.01426`、safe `+0.01943`、drivable area `+0.01767`、progress `+0.00074`、TTC `+0.00530`、comfort `+0.00177`，collision 持平，说明 std-floor 对 SLDR 退化存在部分补救。相对 E0，PDMS scaled `-0.01595`、PDMS `-0.01670`、safe `-0.01590`；相对 E2，分别为 `-0.02886/-0.03067/-0.03180`，且 collision、drivable area 与 TTC 均低于 E2。E4 仅与 E1 基本持平，PDMS scaled 和 safe 分别高 `0.00062/0.00177`。
+- 分析：E3→E4 的直接对照支持“std-floor 能补救一部分 SLDR 损失”，但补救幅度不足以恢复冻结 baseline，更不足以替代 FALS。训练诊断与 dev 改善方向不完全一致，且当前只有单 seed，因此不把 E4 解读为普遍优于普通 GRPO。E2 仍是唯一同时超过 E0、E1、E3 和 E4 主要 dev 指标的候选；held-out 继续封存。
+- 决策：接受 E4 为完整的 std-floor 正对照，不调参、不重跑、不将 SLDR 或 std-floor 叠加到 E2。冻结 E2 `global_step_250/actor` 为进入 E5 的模型候选；E5 只验证 reward 服务吞吐优化，不改变模型选择或生成协议。
+- 下一动作：在固定 E2 rollout 输入上执行 E5，比较冻结的单 Gunicorn worker/串行 grouped reward 基线与“原 reward 服务 4 workers + 有界客户端并发”候选；逐样本 reward 指标必须完全一致、无丢失或重排，并重复测量吞吐及 p50/p90 latency。未通过等价性时保留单 worker 基线，不访问 held-out。
 
 ## 6. 后续记录模板
 
