@@ -17,6 +17,15 @@ def load_builder():
     return module
 
 
+def load_analyzer():
+    path = ROOT / "projects/safe_preference/analyze_preference_dataset.py"
+    spec = importlib.util.spec_from_file_location("analyze_preference_dataset", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 def parse_response(value):
     response = json.loads(value)
     points = response["future_trajectory"].split("[PT, ", 1)[1].split("]", 1)[0]
@@ -179,3 +188,53 @@ def test_template_rejects_duplicate_json_keys():
         assert "Duplicate JSON key" in str(exc)
     else:
         raise AssertionError("duplicate JSON keys were accepted")
+
+
+def metric_row(token, pdms, *, safe=True, valid=True, ttc=None):
+    return {
+        "token": token,
+        "parsed_ok": valid,
+        "poses": [[0.0, 0.0, 0.0] for _ in range(8)] if valid else [],
+        "pdms_scaled": pdms,
+        "no_at_fault_collisions": 1 if safe else 0,
+        "drivable_area_compliance": 1,
+        "time_to_collision_within_bound": int(safe) if ttc is None else ttc,
+    }
+
+
+def test_pair_capacity_builds_exact_60_40_budget():
+    analyzer = load_analyzer()
+    rows = []
+    for index in range(3):
+        rows.extend(
+            [metric_row(f"a{index}", 1.0, safe=True), metric_row(f"a{index}", 0.0, safe=False)]
+            + [metric_row(f"a{index}", 0.5, safe=True) for _ in range(2)]
+        )
+    for index in range(2):
+        rows.extend(metric_row(f"b{index}", value, safe=True) for value in (0.0, 0.2, 0.8, 1.0))
+
+    report = analyzer.analyze_pair_capacity(
+        rows, gap_quantile=0.0, max_pairs=5, min_pairs=5, expected_rollouts=4
+    )
+
+    assert report["gate_passed"]
+    assert report["N_A"] == 3
+    assert report["N_B"] == 2
+    assert report["B"] == 5
+    assert report["tier_a_required"] == 3
+    assert report["tier_b_required"] == 2
+
+
+def test_pair_capacity_requires_ttc_for_safe_tier():
+    analyzer = load_analyzer()
+    rows = [metric_row("scene", value, safe=True) for value in (0.0, 0.2, 0.8, 1.0)]
+    rows[0]["time_to_collision_within_bound"] = 0
+
+    report = analyzer.analyze_pair_capacity(
+        rows, gap_quantile=0.0, max_pairs=5, min_pairs=5, expected_rollouts=4
+    )
+
+    assert report["N_A"] == 1
+    assert report["N_B"] == 0
+    assert report["B"] == 0
+    assert report["decision"] == "close_offline_preference_route"
