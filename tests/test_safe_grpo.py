@@ -481,6 +481,7 @@ def test_r3_baseline_launcher_uses_frozen_e2_checkpoint_and_four_rollouts():
     assert "E2_CHECKPOINT=\"$E2_RUN/checkpoints/global_step_250\"" in source
     assert 'trainer.load_checkpoint_path="$E2_CHECKPOINT"' in source
     assert "worker.rollout.n=4" in source
+    assert 'data.val_token_filter_file="$RUN_DIR/proxy_candidates.txt"' in source
     assert "--expected-candidates 345" in source
     assert "--minimum-persistent 100" in source
     assert "--selection-limit 200" in source

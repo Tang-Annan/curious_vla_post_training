@@ -12,7 +12,7 @@ DEV_MANIFEST="$WORKSPACE_ROOT/manifests/dev_tokens.txt"
 HELDOUT_MANIFEST="$WORKSPACE_ROOT/manifests/heldout_tokens.txt"
 E2_RUN="$WORKSPACE_ROOT/experiments/safe_grpo/e2_fals_lora_1k_seed20260812"
 E2_CHECKPOINT="$E2_RUN/checkpoints/global_step_250"
-EXP_NAME=r3_e2_frozen_baseline4_proxy345_seed20260812
+EXP_NAME=r3_e2_frozen_baseline4_proxy345_seed20260812_retry1
 RUN_DIR="$WORKSPACE_ROOT/experiments/safe_grpo/$EXP_NAME"
 SEED=20260812
 REWARD_SERVER_PORT="${REWARD_SERVER_PORT:-8901}"
@@ -105,6 +105,7 @@ cd "$EASYR1_ROOT"
     data.val_files="$DATA_PATH@train" \
     data.image_dir="$PROJECT_ROOT/datasets" \
     data.token_filter_file="$RUN_DIR/proxy_candidates.txt" \
+    data.val_token_filter_file="$RUN_DIR/proxy_candidates.txt" \
     data.shuffle=false \
     data.max_response_length=512 \
     worker.actor.model.model_path="$MODEL_PATH" \
