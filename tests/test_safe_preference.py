@@ -408,6 +408,7 @@ def test_preference_training_configs_freeze_budget_and_method_variables():
         assert config["freeze_multi_modal_projector"]
         assert not config["disable_gradient_checkpointing"]
         assert config["cutoff_len"] == 4096
+        assert config["media_dir"].endswith("/curious-vla-workspace/data")
         assert config["per_device_train_batch_size"] == 1
         assert config["gradient_accumulation_steps"] == 16
         assert config["num_train_epochs"] == 3.0

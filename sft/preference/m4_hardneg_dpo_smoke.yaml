@@ -22,6 +22,7 @@ dpo_label_smoothing: 0.0
 
 ### dataset
 dataset_dir: sft/preference
+media_dir: /root/autodl-tmp/curious-vla-workspace/data
 dataset: m4_matched_hardneg_dpo
 template: qwen2_vl
 cutoff_len: 4096

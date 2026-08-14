@@ -651,3 +651,10 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - smoke 边界：每个方法独立 `max_steps=20/save_steps=20`，其余科学字段与各自正式 config 相同；只验收 20/20、finite loss/grad norm、checkpoint-20/final adapter、自动 resume-load、peak GPU memory、无 OOM/NaN/traceback。smoke 不读 dev，权重不进入正式训练；正式训练仍从 Stage-2 重新开始。
 - 环境结论：现有 `llamafactory` 为 Python 3.11 + CPU Torch，现有 `curious` 为 Python 3.10 + CUDA Torch 且 Accelerate/PEFT 超出 pinned 上限。第一次尝试建立继承式 `llamafactory-gpu` 因 LLaMA-Factory 要求 Python ≥3.11 在安装期退出，未启动训练；该约 23 MB 半成品目录永久不作为 runner 输入。最终环境 `/root/autodl-tmp/curious-vla-workspace/envs/llamafactory-gpu-py311` 从已审计 Python 3.11 环境独立 clone，只把 Torch/TorchVision/TorchAudio 替换为官方 `2.8.0+cu128/0.23.0+cu128/2.8.0+cu128`，其 Transformers 5.8.0、Accelerate 1.11.0、PEFT 0.18.1、TRL 0.24.0、Datasets 4.0.0 与 M1 一致；CUDA RTX 4090 可用且 `pip check` 无冲突。
 - 决策：环境失败属于已定位的 Python ABI 技术问题，已用不改变科学变量的独立 Python 3.11 环境修复。下一动作只允许执行 M2 20-step smoke；通过并写回后才启动 M2 正式 180-step 训练。
+
+### 记录 008：M2 smoke attempt 0 技术失败
+
+- 状态：技术失败，正式结论无效。source `6611440`、M1 hashes、15 项测试、GPU parser、source/GPU/8901/target preflight 均通过；运行目录 `/root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m2_rsft_smoke20_seed20260812/` 与 launcher log 保留，`smoke_exit_code=1`。
+- 失败位置：LLaMA-Factory 已加载 dataset registration 并开始 tokenizer preprocessing，但 YAML 未显式设置 `media_dir`，相对 `navsim/...jpg` 被回退为相对 source checkout 的路径，随后触发 `FileNotFoundError`。失败发生在 model/optimizer step 0 之前，GPU 仅出现约 386 MiB 初始化占用；没有 checkpoint、adapter、loss 或 dev 结果。
+- 根因边界：M1 全量 processor 已用 `/root/autodl-tmp/curious-vla-workspace/data` 验证 960/960 图像，因此不是数据缺失，也不授权替换样本。唯一修复是在全部六份 YAML 显式加入同一绝对 `media_dir`；M2 retry 使用全新 `m2_rsft_smoke20_seed20260812_retry1`，不覆盖 attempt 0。该字段只解析已冻结 image，不改变 token/prompt/chosen、训练超参或科学变量。
+- 决策：补充 config regression assertion、冻结新 source 并重做 GPU parser/preflight 后只运行 M2 smoke retry1。retry1 通过并写回前，M2 正式训练仍阻塞。

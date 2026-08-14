@@ -18,6 +18,7 @@ disable_gradient_checkpointing: false
 
 ### dataset
 dataset_dir: sft/preference
+media_dir: /root/autodl-tmp/curious-vla-workspace/data
 dataset: m2_matched_rsft
 template: qwen2_vl
 cutoff_len: 4096
@@ -27,7 +28,7 @@ preprocessing_num_workers: 8
 dataloader_num_workers: 4
 
 ### output
-output_dir: /root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m2_rsft_smoke20_seed20260812/adapter
+output_dir: /root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m2_rsft_smoke20_seed20260812_retry1/adapter
 logging_steps: 1
 save_strategy: steps
 save_steps: 20
