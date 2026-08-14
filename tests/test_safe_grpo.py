@@ -323,6 +323,24 @@ def test_adas_preserves_manifest_and_final_partial_batch():
     assert "train_drop_last=False" in source
 
 
+def test_f0_checkpoint_audit_is_validation_only_and_preregistered():
+    source = (ROOT / "scripts/run_f0_checkpoint_audit.sh").read_text(encoding="utf-8")
+    assert 'STEP50_CHECKPOINT="$E2_RUN/checkpoints/global_step_50"' in source
+    assert 'STEP250_CHECKPOINT="$E2_RUN/checkpoints/global_step_250"' in source
+    assert 'data.token_filter_file="$DEV_MANIFEST"' in source
+    assert 'data.val_token_filter_file="$DEV_MANIFEST"' in source
+    assert "worker.rollout.n=1" in source
+    assert "worker.rollout.temperature=0.6" in source
+    assert "worker.rollout.top_p=0.95" in source
+    assert 'trainer.load_checkpoint_path="$STEP50_CHECKPOINT"' in source
+    assert "trainer.max_steps=" not in source
+    assert '"pdms_scaled_higher"' in source
+    assert '"safe_not_lower"' in source
+    assert '"collision_not_lower"' in source
+    assert '"ttc_not_lower"' in source
+    assert '"heldout_used": False' in source
+
+
 def test_e0_and_d0_keep_zero_effect_lora_wrapper():
     source = (ROOT / "scripts/run_safe_grpo_experiment.sh").read_text(encoding="utf-8")
     assert "worker.actor.model.lora.rank=0" not in source

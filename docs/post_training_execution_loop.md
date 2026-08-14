@@ -5,13 +5,13 @@
 ## 1. 当前决策快照
 
 - 最后更新：2026-08-14
-- 开发分支：`codex/post-training-analysis`；R2-G 训练 source `1a2e39c`、后处理修复 `d21be76`；服务器 checkout clean
+- 开发分支：`codex/post-training-analysis`；R3 gate 修复与 retry source `6ef79b8`；服务器 checkout clean
 - 当前最佳已训练候选：E2 FALS-only `global_step_250/actor`
-- 当前执行动作：R2-G 工程通过但科学负向，回退 E2；冻结 345-token R3 proxy manifest 后运行 E2 step-250 四 rollout persistent-failure gate
-- 当前封存动作：暂停 E2 step-50 dev 审计；held-out 继续完全封存
+- 当前执行动作：R3 persistent-failure gate 未通过并关闭；恢复 F0，只新增 E2 step-50 的同协议 566-token dev
+- 当前封存动作：F0 按预注册规则选择唯一 checkpoint 前，held-out 继续完全封存
 - 保留的服务器核心证据：E0、D0、E2、全部 manifest，以及 E2 step 50/250 checkpoint
 - 已排除方向：继续调 SLDR、把 Std-Floor 直接叠加到 E2、为了吞吐改动正式生成协议
-- 当前主线：R1/Dr.GRPO 与正式 R2-G 均未晋级；C0 跳过。R3 仅先做 train-only Recovery 可行性门控，通过才设计后续训练，否则 E2 进入 F0
+- 当前主线：R1/Dr.GRPO、正式 R2-G 与 R3 gate 均未晋级；C0 跳过，停止方法扩展，以 E2 进入 F0
 
 | 阶段 | 状态 | 目的 | 当前动作 |
 | --- | --- | --- | --- |
@@ -21,9 +21,9 @@
 | 原 R2 gate | 已失败并冻结 | cap 5 的估计 raw rollout 开销 `2.02779× > 2.0×` | 不改写为通过 |
 | R2-P | 技术与成本通过 | 20-step 无 dev pilot 实测 exact-zero filtering 的可靠性与成本 | 证据冻结，不把 pilot reward 当效果结论 |
 | R2-D / R2-G | R2-D 跳过；R2-G 工程通过、科学负向 | E2 + Dynamic Sampling 的 250-step 单因素实验 | 回退 E2，不调阈值/cap、不重跑 |
-| R3 | train-only gate 待执行 | Frozen E2 四 rollout persistent-failure 与 Failure-Guided Recovery 等预算可行性 | 先验证 10% 下界，再决定最多 200-token 对照 |
+| R3 | gate 未通过、已关闭 | Frozen E2 四 rollout persistent-failure 与 Failure-Guided Recovery 等预算可行性 | 56/1,000 的保守下界低于 10%，不扩大、不做 recovery 对照 |
 | C0 | 按门控跳过 | R1/R2 均未达到工程晋级线 | 不运行第二训练 seed |
-| F0 | 暂停 | 只审计最终胜出方法的预注册 checkpoint | 方法开发结束后恢复 |
+| F0 | 恢复执行 | 只审计最终胜出方法 E2 的预注册 checkpoint | 仅评估 step 50；复用 step 250 既有 dev |
 | F1 | 封存 | 一次性 held-out 确认 | 代码、方法、checkpoint 全部冻结后执行 |
 
 R0 后当前已解析路线为：
@@ -42,9 +42,11 @@ R2-P（完成，门控通过）
 R2-G（完成，工程通过、科学负向）
 └─ 回退 E2；C0 跳过 ──> R3 train-only feasibility gate
 
-R3 gate
-├─ frozen-E2 persistent failure 与等预算 recovery 全通过 ──> 新训练设计决策
-└─ 任一门控未通过 ─────────────────────────────> 关闭 R3，E2 进入 F0
+R3 gate（完成）
+└─ 56/1,000 = 5.6% < 10% ──> 关闭 R3，不做 recovery 对照
+
+F0（当前）
+└─ E2 step 50 同协议 dev；按预注册规则与既有 step 250 比较 ──> 冻结唯一 checkpoint
 ```
 
 R3 不在这条硬主线中；它的成功与否不得阻塞最终审计。
@@ -819,6 +821,28 @@ F1 只运行一次。无论结果好坏都不得再改模型、checkpoint 或阈
 - R3 前置证据：现有 E2 1,000 个训练期 2-rollout group 中，345 个同时满足“两条均 unsafe”与 `max PDMS_scaled=0`，proxy ratio `34.5%`。这只用于冻结候选，不代替 frozen-E2 四 rollout persistent-failure 门控。
 - 决策：不运行 C0；下一步只执行 train-only R3 gate。先冻结上述 345-token proxy manifest，用 E2 step 250 各生成 4 条 baseline；确认至少 100 个 persistent-failure token 才进入最多 200-token 的 Treatment/Control recovery feasibility，否则关闭 R3 并以 E2 进入 F0。
 - 下一动作：实现 deterministic proxy manifest、frozen E2 checkpoint inference 与严格四 rollout 验收；代码、manifest 和 feedback 模板在生成 recovery 结果前冻结，held-out 继续不访问。
+
+### 记录 028：R3 首次运行技术失败并最小修复
+
+- 状态：技术失败，不作 Recovery 可行性结论；失败目录保留，已定位并只修复一个数据加载问题。
+- 假设与唯一变量：使用冻结 E2 step 250 对冻结的 345-token train proxy candidate 各生成 4 条 baseline；不训练、不访问 dev/held-out 效果、不生成 Treatment/Control。
+- 代码与配置：首次 source `b841c4feb9c2a20d6f68dd0a65ac238c2840cbb0`、source status 为空；seed `20260812`、rollout `n=4`、FALS 与 E2 checkpoint 均沿用冻结输入。
+- 原始证据：`experiments/safe_grpo/r3_e2_frozen_baseline4_proxy345_seed20260812/`；运行约 2 分 17 秒，`exit_code` 文件内容为 `1`，无 `COMPLETE` 和 baseline rollout。
+- 失败原因：`main_adas` 虽只消费 train dataloader，但共享 `create_dataloader` 仍构造 val dataset；首次 launcher 未设置 `data.val_token_filter_file`，因而读取无关的全量 val 数据并遇到缺失图像。该故障发生在模型 rollout 前，不代表 E2 或 R3 方法失败。
+- 最小修复：commit `6ef79b85443de5c6e7cab84f99bc2a95ea2a6e92` 只把 val loader 过滤到同一 proxy manifest；不改 checkpoint、proxy、seed、生成参数、persistent-failure 定义或 100-token 门槛。测试确认 manifest 过滤存在且 launcher 语法通过。
+- 决策：允许一次新目录 retry；不得覆盖失败目录，也不得因失败修改科学门控。
+- 下一动作：source clean、GPU/8901 空闲后，以 `retry1` 目录重跑同一 345×4 frozen-E2 gate。
+
+### 记录 029：R3 retry1 完成、gate 未通过并关闭 Recovery
+
+- 状态：技术通过，R3 persistent-failure gate 未通过；Recovery 分支关闭，不扩大到其余 655 个 FALS token，不运行 Treatment/Control，不做 feedback/prompt sweep。
+- 代码与配置：source `6ef79b85443de5c6e7cab84f99bc2a95ea2a6e92`、source status 为空；E2 `global_step_250` 冻结，seed `20260812`，345 个 proxy token 各 4 rollout。proxy manifest SHA-256 为 `f82aef324159b2cbc45401199b7c42e062a38ee77042914cd7723d184c0b4b74`；完整 FALS manifest 仍为 `fd62a6f204806beff51fa7e1fb0f853027655b4b47f00f9633c787b04e0ffed0`。
+- 原始证据：`experiments/safe_grpo/r3_e2_frozen_baseline4_proxy345_seed20260812_retry1/`；2026-08-14 20:52:55 至 21:05:59 CST，约 13 分钟。`COMPLETE` 存在、`RUNNING` 消失、`exit_code` 文件内容为 `0`。
+- 数据与技术验收：`baseline_rollouts.jsonl` 为 1,380 行，覆盖 345×4；persistent 与 selected manifest 均为 56 行且 SHA-256 同为 `c96e680d40a862805e47721e8fef40b03dad7ac6b7df27a455dc25daaa6d8bda`。GPU、Ray、Gunicorn/8901 与残留进程均已释放，磁盘可用约 31 GB。
+- Gate 结果：56 个 token 同时满足 4 条 rollout 全部 unsafe 和 `max PDMS_scaled=0`；相对冻结 FALS-1,000 的保守下界为 `56/1,000=5.6%`，低于预注册 `100/1,000=10%`。`gate_passed=false`。
+- 分析边界：该门控证明的是“当前冻结 E2 与严格四 rollout 定义下，已确认 persistent failure 的保守下界不足以支撑本轮等预算 recovery 实验”，不是证明其余 train 场景不存在失败，也不是证明 failure-guided learning 普遍无效。按预注册规则不能为达到 10% 而扩大查询或放宽 persistent 定义。
+- 决策：R3 关闭；R1/R2/R3 均无新方法晋级，方法开发结束，最终候选保持 E2。C0 已跳过，恢复 F0 checkpoint 审计。
+- 下一动作：只对 E2 step 50 新增一次与 step 250 相同的 566-token dev；只有 PDMS scaled 更高且 Safe、Collision、TTC 均不低时才切换，否则冻结 step 250。F0 完成前 held-out 继续封存。
 
 ## 10. 后续记录模板
 
