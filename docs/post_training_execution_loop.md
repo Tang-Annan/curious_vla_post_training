@@ -5,35 +5,35 @@
 ## 1. 当前决策快照
 
 - 最后更新：2026-08-14
-- 开发分支：`codex/post-training-analysis`；本次改写前 Git HEAD：`3d1eeb5`
+- 开发分支：`codex/post-training-analysis`；服务器同步 Git HEAD：`5c2e261`
 - 当前最佳已训练候选：E2 FALS-only `global_step_250/actor`
-- 当前唯一下一动作：R0 离线诊断；完成并写回门控结论前不启动新 GPU 训练
+- 当前唯一下一动作：实现并验证 R1 FALS + Dr.GRPO；R1 正常启动前不改变训练配置
 - 当前封存动作：暂停 E2 step-50 dev 审计；held-out 继续完全封存
 - 保留的服务器核心证据：E0、D0、E2、全部 manifest，以及 E2 step 50/250 checkpoint
 - 已排除方向：继续调 SLDR、把 Std-Floor 直接叠加到 E2、为了吞吐改动正式生成协议
-- 当前主线：先验证“FALS 选择目标与 GRPO 优化尺度是否错配”，再分别判断 Dr.GRPO 与 Dynamic Sampling；Recovery 仅保留为条件研究分支
+- 当前主线：R0 已确认 selection–optimization mismatch；R1 门控通过，R2 成本门控失败，当前只推进 Dr.GRPO 单因素实验
 
 | 阶段 | 状态 | 目的 | 当前动作 |
 | --- | --- | --- | --- |
 | E0–E4 | 已闭环 | 建立 Stage-2、Vanilla GRPO、FALS、SLDR、Std-Floor 的证据基线 | 不重跑、不调参 |
-| R0 | 待执行 | 用现有 D0/E2 rollout 诊断 advantage-scale mismatch 与 zero-signal group | 当前唯一动作 |
-| R1 | 条件执行 | FALS + Dr.GRPO 单因素消融 | 仅在 R0-R1 门控通过后启动 |
-| R2-D / R2-G | 条件执行 | 在线过滤 zero-variance group；父方法由 R1 结果决定 | 不默认依赖 R1 成功 |
+| R0 | 已完成 | R1 gate 通过；R2 预计开销 `2.02779×`，超过 `2.0×` 门槛 | 证据冻结，不重算门槛 |
+| R1 | 待实现 | FALS + Dr.GRPO 单因素消融 | 当前唯一动作 |
+| R2-D / R2-G | 按门控暂停 | 补采 cap 5 才满足可靠性，但平均 raw rollout 开销超限 | 不事后放宽成本门槛 |
 | R3 | 可选 | Failure-Guided Recovery 等预算可行性对照 | 核心 R1/R2 路线完成后再决定 |
 | C0 | 条件执行 | 最终新方法与 E2 的匹配训练种子确认 | 仅对达到晋级线的方法执行 |
 | F0 | 暂停 | 只审计最终胜出方法的预注册 checkpoint | 方法开发结束后恢复 |
 | F1 | 封存 | 一次性 held-out 确认 | 代码、方法、checkpoint 全部冻结后执行 |
 
-当前自适应路线为：
+R0 后当前已解析路线为：
 
 ```text
-R0
-├─ R1 动机成立 ──> R1
-│                  ├─ R1 晋级 + dead-group 门控成立 ──> R2-D（Dr.GRPO + Dynamic）
-│                  ├─ R1 不晋级 + dead-group 门控成立 ─> R2-G（GRPO + Dynamic）
-│                  └─ dead-group 门控不成立 ──────────> C0 / F0
-├─ R1 动机不成立、dead-group 门控成立 ───────────────> R2-G
-└─ 两个门控均不成立 ─────────────────────────────────> 以 E2 进入 F0
+R0（完成）
+├─ R1 gate：通过 ──> R1
+└─ R2 gate：失败 ──> 不执行 Dynamic Sampling
+
+R1
+├─ 达到工程晋级线 ──> C0 匹配 seed 确认
+└─ 未达到工程晋级线 ─> 回退 E2，进入 F0
 ```
 
 R3 不在这条硬主线中；它的成功与否不得阻塞最终审计。
@@ -692,6 +692,20 @@ F1 只运行一次。无论结果好坏都不得再改模型、checkpoint 或阈
 - 方案修正：R0 以同 policy 的 D0 作为 difficulty/variance 主证据，E2 只作训练信号补充；Dynamic Sampling 不绑定 R1 成功，按 R2-D/R2-G 分支执行；补采必须维持固定有效 batch，不能在上限后静默缩小 batch；Recovery 必须先与 blind resampling 做等预算对照，禁止直接把不同 prompt、off-policy refined sample 注入原 GRPO group。
 - 决策：采用 `R0 → R1/R2 自适应分支 → C0 → F0 → F1` 为当前正式路线；R3 为非阻塞可选研究分支。NoRD/DAPO/ELF-VLA 只作为假设来源，所有晋级以本项目预注册门控为准。
 - 下一动作：只实现并运行 R0 离线诊断，生成 `group_metrics.csv`、`r0_report.json`、`advantage_scale.csv` 和图；完成技术验收、写回 R1/R2 gate 后再决定是否修改训练代码。
+
+### 记录 021：R0 离线诊断完成并解析 R1/R2 门控
+
+- 状态：技术与证据验收通过；R1 gate 通过，R2 成本 gate 失败。
+- 假设与唯一变量：只读取既有 D0/E2 train rollout，诊断 FALS/GRPO advantage-scale mismatch 与 zero-signal 补采成本；未访问 dev/held-out，未运行 GPU 推理，未修改训练算法。
+- 首次失败：commit `86c9700` 的首次目录 `experiments/safe_grpo/r0_difficulty_bias_seed20260812/` 在读取 rollout 前因远程环境缺少 `matplotlib` 退出，`exit_code=1`、`FAILED` 存在；该目录保留为技术失败证据，不作科学结论。
+- 最小修复：commit `5c2e261403d66a0a7e6dcda940ce1187c192e9cc` 移除 `matplotlib` 依赖，改用标准库生成 SVG；未改变统计、门槛或输入。服务器通过 Git bundle fetch + fast-forward 同步，因为服务器到 GitHub 的 HTTPS 连续出现 HTTP/2 错误与 443 超时；同步仍由 Git 对象和 `merge --ff-only` 完成。
+- 原始证据：`experiments/safe_grpo/r0_difficulty_bias_seed20260812_retry1/`；`COMPLETE` 存在、`exit_code=0`、无 `FAILED`，source status 为空。`group_metrics.csv` 与 `advantage_scale.csv` 均为 5,526 行（含表头），另有 `r0_report.json` 与 `difficulty_bias.svg`。
+- 数据边界：D0 为 4,525 group / 18,100 rollout，E2 为 1,000 group / 2,000 rollout；输入 manifest 与 rollout SHA-256 已写入 `input_sha256.txt`，分析仅使用冻结 train 与 FALS/random 1k manifest。
+- D0 结果：difficulty 与 reward std 的 Spearman 为 `0.38842`，与 reward gap 为 `0.33750`。FALS top-1k 的 mean reward/std/gap/headroom 为 `0.31765/0.48465/0.92396/0.60632`；随机 1k 为 `0.61278/0.31891/0.61188/0.27950`。FALS score 包含 headroom，因此集合差异只作设计一致性描述，difficulty quintile 才作为同 policy 关联证据。
+- R1 门控：E2 informative group ratio 为 `0.612`，高于 `0.50`；非零 reward-gap Q25/Q75 为 `0.81460/1.00000`，IQR `0.18540`，高于 `0.10`。两项均通过，支持执行 FALS + Dr.GRPO 单因素实验。
+- R2 门控：E2 exact-zero std 为 `0.388`，通过比例门槛；要使 250-step 整体填充失败概率低于 1%，最小 generation-batch cap 为 5，对应估计失败率 `0.00499`，但平均 raw rollout 开销 `2.02779×` 超过预注册 `2.0×`。成本门控失败，即使只超出约 1.4% 也不事后放宽。
+- 决策：冻结 R0 结果；当前只推进 R1，不实现或运行 R2-D/R2-G。R3 仍为非阻塞可选分支，held-out 继续封存。
+- 下一动作：新增 `dr_grpo` estimator、R1 正式启动入口与数学/唯一变量测试；保持 E2 的 FALS manifest、250 steps、reward、LoRA、KL、生成和 final-dev 协议不变。
 
 ## 10. 后续记录模板
 
