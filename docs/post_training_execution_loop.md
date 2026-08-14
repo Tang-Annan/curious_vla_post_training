@@ -5,13 +5,13 @@
 ## 1. 当前决策快照
 
 - 最后更新：2026-08-14
-- 开发分支：`codex/post-training-analysis`；paired-analysis 实现 commit `adbabe1`；服务器 checkout clean
+- 开发分支：`codex/post-training-analysis`；R2-G 正式入口实现 commit `6ead3e3`；服务器实验 source commit `5e65b0b` 且 status clean
 - 当前最佳已训练候选：E2 FALS-only `global_step_250/actor`
-- 当前执行动作：R1 已完成且科学负向；写回后以 E2/GRPO 为父方法启动 R2-P
+- 当前执行动作：R2-P 已通过技术与成本门控；远程验证正式入口后，以 E2/GRPO 为父方法启动 250-step R2-G
 - 当前封存动作：暂停 E2 step-50 dev 审计；held-out 继续完全封存
 - 保留的服务器核心证据：E0、D0、E2、全部 manifest，以及 E2 step 50/250 checkpoint
 - 已排除方向：继续调 SLDR、把 Std-Floor 直接叠加到 E2、为了吞吐改动正式生成协议
-- 当前主线：R0 已确认 selection–optimization mismatch；R1/Dr.GRPO 被拒绝；原 R2 成本门控保持失败，下一步只运行前瞻 R2-P pilot
+- 当前主线：R0 已确认 selection–optimization mismatch；R1/Dr.GRPO 被拒绝；原 R2 成本门控保持失败；前瞻 R2-P 已通过，获准运行正式 R2-G
 
 | 阶段 | 状态 | 目的 | 当前动作 |
 | --- | --- | --- | --- |
@@ -19,8 +19,8 @@
 | R0 | 已完成 | R1 gate 通过；R2 预计开销 `2.02779×`，超过 `2.0×` 门槛 | 证据冻结，不重算门槛 |
 | R1 | 技术通过、科学负向 | FALS + Dr.GRPO 单因素消融 | 不调参、不重跑、不叠加 |
 | 原 R2 gate | 已失败并冻结 | cap 5 的估计 raw rollout 开销 `2.02779× > 2.0×` | 不改写为通过 |
-| R2-P | 实现与隔离验证通过 | 20-step 无 dev pilot 实测 exact-zero filtering 的可靠性与成本 | 固定以 E2/GRPO 为父方法启动 |
-| R2-D / R2-G | 条件执行 | 只在 R2-P 通过后运行 250-step Dynamic Sampling | 不用 dev 调成本门槛 |
+| R2-P | 技术与成本通过 | 20-step 无 dev pilot 实测 exact-zero filtering 的可靠性与成本 | 证据冻结，不把 pilot reward 当效果结论 |
+| R2-D / R2-G | R2-D 跳过；R2-G 待启动 | R1 未晋级，因此只运行 E2 + Dynamic Sampling 的 250-step R2-G | 先远程验证 commit `6ead3e3`，不用 dev 调成本门槛 |
 | R3 | 可选 | Failure-Guided Recovery 等预算可行性对照 | 核心 R1/R2 路线完成后再决定 |
 | C0 | 条件执行 | 最终新方法与 E2 的匹配训练种子确认 | 仅对达到晋级线的方法执行 |
 | F0 | 暂停 | 只审计最终胜出方法的预注册 checkpoint | 方法开发结束后恢复 |
@@ -36,9 +36,12 @@ R0（完成）
 R1（完成，未晋级）
 └─ PDMS/Safe/Collision 明确下降 ──> R2-P(E2 parent)
 
-R2-P
-├─ 技术与成本门控通过 ──> 正式 R2-D / R2-G
-└─ 未通过 ───────────> 回退对应父方法，进入 C0/F0
+R2-P（完成，门控通过）
+└─ R1 未晋级，父方法为 E2 ──> 正式 R2-G
+
+R2-G
+├─ 工程与科学晋级线通过 ──> C0
+└─ 任一晋级线未通过 ──────> 回退 E2，进入 F0
 ```
 
 R3 不在这条硬主线中；它的成功与否不得阻塞最终审计。
@@ -765,6 +768,20 @@ F1 只运行一次。无论结果好坏都不得再改模型、checkpoint 或阈
 - 相对 E2：PDMS scaled `-0.02938`、Safe `-0.03357`、Collision `-0.01148`、TTC `-0.01060`，未达到任何晋级条件。固定 seed `20260814`、20,000 次 token-paired bootstrap 的 PDMS scaled 95% CI 为 `[-0.05494,-0.00368]`，Safe 为 `[-0.06184,-0.00530]`，Collision 为 `[-0.02297,-0.00177]`。
 - 结论边界：R1 证明当前 FALS + Dr.GRPO 单因素在 discovery seed 上明确劣于 E2；它不证明所有 Driving VLA 或其他 group size 上 Dr.GRPO 无效。不得通过调 LR、clip 或 reward 对该负结果追分。
 - 下一动作：提交本记录并同步服务器；确认 source clean、GPU/8901、FALS hash 与 R2-P 目录后，以 `R2_PARENT=e2` 启动 20-step 无 dev pilot。
+
+### 记录 025：R2-P 完成并放行正式 R2-G
+
+- 状态：20-step pilot 技术与成本门控全部通过；R2-P 闭环，不产生科学效果结论；正式 R2-G 获准实施。
+- 假设与唯一变量：相对 E2/GRPO 仅启用 exact-zero group filtering 与 cap-5 有界补采；每个 optimizer step 仍严格使用 4 个 informative group，FALS manifest、Stage-2 base、rank-8 LoRA、PDMS reward、KL、seed 与生成协议不变。
+- 原始证据：`experiments/safe_grpo/r2p_e2_dynamic_lora_20_seed20260812/`；`COMPLETE` 存在、`RUNNING` 消失、`exit_code` 文件内容为 `0`。`pilot_report.json` 与 stdout 副本均已生成，tracker 指向 `global_step_20/actor`。
+- 代码与数据边界：运行 source commit `5e65b0b7e1bfe958b0e9b82677da37f21f952ae`、source status 为空；`R2_PARENT=e2`；FALS SHA-256 为 `fd62a6f204806beff51fa7e1fb0f853027655b4b47f00f9633c787b04e0ffed0`；pilot 未运行 dev、未生成 `final_dev_metrics.json`，held-out 未访问。
+- 采样结果：20/20 step 的 `used_groups=4`；共生成 168、保留 106、丢弃 62 个 group；平均 raw rollout overhead `2.10× <= 2.30×`，最大单步 `3.00×`；generation batches 平均 `2.10`、最大 `3 <= 5`，cap exhaustion 为 0。
+- 成本结果：pilot 前 20 step 累计 `924.62s`，E2 父方法前 20 step 累计 `749.34s`，wall-time ratio `1.23391 <= 2.0`；pilot step time p50/p90 为 `45.99/52.45s`，父方法为 `37.43/37.91s`。
+- 健康与资源：无 OOM、traceback、RuntimeError、CUDA error、parse/clipping 新异常；GPU 已释放、8901 已关闭且无训练或 reward 残留进程。监控代理每次内部显示 step、完成比例、ETA、健康状态和下一检查间隔，常态不回传主对话，只在完成或异常时通知主进程；退出码必须读取文件内容。
+- 分析边界：pilot 最新 reward 与短程 loss 只用于健康检查，不能推断 Dynamic Sampling 的 dev 收益。现有证据也未触发 reward 多 worker 条件，因此正式 R2-G 继续使用 E2 的单 worker reward 服务。
+- 正式入口：commit `6ead3e3` 新增 `r2g` stage，启动前硬检查已通过的 20-step pilot；正式阶段固定 250 steps、cap 5、平均 raw overhead 上限 `2.15×`、wall-time ratio 上限 `2.0×`，保留 step 50/250 并执行一次既定 final dev。raw train query 允许因补采出现可变覆盖，但 dev 仍要求 566 token 各恰好 1 条；被过滤 query 不得表述为 optimizer batch。
+- 决策：R2-D 因 R1 未晋级而跳过；启动 R2-G。正式结果只有同时满足 `Delta PDMS_scaled >= +0.01000`、Safe/Collision/TTC 不下降、parse/clipping 不退化及两项成本线时才晋级，否则回退 E2，不调 zero 阈值、不增加 cap、不重跑 discovery seed。
+- 下一动作：提交本记录，通过 Git 同步服务器，在隔离 worktree 执行 `bash -n`、Python compile 与完整测试；门控全部通过且 GPU/8901/目标目录 clean 后启动 R2-G。
 
 ## 10. 后续记录模板
 
