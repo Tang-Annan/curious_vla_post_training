@@ -390,6 +390,35 @@ def test_dynamic_sampling_pilot_analysis_uses_preregistered_cost_gates(tmp_path)
     assert report["gates"]["passed"] is True
 
 
+def test_paired_rollout_comparison_preserves_token_pairing(tmp_path):
+    comparison = load_module(
+        ROOT / "projects/safe_grpo/compare_paired_rollouts.py", "compare_paired_rollouts"
+    )
+    manifest = tmp_path / "dev.txt"
+    baseline = tmp_path / "baseline.jsonl"
+    candidate = tmp_path / "candidate.jsonl"
+    manifest.write_text("a\nb\nc\n", encoding="utf-8")
+    baseline_rows = []
+    candidate_rows = []
+    for index, token in enumerate(("a", "b", "c")):
+        baseline_row = {"token": token}
+        candidate_row = {"token": token}
+        for metric in comparison.METRICS:
+            baseline_row[metric] = float(index)
+            candidate_row[metric] = float(index + 1)
+        baseline_rows.append(baseline_row)
+        candidate_rows.append(candidate_row)
+    baseline.write_text("".join(json.dumps(row) + "\n" for row in baseline_rows), encoding="utf-8")
+    candidate.write_text("".join(json.dumps(row) + "\n" for row in reversed(candidate_rows)), encoding="utf-8")
+
+    report = comparison.compare(baseline, candidate, manifest, bootstrap_samples=100, seed=7)
+
+    assert report["tokens"] == 3
+    for values in report["metrics"].values():
+        assert values["mean_difference"] == pytest.approx(1.0)
+        assert values["paired_bootstrap_95_ci"] == pytest.approx([1.0, 1.0])
+
+
 def test_inference_loader_keeps_final_partial_batch(monkeypatch, tmp_path):
     pytest.importorskip("torch")
     data_loader = importlib.import_module("verl.trainer.data_loader")
