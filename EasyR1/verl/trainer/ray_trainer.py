@@ -697,7 +697,7 @@ class RayPPOTrainer:
             main_tqdm.update()
 
         # perform validation after training
-        if self.val_reward_fn is not None:
+        if self.val_reward_fn is not None and not self.config.trainer.skip_final_validation:
             if (
                 val_metrics is None
                 or self.config.trainer.val_freq <= 0

@@ -73,7 +73,7 @@ class AlgorithmConfig:
     lam: float = 1.0
     """lambda value for ppo gae advantage estimator"""
     adv_estimator: str = "grpo"
-    """advantage estimator, including `grpo` and `std_floor_grpo`"""
+    """advantage estimator, including `grpo`, `dr_grpo`, and `std_floor_grpo`"""
     std_floor: float = 0.05
     """minimum group reward standard deviation used by `std_floor_grpo`"""
     disable_kl: bool = False
@@ -130,6 +130,8 @@ class TrainerConfig:
     """validate before training"""
     val_only: bool = False
     """validate only, skip training"""
+    skip_final_validation: bool = False
+    """skip validation after training; intended for short integration smoke runs"""
     val_generations_to_log: int = 0
     """number of generations to log for validation"""
     save_freq: int = -1

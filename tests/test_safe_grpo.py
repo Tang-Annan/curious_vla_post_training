@@ -114,6 +114,19 @@ def test_std_floor_zero_variance_is_zero():
     assert torch.equal(advantages, torch.zeros_like(advantages))
 
 
+def test_dr_grpo_centers_without_std_normalization():
+    torch = pytest.importorskip("torch")
+    core = importlib.import_module("verl.trainer.core_algos")
+    rewards = torch.tensor([[0.0], [1.0], [0.90], [0.91], [0.5], [0.5]])
+    mask = torch.ones_like(rewards)
+    index = ["large", "large", "small", "small", "zero", "zero"]
+    advantages, returns = core.compute_dr_grpo_outcome_advantage(rewards, mask, index)
+
+    expected = torch.tensor([[-0.5], [0.5], [-0.005], [0.005], [0.0], [0.0]])
+    assert torch.allclose(advantages, expected, atol=1e-7)
+    assert torch.equal(returns, advantages)
+
+
 def test_rollout_pairwise_distances():
     pytest.importorskip("numpy")
     analysis = load_module(ROOT / "projects/safe_grpo/analyze_rollouts.py", "analyze_rollouts")
@@ -316,8 +329,14 @@ def test_formal_launcher_keeps_e2_e3_e4_as_single_factor_ablations():
     assert 'algorithm.adv_estimator="$ADV_ESTIMATOR"' in source
     assert 'comm -12 <(sort "$ITERATION_MANIFEST") <(sort "$HELDOUT_MANIFEST")' in source
     assert 'ACTIVE_MANIFEST="$TRAIN_MANIFEST"' in source
-    assert 'tracker.get("last_global_step") != 250' in source
-    assert '"global_step_250" / "actor"' in source
+    assert "MAX_STEPS=250" in source
+    assert 'tracker.get("last_global_step") != expected_step' in source
+    assert 'r1)\n        EXP_NAME=r1_fals_dr_grpo_lora_1k_seed20260812' in source
+    assert "ADV_ESTIMATOR=dr_grpo" in source
+    assert 'json.load(handle)["gates"]["r1"]["passed"]' in source
+    assert 'R1_SMOKE_STEPS="${R1_SMOKE_STEPS:-}"' in source
+    assert 'trainer.skip_final_validation="$SKIP_FINAL_VALIDATION"' in source
+    assert 'tracker_path.parent / f"global_step_{expected_step}" / "actor"' in source
 
 
 def test_inference_loader_keeps_final_partial_batch(monkeypatch, tmp_path):

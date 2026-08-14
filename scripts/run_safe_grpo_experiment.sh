@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-STAGE="${1:?Usage: run_safe_grpo_experiment.sh <e0|d0|e1|e2|e3|e4>}"
+STAGE="${1:?Usage: run_safe_grpo_experiment.sh <e0|d0|e1|e2|e3|e4|r1>}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/autodl-tmp/curious-vla-workspace}"
 PROJECT_ROOT="${PROJECT_ROOT:-$WORKSPACE_ROOT/src/curious_vla_post_training}"
 EASYR1_ROOT="$PROJECT_ROOT/EasyR1"
@@ -15,6 +15,8 @@ FALS_MANIFEST="${FALS_MANIFEST:-}"
 CACHE_PATH="$WORKSPACE_ROOT/exp_root/metric_cache_released_5656"
 EXPERIMENT_ROOT="$WORKSPACE_ROOT/experiments/safe_grpo"
 E3_DIAGNOSIS="${E3_DIAGNOSIS:-$EXPERIMENT_ROOT/e3_sldr_lora_1k_seed20260812/train_diagnosis.json}"
+R0_REPORT="${R0_REPORT:-$EXPERIMENT_ROOT/r0_difficulty_bias_seed20260812_retry1/results/r0_report.json}"
+R1_SMOKE_STEPS="${R1_SMOKE_STEPS:-}"
 SEED=20260812
 REWARD_SERVER_PORT="${REWARD_SERVER_PORT:-8901}"
 REWARD_FUNCTION=./verl/utils/reward_score/navsim/navsim_reward_grouped.py:compute_score_group_fast
@@ -53,11 +55,38 @@ if ratio is None or ratio < 0.10:
     raise SystemExit(f"E4 gate failed: E3 low_nonzero_std_ratio={ratio!r} < 0.10")
 PY
         ;;
+    r1)
+        EXP_NAME=r1_fals_dr_grpo_lora_1k_seed20260812
+        [[ -n "$FALS_MANIFEST" ]] || { echo "FALS_MANIFEST is required for R1." >&2; exit 1; }
+        ITERATION_MANIFEST="$FALS_MANIFEST"
+        ADV_ESTIMATOR=dr_grpo
+        "$WORKSPACE_ROOT/envs/curious/bin/python" - "$R0_REPORT" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    passed = json.load(handle)["gates"]["r1"]["passed"]
+if passed is not True:
+    raise SystemExit("R1 gate failed in the frozen R0 report.")
+PY
+        ;;
     *)
         echo "Unknown stage: $STAGE" >&2
         exit 2
         ;;
 esac
+
+MAX_STEPS=250
+SAVE_FREQ=50
+SKIP_FINAL_VALIDATION=false
+if [[ -n "$R1_SMOKE_STEPS" ]]; then
+    [[ "$STAGE" == r1 ]] || { echo "R1_SMOKE_STEPS is only supported for R1." >&2; exit 1; }
+    [[ "$R1_SMOKE_STEPS" =~ ^[1-9][0-9]*$ ]] || { echo "R1_SMOKE_STEPS must be a positive integer." >&2; exit 1; }
+    MAX_STEPS="$R1_SMOKE_STEPS"
+    SAVE_FREQ="$R1_SMOKE_STEPS"
+    SKIP_FINAL_VALIDATION=true
+    EXP_NAME="${EXP_NAME}_smoke${R1_SMOKE_STEPS}"
+fi
 
 RUN_DIR="$EXPERIMENT_ROOT/$EXP_NAME"
 ACTIVE_MANIFEST="$ITERATION_MANIFEST"
@@ -69,7 +98,7 @@ fi
 for path in "$MODEL_PATH" "$DATA_PATH" "$TRAIN_MANIFEST" "$DEV_MANIFEST" "$HELDOUT_MANIFEST" "$CACHE_PATH/metadata"; do
     [[ -e "$path" ]] || { echo "Missing required path: $path" >&2; exit 1; }
 done
-if [[ "$STAGE" =~ ^e[1-4]$ ]]; then
+if [[ "$STAGE" =~ ^(e[1-4]|r1)$ ]]; then
     [[ -e "$ITERATION_MANIFEST" ]] || { echo "Missing required path: $ITERATION_MANIFEST" >&2; exit 1; }
     [[ $(grep -cve '^[[:space:]]*$' "$ITERATION_MANIFEST") -eq 1000 ]] || {
         echo "Training manifest must contain exactly 1000 non-empty tokens." >&2
@@ -109,11 +138,12 @@ git -C "$PROJECT_ROOT" status --porcelain > "$RUN_DIR/source_status.txt"
 cp "$DEV_MANIFEST" "$RUN_DIR/dev_tokens.txt"
 if [[ "$STAGE" == d0 ]]; then
     cp "$TRAIN_MANIFEST" "$RUN_DIR/train_tokens.txt"
-elif [[ "$STAGE" =~ ^e[1-4]$ ]]; then
+elif [[ "$STAGE" =~ ^(e[1-4]|r1)$ ]]; then
     cp "$ITERATION_MANIFEST" "$RUN_DIR/train_tokens.txt"
 fi
-printf 'stage=%s\nexperiment=%s\nseed=%s\ntrain_manifest=%s\nreward_function=%s\nadv_estimator=%s\n' \
+printf 'stage=%s\nexperiment=%s\nseed=%s\ntrain_manifest=%s\nreward_function=%s\nadv_estimator=%s\nmax_steps=%s\nskip_final_validation=%s\n' \
     "$STAGE" "$EXP_NAME" "$SEED" "$ACTIVE_MANIFEST" "$REWARD_FUNCTION" "$ADV_ESTIMATOR" \
+    "$MAX_STEPS" "$SKIP_FINAL_VALIDATION" \
     > "$RUN_DIR/run.env"
 exec > "$RUN_DIR/run.log" 2>&1
 
@@ -211,12 +241,35 @@ else
         data.token_filter_file="$ITERATION_MANIFEST" \
         algorithm.adv_estimator="$ADV_ESTIMATOR" \
         algorithm.std_floor=0.05 \
-        trainer.max_steps=250 \
+        trainer.max_steps="$MAX_STEPS" \
         trainer.val_before_train=false \
         trainer.val_freq=-1 \
-        trainer.save_freq=50 \
+        trainer.skip_final_validation="$SKIP_FINAL_VALIDATION" \
+        trainer.save_freq="$SAVE_FREQ" \
         trainer.save_limit=2 \
         trainer.save_checkpoint_path="$RUN_DIR/checkpoints"
+
+    "$WORKSPACE_ROOT/envs/curious/bin/python" - "$RUN_DIR/checkpoints/checkpoint_tracker.json" "$MAX_STEPS" <<'PY'
+import json
+import pathlib
+import sys
+
+tracker_path = pathlib.Path(sys.argv[1])
+expected_step = int(sys.argv[2])
+with tracker_path.open(encoding="utf-8") as handle:
+    tracker = json.load(handle)
+if tracker.get("last_global_step") != expected_step:
+    raise SystemExit(
+        f"Expected final checkpoint at step {expected_step}, got {tracker.get('last_global_step')!r}."
+    )
+if not (tracker_path.parent / f"global_step_{expected_step}" / "actor").is_dir():
+    raise SystemExit(f"Final actor checkpoint global_step_{expected_step} is missing.")
+PY
+
+    if [[ -n "$R1_SMOKE_STEPS" ]]; then
+        touch "$RUN_DIR/COMPLETE"
+        exit 0
+    fi
 
     mapfile -t rollout_files < <(find "checkpoints/debug/$EXP_NAME" -maxdepth 1 -name 'generations_*.jsonl' -type f | sort)
     [[ ${#rollout_files[@]} -ge 1 ]] || { echo "Expected at least one $STAGE rollout file." >&2; exit 1; }
@@ -242,19 +295,6 @@ else
         --manifest "$DEV_MANIFEST" \
         --expected-rollouts 1 \
         > "$RUN_DIR/final_dev_metrics.json"
-    "$WORKSPACE_ROOT/envs/curious/bin/python" - "$RUN_DIR/checkpoints/checkpoint_tracker.json" <<'PY'
-import json
-import pathlib
-import sys
-
-tracker_path = pathlib.Path(sys.argv[1])
-with tracker_path.open(encoding="utf-8") as handle:
-    tracker = json.load(handle)
-if tracker.get("last_global_step") != 250:
-    raise SystemExit(f"Expected final checkpoint at step 250, got {tracker.get('last_global_step')!r}.")
-if not (tracker_path.parent / "global_step_250" / "actor").is_dir():
-    raise SystemExit("Final actor checkpoint global_step_250 is missing.")
-PY
 fi
 
 touch "$RUN_DIR/COMPLETE"
