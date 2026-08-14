@@ -4,27 +4,27 @@
 
 ## 1. 当前快照
 
-- 最后更新：2026-08-14 11:15 CST
+- 最后更新：2026-08-14 11:55 CST
 - 开发分支：`codex/post-training-analysis`
 - 开发分支同步状态：已推送，具体 revision 以 `codex/post-training-analysis` 的 Git HEAD 为准
 - D0 source commit：`7c8adda`（运行期间未更新 checkout）
 - 固定随机种子：`20260812`
-- 当前动作：E4 已完成验收；E2 保持 dev 最佳候选
-- 下一科学实验：E5 grouped reward throughput
-- 正式实验顺序：`E0 → D0 → E1 → E2 → E3 → E4（条件门控）→ E5 → F0`
+- 当前动作：服务器无效产物清理完成；E0/D0/E2 与 E2 两个候选 checkpoint 完整保留
+- 下一科学实验：F0-A E2 checkpoint dev 审计
+- 正式实验顺序：`E0 → D0 → E1 → E2 → E3 → E4（条件门控）→ F0-A checkpoint 审计 → F0-B held-out`；E5 后移为可选工程验证
 
 | 阶段 | 状态 | 当前结论 | 下一动作 |
 | --- | --- | --- | --- |
 | E0 Stage-2 dev baseline | 完成 | 566/566 dev baseline 已冻结 | 作为同协议 dev 比较基线 |
-| A0 validation 加速隔离测试 | 完成 | 保持 batch 4 / token budget 4608；拒绝独立 flash-attn、LRU 和 batch 8 | A1 只实现无损 reward 并发 |
+| A0 validation 加速隔离测试 | 完成（原始产物已清理） | 保持 batch 4 / token budget 4608；拒绝独立 flash-attn、LRU 和 batch 8 | 结论保留，不再重复测试 |
 | A1 reward 并发回归 | 延期 | 候选尚未完成端到端远程回归，不进入正式路线 | 仅在 E5 吞吐阶段重新评估 |
 | D0 train rollout diagnosis | 完成 | 4,525×4 完整通过；存在可学习方差与 headroom | 保留为 E1–E4 train 诊断基线 |
-| E1 Vanilla LoRA-GRPO | 完成 | 产物完整，但 final-dev 低于 E0，不作为最终候选 | 保留为 vanilla 对照 |
-| E2 FALS only | 完成 | final-dev 超过 E0/E1，支持 FALS 独立贡献 | 保留为当前最佳候选 |
-| E3 SLDR only | 完成 | final-dev 低于 E0/E1/E2，SLDR 独立贡献为负 | 保留为 E4 对照，不作为候选 |
-| E4 Std-Floor GRPO | 完成 | 相对 E3 有补救，但仍低于 E0/E2，不进入最终候选 | 保留为 std-floor 正对照，E2 仍为最佳候选 |
-| E5 grouped reward throughput | 待执行 | 在 E2 候选上验证原 reward 服务 4 workers + 有界客户端并发 | 固定 E2 rollout 输入，完成严格等价性与吞吐回归 |
-| F0 最终审计与 held-out | 待执行 | held-out 保持封存 | dev 完成选型后一次性评估 |
+| E1 Vanilla LoRA-GRPO | 完成（产物已清理） | final-dev 低于 E0，不作为最终候选 | 仅保留 vanilla 负对照结论 |
+| E2 FALS only | 完成 | dev 均值最佳，但相对 E0 的 paired-bootstrap CI 跨 0 | 保留 step 50/250，先完成 checkpoint 审计 |
+| E3 SLDR only | 完成（产物已清理） | final-dev 低于 E0/E1/E2，SLDR 独立贡献为负 | 仅保留 SLDR 负对照结论 |
+| E4 Std-Floor GRPO | 完成（产物已清理） | 相对 E3 有补救，但仍低于 E0/E2，不进入最终候选 | 仅保留 std-floor 补救结论 |
+| E5 grouped reward throughput | 后移 / 可选 | 不改变已完成模型，只对未来训练或生产 reward 服务有价值 | 不作为 checkpoint 冻结或 held-out 前置门控 |
+| F0 最终审计与 held-out | 待执行 | held-out 保持封存 | 先做 F0-A step-50 dev 审计，再冻结并执行一次 F0-B |
 
 ## 2. 不可变实验约束
 
@@ -381,6 +381,25 @@
 - 分析：E3→E4 的直接对照支持“std-floor 能补救一部分 SLDR 损失”，但补救幅度不足以恢复冻结 baseline，更不足以替代 FALS。训练诊断与 dev 改善方向不完全一致，且当前只有单 seed，因此不把 E4 解读为普遍优于普通 GRPO。E2 仍是唯一同时超过 E0、E1、E3 和 E4 主要 dev 指标的候选；held-out 继续封存。
 - 决策：接受 E4 为完整的 std-floor 正对照，不调参、不重跑、不将 SLDR 或 std-floor 叠加到 E2。冻结 E2 `global_step_250/actor` 为进入 E5 的模型候选；E5 只验证 reward 服务吞吐优化，不改变模型选择或生成协议。
 - 下一动作：在固定 E2 rollout 输入上执行 E5，比较冻结的单 Gunicorn worker/串行 grouped reward 基线与“原 reward 服务 4 workers + 有界客户端并发”候选；逐样本 reward 指标必须完全一致、无丢失或重排，并重复测量吞吐及 p50/p90 latency。未通过等价性时保留单 worker 基线，不访问 held-out。
+
+### 记录 018：E4 后计划重新审计
+
+- 状态：计划已调整；E5 不再作为下一正式阶段或模型选择门控。
+- 现有证据：对 E0/E1/E2/E4 的同一组 566 个 dev token 做固定 seed `20260814`、20,000 次 paired bootstrap。E2 相对 E0 的 PDMS scaled 均值差为 `+0.01292`，95% CI `[-0.00924, +0.03516]`；safe 均值差为 `+0.01590`，95% CI `[-0.00883, +0.04064]`，均跨 0。ego progress 差为 `-0.00197`，95% CI `[-0.00378, -0.00027]`。E2 相对 E1/E4 的 PDMS scaled 与 safe CI 为正，因此它仍是已训练变体中的最佳候选，但尚不足以声称稳定超过 Stage-2 baseline。
+- checkpoint 缺口：E2 同时保留完整 `global_step_50` 与 `global_step_250`，当前只有 step 250 做过冻结 566-token dev。原 F0 本就要求只用 dev 确定 checkpoint，因此 step 50 是 held-out 前唯一需要补齐的模型选择证据。
+- E5 审计：4 workers + 有界客户端并发只在 A0 小样本筛选中显示约 `2.46×` 吞吐，端到端实现已回退；所有正式训练已经完成，现在执行 E5 不能改善 E2 模型，只会增加评估基础设施变量。
+- 决策：把 F0 拆为 F0-A checkpoint dev 审计和 F0-B 一次性 held-out；E5 后移为可选工程验证。F0-A 仅新增一次 step-50 validation，复用 step-250 既有结果；只有 step 50 的 PDMS scaled 更高且 safe、collision、TTC 均不低于 step 250 时才切换，否则保留 step 250。
+- 下一动作：在启动 F0-A 前先释放服务器中已排除候选和失败实验的大体积产物，保留 E0/D0/E2、manifest 与闭环结论。
+
+### 记录 019：服务器无效产物清理
+
+- 状态：通过；候选、基线、诊断和隔离证据均保留，磁盘压力解除。
+- 删除范围：移除失败的 E0 full-actor 目录、E1/E3/E4 正式实验目录、A0 benchmark 原始目录、被回退的 speed/smoke checkpoint 与对应 debug/launcher 产物。相关事实和结论继续由记录 001、003、011、015、017 保存。
+- 保留范围：E0 正式 baseline、D0 全量诊断、E2 正式候选、全部 manifest 和代码 checkout。E2 的 `global_step_50/actor`、`global_step_250/actor`、`final_dev_metrics.json` 均已逐项复核存在；FALS top-1,000 manifest 保留，服务器 source status 为空。
+- 空间结果：`/root/autodl-tmp` 从 `113/120 GB`、使用率 `95%`、可用 `7.2 GB` 降至 `58/120 GB`、使用率 `49%`、可用 `63 GB`，实际释放约 `55 GB`。正式实验区现在只剩 E0、D0 和 E2，合计约 `16 GB`。
+- 恢复性：上述远程原始产物已直接删除，不能从服务器恢复；其指标、分析、决策与适用边界保留在本台账中。
+- 决策：不再删除 E0/D0/E2 或 E2 的任一现存 checkpoint；现有空间足以完成 F0-A 和 F0-B。
+- 下一动作：为 E2 `global_step_50` 建立隔离的 validation-only 运行，固定现有 566-token dev、batch 4、token budget 4608、CUDA Graph、vLLM 内置 FlashAttention 和 seed `20260812`，完成后按记录 018 的预注册规则冻结唯一 checkpoint。
 
 ## 6. 后续记录模板
 
