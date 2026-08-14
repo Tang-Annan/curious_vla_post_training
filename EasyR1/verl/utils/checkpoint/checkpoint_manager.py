@@ -138,12 +138,7 @@ def find_latest_ckpt(
 
 
 def remove_obsolete_ckpt(
-    path: str,
-    global_step: int,
-    best_global_step: int,
-    save_limit: int = -1,
-    directory_format: str = "global_step_{}",
-    keep_global_steps: tuple[int, ...] = (),
+    path: str, global_step: int, best_global_step: int, save_limit: int = -1, directory_format: str = "global_step_{}"
 ):
     """
     Remove the obsolete checkpoints that exceed the save limit.
@@ -161,11 +156,9 @@ def remove_obsolete_ckpt(
                 ckpt_global_steps.append(step)
 
     ckpt_global_steps.sort(reverse=True)
-    protected_steps = set(keep_global_steps)
-    protected_steps.add(best_global_step)
-    protected_count = sum(step in protected_steps for step in ckpt_global_steps)
-    ckpt_global_steps = [step for step in ckpt_global_steps if step not in protected_steps]
-    num_ckpt_to_keep = max(num_ckpt_to_keep - protected_count, 0)
+    if best_global_step in ckpt_global_steps:  # do not remove the best ckpt
+        ckpt_global_steps.remove(best_global_step)
+        num_ckpt_to_keep = max(num_ckpt_to_keep - 1, 0)
 
     for step in ckpt_global_steps[num_ckpt_to_keep:]:
         folder_path = os.path.join(path, directory_format.format(step))

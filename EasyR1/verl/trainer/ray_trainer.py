@@ -347,7 +347,6 @@ class RayPPOTrainer:
             self.global_step,
             self.best_global_step,
             self.config.trainer.save_limit,
-            keep_global_steps=self.config.trainer.keep_checkpoint_steps,
         )
         folder_path = os.path.join(self.config.trainer.save_checkpoint_path, f"global_step_{self.global_step}")
         actor_path = os.path.join(folder_path, "actor")

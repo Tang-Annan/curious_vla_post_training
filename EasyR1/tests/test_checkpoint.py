@@ -48,19 +48,3 @@ def test_remove_obsolete_ckpt(save_checkpoint_path):
     for step in range(5, 30, 5):
         is_exist = step in [10, 25]
         assert os.path.exists(os.path.join(save_checkpoint_path, f"global_step_{step}")) == is_exist
-
-
-def test_remove_obsolete_ckpt_preserves_preregistered_step_within_limit(save_checkpoint_path):
-    for step in range(50, 250, 50):
-        os.makedirs(os.path.join(save_checkpoint_path, f"global_step_{step}"), exist_ok=True)
-
-    remove_obsolete_ckpt(
-        save_checkpoint_path,
-        global_step=250,
-        best_global_step=0,
-        save_limit=2,
-        keep_global_steps=(50,),
-    )
-
-    for step in range(50, 250, 50):
-        assert os.path.exists(os.path.join(save_checkpoint_path, f"global_step_{step}")) == (step == 50)

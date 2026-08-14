@@ -355,8 +355,6 @@ def test_formal_launcher_keeps_e2_e3_e4_as_single_factor_ablations():
     assert 'EXP_NAME=r2g_e2_dynamic_lora_1k_seed20260812' in source
     assert "FILTER_MODE=zero_variance" in source
     assert "MAX_TRY_MAKE_BATCH=5" in source
-    assert "KEEP_CHECKPOINT_STEPS='[50]'" in source
-    assert 'trainer.keep_checkpoint_steps="$KEEP_CHECKPOINT_STEPS"' in source
     assert '--pilot-log "$RUN_DIR/checkpoints/experiment_log.jsonl"' in source
     assert "--expected-steps 250" in source
     assert "--max-mean-raw-overhead 2.15" in source
