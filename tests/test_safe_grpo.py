@@ -2,6 +2,7 @@ import importlib
 import importlib.util
 import json
 import sys
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "EasyR1"))
+sys.path.insert(0, str(ROOT / "projects/safe_grpo"))
 
 
 def load_module(path: Path, name: str):
@@ -193,6 +195,70 @@ def test_rollout_analysis_uses_training_reward_and_sample_group_std(tmp_path):
     assert report["reward_mean"] == pytest.approx(0.05)
     assert report["group_metrics"][0]["reward_std"] == pytest.approx(0.070710678)
     assert report["low_nonzero_std_ratio"] == pytest.approx(1.0)
+
+
+def test_r0_difficulty_bias_analysis_and_gates(tmp_path):
+    pytest.importorskip("matplotlib")
+    analysis = load_module(
+        ROOT / "projects/safe_grpo/analyze_difficulty_bias.py", "analyze_difficulty_bias"
+    )
+    tokens = [f"t{index}" for index in range(10)]
+    fals = tokens[:4]
+    random = tokens[4:8]
+    train_manifest = tmp_path / "train.txt"
+    fals_manifest = tmp_path / "fals.txt"
+    random_manifest = tmp_path / "random.txt"
+    train_manifest.write_text("\n".join(tokens) + "\n", encoding="utf-8")
+    fals_manifest.write_text("\n".join(fals) + "\n", encoding="utf-8")
+    random_manifest.write_text("\n".join(random) + "\n", encoding="utf-8")
+
+    d0_rows = []
+    for index, token in enumerate(tokens):
+        rewards = [0.1 * index, 0.1 * index + 0.1, 0.1 * index + 0.2, 0.1 * index + 0.3]
+        d0_rows.extend(
+            {"token": token, "pdms_scaled": reward, "safe": float(reward > 0.5)} for reward in rewards
+        )
+    e2_rewards = {
+        "t0": [0.0, 1.0],
+        "t1": [0.1, 0.9],
+        "t2": [0.4, 0.6],
+        "t3": [0.5, 0.5],
+    }
+    e2_rows = [
+        {"token": token, "pdms_scaled": reward, "safe": float(reward > 0.5)}
+        for token, rewards in e2_rewards.items()
+        for reward in rewards
+    ]
+    d0_rollouts = tmp_path / "d0.jsonl"
+    e2_rollouts = tmp_path / "e2.jsonl"
+    d0_rollouts.write_text("".join(json.dumps(row) + "\n" for row in d0_rows), encoding="utf-8")
+    e2_rollouts.write_text("".join(json.dumps(row) + "\n" for row in e2_rows), encoding="utf-8")
+    output_dir = tmp_path / "r0"
+
+    report = analysis.analyze(
+        Namespace(
+            d0_rollouts=d0_rollouts,
+            e2_rollouts=e2_rollouts,
+            train_manifest=train_manifest,
+            fals_manifest=fals_manifest,
+            random_manifest=random_manifest,
+            output_dir=output_dir,
+            expected_selection_size=4,
+            bootstrap_samples=100,
+            monte_carlo_trials=10000,
+            target_groups=4,
+            steps=250,
+            max_generation_batches=8,
+            seed=20260814,
+        )
+    )
+
+    assert report["e2"]["informative_group_ratio"] == pytest.approx(0.75)
+    assert report["gates"]["r1"]["passed"] is True
+    assert report["gates"]["r2"]["passed"] is True
+    assert report["next_stage"] == "r1"
+    for filename in ("group_metrics.csv", "advantage_scale.csv", "r0_report.json", "difficulty_bias.png"):
+        assert (output_dir / filename).stat().st_size > 0
 
 
 def test_split_rollouts_enforces_train_and_final_dev_coverage(tmp_path):

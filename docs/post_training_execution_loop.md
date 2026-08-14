@@ -1,177 +1,459 @@
-# Curious-VLA 后训练计划执行闭环
+# Curious-VLA 后训练科学增量实施与证据闭环
 
-> 本文档是后训练阶段的唯一执行台账，不包含环境、数据下载、切分生成等前期准备。每个阶段结束后，必须先在本文档记录证据、分析和决策，再启动下一阶段。实验目录中的日志和产物是原始证据，本文档保存结论及其推导链。
+> 本文档是当前后训练方法开发的唯一执行方案与决策台账。服务器实验目录中的日志、配置和产物是原始证据，本文档保存可追溯事实、解释边界、阶段门控和下一步决策。已完成记录只追加、不回写；外部论文只提供待验证假设，不能替代 Curious-VLA 自身证据。
 
-## 1. 当前快照
+## 1. 当前决策快照
 
-- 最后更新：2026-08-14 11:55 CST
-- 开发分支：`codex/post-training-analysis`
-- 开发分支同步状态：已推送，具体 revision 以 `codex/post-training-analysis` 的 Git HEAD 为准
-- D0 source commit：`7c8adda`（运行期间未更新 checkout）
-- 固定随机种子：`20260812`
-- 当前动作：服务器无效产物清理完成；E0/D0/E2 与 E2 两个候选 checkpoint 完整保留
-- 下一科学实验：F0-A E2 checkpoint dev 审计
-- 正式实验顺序：`E0 → D0 → E1 → E2 → E3 → E4（条件门控）→ F0-A checkpoint 审计 → F0-B held-out`；E5 后移为可选工程验证
+- 最后更新：2026-08-14
+- 开发分支：`codex/post-training-analysis`；本次改写前 Git HEAD：`3d1eeb5`
+- 当前最佳已训练候选：E2 FALS-only `global_step_250/actor`
+- 当前唯一下一动作：R0 离线诊断；完成并写回门控结论前不启动新 GPU 训练
+- 当前封存动作：暂停 E2 step-50 dev 审计；held-out 继续完全封存
+- 保留的服务器核心证据：E0、D0、E2、全部 manifest，以及 E2 step 50/250 checkpoint
+- 已排除方向：继续调 SLDR、把 Std-Floor 直接叠加到 E2、为了吞吐改动正式生成协议
+- 当前主线：先验证“FALS 选择目标与 GRPO 优化尺度是否错配”，再分别判断 Dr.GRPO 与 Dynamic Sampling；Recovery 仅保留为条件研究分支
 
-| 阶段 | 状态 | 当前结论 | 下一动作 |
+| 阶段 | 状态 | 目的 | 当前动作 |
 | --- | --- | --- | --- |
-| E0 Stage-2 dev baseline | 完成 | 566/566 dev baseline 已冻结 | 作为同协议 dev 比较基线 |
-| A0 validation 加速隔离测试 | 完成（原始产物已清理） | 保持 batch 4 / token budget 4608；拒绝独立 flash-attn、LRU 和 batch 8 | 结论保留，不再重复测试 |
-| A1 reward 并发回归 | 延期 | 候选尚未完成端到端远程回归，不进入正式路线 | 仅在 E5 吞吐阶段重新评估 |
-| D0 train rollout diagnosis | 完成 | 4,525×4 完整通过；存在可学习方差与 headroom | 保留为 E1–E4 train 诊断基线 |
-| E1 Vanilla LoRA-GRPO | 完成（产物已清理） | final-dev 低于 E0，不作为最终候选 | 仅保留 vanilla 负对照结论 |
-| E2 FALS only | 完成 | dev 均值最佳，但相对 E0 的 paired-bootstrap CI 跨 0 | 保留 step 50/250，先完成 checkpoint 审计 |
-| E3 SLDR only | 完成（产物已清理） | final-dev 低于 E0/E1/E2，SLDR 独立贡献为负 | 仅保留 SLDR 负对照结论 |
-| E4 Std-Floor GRPO | 完成（产物已清理） | 相对 E3 有补救，但仍低于 E0/E2，不进入最终候选 | 仅保留 std-floor 补救结论 |
-| E5 grouped reward throughput | 后移 / 可选 | 不改变已完成模型，只对未来训练或生产 reward 服务有价值 | 不作为 checkpoint 冻结或 held-out 前置门控 |
-| F0 最终审计与 held-out | 待执行 | held-out 保持封存 | 先做 F0-A step-50 dev 审计，再冻结并执行一次 F0-B |
+| E0–E4 | 已闭环 | 建立 Stage-2、Vanilla GRPO、FALS、SLDR、Std-Floor 的证据基线 | 不重跑、不调参 |
+| R0 | 待执行 | 用现有 D0/E2 rollout 诊断 advantage-scale mismatch 与 zero-signal group | 当前唯一动作 |
+| R1 | 条件执行 | FALS + Dr.GRPO 单因素消融 | 仅在 R0-R1 门控通过后启动 |
+| R2-D / R2-G | 条件执行 | 在线过滤 zero-variance group；父方法由 R1 结果决定 | 不默认依赖 R1 成功 |
+| R3 | 可选 | Failure-Guided Recovery 等预算可行性对照 | 核心 R1/R2 路线完成后再决定 |
+| C0 | 条件执行 | 最终新方法与 E2 的匹配训练种子确认 | 仅对达到晋级线的方法执行 |
+| F0 | 暂停 | 只审计最终胜出方法的预注册 checkpoint | 方法开发结束后恢复 |
+| F1 | 封存 | 一次性 held-out 确认 | 代码、方法、checkpoint 全部冻结后执行 |
 
-## 2. 不可变实验约束
+当前自适应路线为：
 
-1. train/dev/held-out 严格隔离。held-out 不得参与训练、FALS、阈值选择、checkpoint 选择或超参数调整。
-2. 正式 dev 比较固定为 566 个 token；D0 固定覆盖 4,525 个 train token，每 token 4 个 rollout，共 18,100 行。
-3. 正式比较统一使用 `max_response_length=512`、seed `20260812`、vLLM CUDA Graph 和冻结的 token manifest。
-4. 任何可能改变生成随机序列或输出分布的协议变更，不能直接与现有 E0 比较。若决定采用，必须用新协议重跑并重新冻结 E0。
-5. 只允许依据 train rollout 构建 FALS；dev 只用于模型选择和消融比较；held-out 只用于最终一次性确认。
-6. 单卡 24 GB 环境中，E0/D0 保留 rank-8、零初始化的 LoRA wrapper。PEFT 的 LoRA B 初始为零，因此不改变 Stage-2 初始输出；移除 wrapper 已被实测证明会突破 hybrid-engine 显存预算。
-7. 每个正式阶段必须保存 source commit、source status、resolved config、seed、manifest、日志、rollout、指标和退出状态。证据不完整时不得标记完成。
-8. 监控只读。预计剩余时间大于 1 小时时每 1 小时检查；大于 30 分钟且不超过 1 小时时每 30 分钟检查；大于 10 分钟且不超过 30 分钟时每 10 分钟检查；不超过 10 分钟时每 5 分钟检查。正常状态不写入对话和本文档，只有完成、失败或决策相关事件进入台账。
+```text
+R0
+├─ R1 动机成立 ──> R1
+│                  ├─ R1 晋级 + dead-group 门控成立 ──> R2-D（Dr.GRPO + Dynamic）
+│                  ├─ R1 不晋级 + dead-group 门控成立 ─> R2-G（GRPO + Dynamic）
+│                  └─ dead-group 门控不成立 ──────────> C0 / F0
+├─ R1 动机不成立、dead-group 门控成立 ───────────────> R2-G
+└─ 两个门控均不成立 ─────────────────────────────────> 以 E2 进入 F0
+```
 
-### 2.1 已冻结的正式配置
+R3 不在这条硬主线中；它的成功与否不得阻塞最终审计。
 
-以下配置在 E0 和 A0 中已完成验证，从 D0 起固定，不再重复做 FlashAttention、batch size、token budget、LRU 或 reward 并发探索：
+## 2. 已完成证据基线
 
-| 项目 | 固定值 |
+### 2.1 同协议 566-token dev 结果
+
+| 阶段 | 唯一变化 | PDMS scaled | PDMS | Safe | Collision | DAC | Progress | TTC | Comfort | 结论 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| E0 | Stage-2 baseline | 0.65938 | 0.68361 | 0.72438 | 0.96643 | 0.75265 | 0.91135 | 0.94876 | 0.92049 | 冻结基线 |
+| E1 | 随机 1k + Vanilla GRPO | 0.64281 | 0.66691 | 0.70671 | 0.95936 | 0.74205 | 0.91071 | 0.94170 | 0.91873 | 完整负对照 |
+| E2 | FALS 1k + Vanilla GRPO | 0.67230 | 0.69758 | 0.74028 | 0.96908 | 0.76678 | 0.90938 | 0.95406 | 0.92049 | 当前最佳候选 |
+| E3 | 随机 1k + SLDR | 0.62994 | 0.65266 | 0.68905 | 0.95760 | 0.72792 | 0.90941 | 0.93816 | 0.91873 | SLDR 独立贡献为负 |
+| E4 | E3 + Std-Floor | 0.64344 | 0.66691 | 0.70848 | 0.95760 | 0.74558 | 0.91016 | 0.94346 | 0.92049 | 部分补救 E3，未恢复 E0 |
+
+E2 相对 E0 的点估计为：PDMS scaled `+0.01292`、PDMS `+0.01397`、Safe `+0.01590`；Progress `-0.00197`。
+
+固定 seed `20260814`、20,000 次 paired bootstrap 的结果是：
+
+- E2 − E0 PDMS scaled：95% CI `[-0.00924, +0.03516]`；
+- E2 − E0 Safe：95% CI `[-0.00883, +0.04064]`；
+- E2 − E0 Progress：95% CI `[-0.00378, -0.00027]`；
+- E2 相对 E1/E4 的 PDMS scaled 与 Safe CI 为正。
+
+因此，E2 可以声明“明显优于已训练的 Vanilla GRPO 与 Std-Floor 变体”，但不能声明“已稳定超过 Stage-2”。paired bootstrap 只覆盖 dev scene 不确定性，不等价于训练随机种子稳定性。
+
+### 2.2 Train rollout 诊断
+
+| 阶段 | 训练 reward | Reward mean/std | Exact-zero std | `0 < std < 0.05` | Headroom | Safe | 解释边界 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| D0 | PDMS scaled | 0.59636 / 0.43850 | 18.14% | 16.24% | 0.26838 | 65.71% | 冻结 Stage-2，4 rollout/group |
+| E1 | PDMS scaled | 0.61446 / 0.45183 | 46.30% | 13.60% | 0.17365 | 65.55% | 随机 1k，2 rollout/group |
+| E2 | PDMS scaled | 0.35843 / 0.45048 | 38.80% | 6.70% | 0.24294 | 39.25% | FALS 主动集中困难样本 |
+| E3 | SLDR | 0.66047 / 0.42596 | 44.60% | 15.40% | 0.16895 | 65.40% | reward 定义不同，不与 E1/E2 均值直比 |
+| E4 | SLDR | 0.65341 / 0.42762 | 43.70% | 15.90% | 0.16945 | 64.75% | reward 定义不同，不与 E1/E2 均值直比 |
+
+已成立的事实：
+
+1. 随机 1k Vanilla GRPO 在当前预算下退化，且 46.30% group 没有相对优势信号。
+2. FALS 将 exact-zero group 降低 7.5 个百分点，并把 headroom 从 0.17365 提高到 0.24294；它解决了部分离线预算选择问题，但仍留下 38.80% zero-signal group。
+3. SLDR-only 明确退化；Std-Floor 只部分补救 SLDR，不能替代 FALS。
+4. E2 的训练 reward 较低是其困难样本分布的结果，不能和 E1 的随机 train 均值直接解释为 policy 退化。
+5. held-out 尚未使用；所有方法判断都来自 train 诊断与同一 dev 协议。
+6. 当前只有一个正式训练 seed。后续不能把单 seed + scene bootstrap 写成训练稳定性结论。
+7. E1/E3/E4 的大体积原始产物已清理，指标、配置和结论仅由本台账保留；E0/D0/E2 原始证据仍在服务器。
+
+## 3. 新路线要回答的科学问题
+
+| 假设 | 当前证据 | 仍缺什么 | 对应阶段 |
+| --- | --- | --- | --- |
+| H-S：FALS 能把预算移向困难且可学习场景 | E2 优于 E1，zero std 下降、headroom 上升 | 相对 Stage-2 的稳定优势 | C0 / F1 |
+| H-O：FALS 的 raw headroom 信号被标准 GRPO 的组内 std normalization 抹平 | 设计上高度可疑；E2 使用 `n=2`，非零组归一化后 advantage 幅值近乎恒定 | 同 policy 的分布诊断与 Dr.GRPO 单因素结果 | R0 / R1 |
+| H-D：当前 policy 下的 zero-variance group 浪费在线 rollout 与 reward 预算 | E2 exact-zero std 为 38.80% | 有界补采能否提升模型，成本是否可接受 | R0 / R2 |
+| H-R：部分 persistent failure 需要结构化反馈，而非继续采样 | 仅有外部工作动机 | 相对 blind resampling 的等预算本项目证据 | R3 |
+
+最终叙事只能由通过门控的模块组成：
+
+- R1/R2 未通过时，不能预先宣称 “Select–Optimize” 已成立；
+- R3 未通过时，不能把 “Recover” 写成项目贡献；
+- NoRD、DAPO、ELF-VLA、DriveDPO 等只用于形成假设，不作为 Curious-VLA 的效果证据。
+
+## 4. 冻结比较协议
+
+### 4.1 数据与选择边界
+
+1. 冻结 split：train 4,525、dev 566、held-out 565，三者两两重叠为 0。
+2. FALS 只能来自 D0 train rollout；唯一 top-1,000 manifest SHA-256 为 `fd62a6f204806beff51fa7e1fb0f853027655b4b47f00f9633c787b04e0ffed0`。
+3. dev 只用于正式方法比较和最终一次 checkpoint 审计；不得用于调阈值、改 feedback 模板、选 Dynamic Sampling 上限或反复重跑。
+4. held-out 只允许在 F1 使用一次，不参与模型、checkpoint、seed、阈值或路线选择。
+5. R0/R3 的场景、阈值和统计都只允许使用 train 证据；R3 的 feedback 不得把 GT trajectory 坐标暴露给模型。
+
+### 4.2 E2 对照协议
+
+R1/R2 默认逐项继承 E2 的 resolved config；未列出的配置也必须保持一致。
+
+| 项目 | 冻结值 |
 | --- | --- |
-| source baseline | `7c8adda`（后续功能提交必须保持相同协议） |
-| seed | `20260812` |
-| model | `models/sft_stage2` |
-| LoRA | rank 8, alpha 16, `q/k/v/o_proj`, exclude visual |
-| actor attention | `sdpa`；不另装 `flash_attn` |
-| validation rollout backend | vLLM 0.11.0 内置 `FLASH_ATTN` |
-| max response length | 512 |
+| base model | `models/sft_stage2` |
+| train manifest | 唯一 FALS top-1,000 |
+| training budget | 250 steps |
+| rollout | 2 responses/group，temperature 1.0，top_p 1.0 |
+| LoRA | rank 8，alpha 16，`q/k/v/o_proj`，exclude visual |
+| actor attention | `sdpa` |
+| validation backend | vLLM 0.11.0 内置 `FLASH_ATTN`，CUDA Graph enabled |
 | train / validation batch | 4 / 4 |
-| vLLM CUDA Graph | enabled (`enforce_eager=false`) |
+| max response length | 512 |
 | vLLM memory utilization | 0.55 |
 | max num batched tokens | 4608 |
-| reward server | 原始实现，1 Gunicorn worker，串行 grouped request |
+| train reward | 原始 grouped PDMS reward `compute_score_group_fast` |
+| validation | 同一 566-token dev、每 token 1 response |
+| seed | discovery seed `20260812` |
+| checkpoint | 正式比较先统一使用 step 250；F0 再审计预注册 checkpoint |
 
-只有正式阶段出现 OOM、错误、覆盖失败或无法完成时，才能重新打开相关配置；单纯追求可能的速度收益不再构成变更理由。本地环境缺少依赖或无法代表 GPU/NAVSIM 行为时，直接在服务器当前完整环境执行最小相关测试，不为本地兼容添加代码路径。
+单因素约束：
 
-## 3. 闭环推进规则
+- R1 相对 E2 只允许 `adv_estimator: grpo → dr_grpo`；
+- R2 相对其父方法只允许启用 exact-zero group filtering 与有界补采；
+- 不同时改 reward、FALS budget、learning rate、clip、KL、LoRA、生成参数或 validation 协议；
+- 任一变更若改变 validation 随机协议，必须在新协议下重跑对应 baseline，不能沿用现有 E0/E2。
 
-每个阶段按以下顺序闭环，不能跳过“分析与决策”直接启动下一步：
+### 4.3 已关闭与条件重开项
 
-1. **执行**：使用冻结配置和唯一实验目录启动；禁止覆盖已有正式产物。
-2. **验收**：核对退出码、覆盖数量、manifest 边界、日志异常、进程/端口/GPU 回收和必要指标。
-3. **分析**：区分事实、解释和仍未确定的部分；只在同协议结果之间声明提升或退化。
-4. **决策**：依据本节门控选择“推进、重试、回退、跳过或重跑基线”。
-5. **写回**：更新“当前快照”和对应执行记录，附原始证据路径与关键数值。
-6. **调整**：将新证据转成下一阶段的具体参数、门控或停止条件，然后才启动下一阶段。
+- 不再安装独立 `flash_attn`，不采用 batch 8、token budget 8192 或 LRU reward cache。
+- 不继续调整 SLDR 系数，不把 E3/E4 的负结果变成超参数搜索起点。
+- reward 4-worker 并发不自动恢复。只有 R2 profiling 显示 reward 等待占 step wall time 至少 20%，才允许先做固定输入等价性验证；否则保持单 worker。
+- F0-A step-50 审计暂停。R1/R2 方法开发完成前，不新增任何 checkpoint dev 查询。
+- 每个正式方法只运行一个预注册 discovery 配置；除明确实现错误外，不因 dev 结果重跑或调参。
 
-决策规则：
+### 4.4 完整性硬门控
 
-- **通过**：全部硬门控成立，推进到计划中的下一阶段。
-- **失败且原因明确**：保留失败目录，实施一个最小修复后以新目录重试；不得覆盖失败证据。
-- **证据不足**：不作效果结论，补充最小必要测试。
-- **协议发生变化**：标记现有跨协议比较无效，先重跑对应 baseline。
-- **E4 门控不成立**：记录“按计划跳过”，直接进入 E5，不为了运行 E4 而降低门槛。
-- **候选方法在 dev 无优势**：保留消融结果，不进入 held-out；选择 dev 上满足主指标与安全约束的候选。
+每个正式阶段必须保存：
 
-## 4. 分阶段实施路线与门控
+- source commit 与 source status；
+- resolved config、seed、active manifest 和 manifest hash；
+- launcher/run log、退出码、`RUNNING/COMPLETE/FAILED` 状态；
+- 原始 rollout、拆分覆盖、train diagnosis、final-dev metrics；
+- checkpoint tracker 与目标 actor checkpoint；
+- 主进程、Ray、Gunicorn、端口和 GPU 回收证据。
 
-### A0. validation 加速隔离测试
+证据不完整时只允许标记“技术失败”或“证据不足”，不得作效果结论。
 
-目标：缩短验证墙钟时间，同时不改变正式结果，不污染当前环境与实验产物。
+## 5. 实时闭环规则
 
-执行项：
+每一阶段必须按以下顺序执行，不能在结果写回前启动下一阶段：
 
-1. 核实 vLLM 实际 attention backend，判断独立安装 `flash_attn` 是否会覆盖当前路径。
-2. 用冻结 E0 rollout 测试 reward client 并发、Gunicorn worker 数和缓存候选。
-3. 用固定 64-token dev 子集测试：
-   - `val_batch_size=4`, `max_num_batched_tokens=4608`；
-   - `val_batch_size=8`, `max_num_batched_tokens=4608`；
-   - `val_batch_size=8`, `max_num_batched_tokens=8192`。
-4. 比较 wall time、覆盖、parse、生成输出/pose、reward 指标、异常和显存。
+1. **预注册**：在本节写清唯一变量、输入、输出、硬门控、晋级线和失败分支。
+2. **实现**：只修改该阶段必需代码；补最小单元测试和启动器门控。
+3. **执行**：使用新目录启动，禁止覆盖正式产物；正常运行只读监控。
+4. **技术验收**：先核对覆盖、边界、checkpoint、日志、退出码和资源回收。
+5. **效果分析**：区分点估计、paired bootstrap、训练 seed 稳定性和成本。
+6. **决策写回**：记录“推进 / 回退 / 跳过 / 最小修复重试 / 结束方法开发”。
+7. **调整下一步**：只按预注册分支改变下一阶段，不根据好看的次要指标临时换门槛。
 
-硬门控：
+通用决策语义：
 
-- 独立目录和端口；正式 E0/D0 目录、现有 Python 环境和代码 checkout 不被修改。
-- 64/64 token 覆盖，无 OOM/traceback，结束后进程、端口和 GPU 回收。
-- reward 并发优化必须逐样本指标等价；任何缓存实现只要出现指标漂移就拒绝。
-- batch/token 参数若改变生成结果，只能作为新协议候选，不能直接应用到 E1；采用前须重跑 E0。
+- **技术失败**：不作算法效果结论；保留失败目录，只修一个已定位问题后用新目录重试。
+- **科学负结果**：技术验收通过但未达晋级线；保留消融结论，回到父方法，不调参追分。
+- **证据不足**：只补能解除当前歧义的最小诊断；不得把它写成提升。
+- **工程晋级**：达到预注册点估计与安全约束，可进入下一单因素消融。
+- **科学确认**：除工程晋级外，还需 C0 匹配 seed 和 F1 held-out；未完成前统一称“dev 候选”。
 
-通过后的动作：优先应用不改变生成协议的 reward 并发优化；是否改变 batch/token 参数由速度收益与重跑 E0 的成本共同决定。
+## 6. 分阶段实施方案
 
-### E0. Stage-2 冻结 dev baseline
+### R0：Selection–Optimization Mismatch 离线诊断
 
-目标：建立所有后续训练方法的同协议 dev 基线。
+**目标**
 
-验收：566 个唯一 dev token、parse success、完整 reward 组件、无 clipping、退出与资源回收正常。
+用现有证据回答两个独立问题：
 
-### D0. 冻结 train rollout 诊断
+1. FALS 依赖的 raw reward gap/headroom 在标准 GRPO 中被多大程度地消除；
+2. exact-zero group 的比例是否高到值得引入有界 Dynamic Sampling。
 
-目标：判断 reward 方差、探索空间和可学习 headroom，为 E1–E4 的具体行为提供数据依据。
+**输入**
 
-验收：
+- D0：4,525 train token × 4 rollout，同一冻结 Stage-2 policy；
+- D0 `fals_ranking.csv`、唯一 FALS top-1,000 与冻结随机 train 1k；
+- E2：1,000 FALS token × 2 train rollout；
+- 不访问 dev 或 held-out，不运行 GPU 推理。
 
-- 4,525 个 train token，每个恰好 4 个 rollout，总计 18,100 行；
-- dev/held-out token 数均为 0；
-- `diagnosis.json` 成功生成；
-- 报告 exact-zero std、low-nonzero std、reward/headroom、pairwise ADE/FDE、parse rate 和 safe rate。
+D0 是 difficulty/variance 关联的主证据，因为所有 scene 来自同一 policy。E2 rollout 来自训练中的变化 policy，只用于描述实际训练信号；若日志没有 step 元数据，不得声称 zero-group 随 step 上升或下降。
 
-自适应决策：
+**分析项**
 
-- 根据非零方差和 headroom 分布决定 E2 的 FALS budget/排序范围，不预设阈值结论。
-- 若 parse failure 显著，先修正格式/生成问题并重跑 D0，不让解析失败主导 FALS。
-- 若绝大多数 group 零方差，记录窄策略证据；E1 仍作为必要 vanilla 对照，E2 优先选择有方差且有 headroom 的场景。
+1. 对每个 group 输出 `mean/std/min/max/reward_gap/headroom/difficulty/learnability/safe/parse`。
+2. 在 D0 上按 difficulty quintile 与 headroom quintile 报告 reward gap/std；给出固定 seed `20260814`、20,000 次 bootstrap CI 和 Spearman 相关。
+3. FALS learnability 本身包含 headroom，因此“FALS top-1k 的 std 更高”只能作描述，不能作为独立因果证据。
+4. 计算：
+   - `A_GRPO = (r - group_mean) / (group_std + eps)`；
+   - `A_Dr = r - group_mean`；
+   - 非零组中两者的绝对幅值、分位数、比例和 group ranking 变化。
+5. 单独报告 E2 `n=2` 的性质：使用 sample std 时，任意非零二元组的标准 GRPO advantage 绝对值近似 `1/sqrt(2)`；R0 要量化 raw reward gap 的异质性，而不是把这个数学事实误写成训练提升。
+6. 用 E2 empirical zero rate 对每 step 目标 4 个有效 group、2–8 次 generation batch 做 Monte Carlo，选择使 250-step 整体填充失败概率低于 1% 的最小补采上限，并报告期望 rollout/reward 开销。
 
-### E1. Vanilla LoRA-GRPO
+**拟新增产物**
 
-目标：建立普通 GRPO 后训练对照。
+远程 `experiments/safe_grpo/r0_difficulty_bias_seed20260812/`：
 
-固定项：冻结的 train 1k manifest、250 steps、相同生成/验证协议、相同 LoRA 和 reward。
+- `group_metrics.csv`；
+- `r0_report.json`；
+- `advantage_scale.csv`；
+- `difficulty_bias.png`；
+- source、命令、输入 manifest/hash 和 `COMPLETE`。
 
-验收与分析：保存 checkpoint/rollout/final dev；与 E0 比较 PDMS scaled、PDMS、safe rate、collision、drivable area、progress、TTC、comfort、parse 和 clipping。若 A0 改变生成协议，先重跑 E0 后再比较。
+**R1 启动门控**
 
-### E2. FALS only
+以下两项同时成立才启动 R1：
 
-目标：只改变样本选择，验证 failure-aware sampling 的独立贡献。
+1. E2 informative group ratio `1 - exact_zero_std_ratio >= 0.50`；
+2. E2 非零 group 的 `reward_gap` 四分位距 `P75 - P25 >= 0.10`。
 
-固定项：训练预算、step、reward、LoRA、生成和 dev 协议与 E1 一致。FALS manifest 只能由 D0 train rollout 生成。
+第一项依据现有 E2 为 61.20%，已满足；第二项由 R0 冻结计算。门槛不得在看过 R0 图后修改。
 
-决策：根据 D0 排名分布选择与 E1 等预算的主实验；若需要第二预算，只能作为预先记录的补充消融，不能用 held-out 选择。
+若 R1 门控失败，则不以 “difficulty bias” 为由训练 Dr.GRPO。
 
-### E3. SLDR only
+**R2 启动门控**
 
-目标：只改变训练 reward 为 SLDR，验证 safety-dense reward 的独立贡献。
+- E2 exact-zero std ratio `>= 0.25`；
+- Monte Carlo 估计在最多 8 个 generation batch 内可把 250-step 整体填充失败概率压到 1% 以下；
+- 预计平均 raw rollout 开销不超过 E2 的 2.0 倍。
 
-固定项：使用与 E1 相同的随机 train 1k manifest 和训练预算；不得同时引入 FALS 或 std-floor。
+现有 exact-zero 38.80% 已满足第一项。若成本门控失败，记录 Dynamic Sampling 在当前单卡预算下不可行，不能通过接受不足 batch 来绕过。
 
-分析：除 dev 总分外，重点检查 unsafe rollout 排序、safe rate、collision、drivable area，以及 group reward std 分布。
+**结果分支**
 
-### E4. Std-Floor GRPO
+- R1、R2 门控都通过：先执行 R1；
+- 仅 R1 通过：执行 R1，随后进入 C0/F0；
+- 仅 R2 通过：跳过 R1，执行 R2-G；
+- 两者都不通过：停止方法扩展，以 E2 进入 F0。
 
-目标：验证 std floor 对低但非零 group 方差的稳定作用。
+### R1：FALS + Dr.GRPO
 
-启动门控：E3 rollout 中至少 10% group 满足 `0 < std < 0.05`。否则按计划跳过。
+**唯一变量**
 
-固定项：除 advantage estimator 和 `std_floor=0.05` 外，其余变量与对应对照保持一致。
+```text
+E2: FALS top-1k + GRPO
+R1: FALS top-1k + Dr.GRPO
+```
 
-### E5. grouped reward throughput
+Dr.GRPO 使用 `A = r - group_mean`，不做组内标准差归一化。不得同时启用 Dynamic Sampling、SLDR、Std-Floor 或 reward/learning-rate 变更。
 
-目标：在最终训练配置上验证 reward 服务吞吐优化，形成可复用的生产配置。
+**最小实现范围**
 
-验收：固定输入逐样本 reward 指标完全一致、无请求丢失/重排、吞吐和 p50/p90 latency 有重复测量、资源回收正常。A0 的 64-token 结果只能作为候选筛选，不能替代此正式验证。
+- 在 `EasyR1/verl/trainer/core_algos.py` 注册 `dr_grpo`；
+- 在 `EasyR1/verl/trainer/config.py` 更新合法 estimator 说明；
+- 在 `scripts/run_safe_grpo_experiment.sh` 增加 R1 单因素入口与独立目录；
+- 在 `tests/test_safe_grpo.py` 验证去均值、零方差为零、不除 std、group size 门控和启动器唯一变量；
+- 不为未来 estimator 创建新抽象。
 
-### F0. 最终审计与 held-out
+**运行前硬门控**
 
-1. 仅使用 dev 结果确定最终候选和 checkpoint。
-2. 冻结代码、配置和 checkpoint 后，对 held-out 做一次性评估。
-3. 汇总 E0–E5 的效果、吞吐、显存、失败记录和适用边界。
-4. 核查所有正式实验可追溯到 source commit、manifest 和原始产物后，关闭计划。
+- R0 `COMPLETE` 且 R1 gate 通过；
+- FALS manifest hash 与 E2 完全一致；
+- resolved config 与 E2 逐项 diff，除 estimator 外无有效差异；
+- 本地相关测试、服务器 `py_compile/bash -n` 和 5-step 无 dev smoke 通过；
+- GPU、8901、目标目录空闲，source clean。
 
-## 5. 执行记录
+**正式验收**
+
+- 250 steps，train 1,000×2、dev 566×1；
+- step-250 actor 完整；
+- 无 train/dev/held-out 泄漏、未知 token、OOM、traceback 或 clipping；
+- 记录 gradient norm、KL、policy loss、reward gap 与 wall time，检查 raw advantage 是否造成不稳定。
+
+**工程晋级线（相对 E2）**
+
+- `Delta PDMS_scaled >= +0.01000`；
+- `Safe >= 0.74028`；
+- `Collision >= 0.96908`；
+- `TTC >= 0.95406`；
+- parse success 为 1.0，clipping 为 0；
+- 同时报告 20,000 次 paired bootstrap，不以单个次要指标替代主门槛。
+
+达到点估计门槛只代表可作为 R2 父方法；若 CI 仍跨 0，仍称“exploratory dev candidate”，必须经过 C0/F1 才能作稳定提升结论。
+
+**结果分支**
+
+- 达到全部晋级线：R1 成为当前父候选；若 R2 gate 通过，进入 R2-D。
+- 主指标为正但 `< +0.01`，或任一安全约束下降：记为弱/负结果，不叠加；若 R2 gate 通过，回到 E2 执行 R2-G。
+- `Delta PDMS_scaled <= 0` 或训练不稳定：拒绝 R1；只有确认实现错误时允许一次最小修复重试。
+
+### R2-D / R2-G：有界 Dynamic Sampling
+
+**父方法选择**
+
+- R1 达到全部晋级线：R2-D = R1 + Dynamic Sampling；
+- R1 未晋级或被跳过：R2-G = E2 + Dynamic Sampling。
+
+这样 Dynamic Sampling 的独立价值不会被 Dr.GRPO 的成败绑架，也不会形成无法归因的多 trick 实验。
+
+**唯一变量**
+
+在每个 optimizer step 中，按实际训练 reward 对同一 `uid` 的 rollout 分组：
+
+```text
+group reward 完全相同
+    -> 丢弃该 group，不进入 optimizer batch
+    -> 从同一 FALS manifest 补采新 group
+
+group reward 存在差异
+    -> 保留
+```
+
+只过滤 exact-zero group；不使用 `std < 0.05`。optimizer 的有效 group 数始终保持 4，禁止达到上限后静默使用不足 batch。
+
+**实现原则**
+
+当前 `ray_trainer._make_batch_data` 已有“生成—过滤—补采”和 `max_try_make_batch` 骨架，但现有 `online_filtering` 按 group mean 区间过滤，不是 zero-variance filtering。R2 只复用其循环和上限，不得把现有 mean-filter 直接当作 DAPO。
+
+- 过滤标量必须与 advantage 使用的 training reward 完全一致；
+- 补采上限由 R0 Monte Carlo 选择，硬上限 8；
+- 达到上限仍不足 4 个有效 group 时本 step/阶段直接失败，不回退到不足 batch 或未过滤路径；
+- 先做 20-step、无 dev pilot，验证 batch、日志、资源与成本，再启动正式 250-step；
+- 记录 generated/kept/dropped groups、attempts/step、reward queries、p50/p90 step time 和总 wall time。
+
+**吞吐条件门控**
+
+只有 pilot 显示 reward server 等待占 step wall time 至少 20%，才重新打开“原 reward 服务 4 workers + 有界 client concurrency”。开启前必须对固定输入逐样本验证所有 reward component 完全一致；否则保持 E2 单 worker 路径。Dynamic Sampling 增加 query 数本身不是自动修改 reward 服务的理由。
+
+**工程晋级线**
+
+相对其父方法：
+
+- `Delta PDMS_scaled >= +0.01000`；
+- Safe、Collision、TTC 不低于父方法；
+- parse/clipping 不退化；
+- 平均 raw rollout 与 wall time 不超过父方法 2.0 倍；
+- 同时报告相对 E2 的绝对结果和“每 1,000 reward query 的收益”，避免只展示等 step 分数。
+
+未达线则回退到父方法，不调 zero 阈值、不增加 generation 上限追分。
+
+### R3：Failure-Guided Recovery 等预算可行性
+
+R3 是可选研究分支，不是 R1/R2 的必做后继。只有核心方法冻结后、train 上仍有至少 10% persistent-failure group 时才启动。
+
+**Persistent failure 定义与样本**
+
+1. 只从 train split 选候选；
+2. 用当前最佳冻结 checkpoint 对候选重新生成 4 个 baseline rollout；
+3. 4 个 rollout 全部 unsafe，或 `max PDMS_scaled == 0`，才进入集合；
+4. 固定抽取最多 200 个 token；样本和模板在生成结果前冻结。
+
+**等预算对照**
+
+每个 token 使用相同解码预算各生成一次：
+
+- Control：原 prompt 的 blind resampling；
+- Treatment：原 prompt + 原失败 trajectory + 固定结构化 feedback。
+
+feedback 只由 collision、DAC、TTC、progress、comfort 等 train reward component 映射，不允许注入 GT trajectory 坐标，也不允许根据 dev 结果改模板。
+
+**Meaningful recovery**
+
+`PDMS_scaled` 相对 4 个 original rollout 的最佳值至少提高 0.05，且 Collision/TTC 不下降；另行报告 unsafe → safe 的比例。
+
+**继续门控**
+
+同时满足才进入后续训练设计：
+
+- Treatment absolute recovery rate `>= 20%`；
+- Treatment 比 blind resampling 至少高 10 个百分点；
+- paired bootstrap 的 Treatment − Control 95% CI 下界 `> 0`。
+
+不满足即关闭 Recovery 分支，不进行 prompt sweep。
+
+**训练边界**
+
+不得把 feedback-conditioned response 直接塞入原 prompt 的 on-policy Dr.GRPO group：两者条件 prompt 不同，且离线成功样本会引入 off-policy 偏差。若 R3 通过，只允许先写新的设计决策，优先评估“同原始 prompt 的 chosen/rejected preference 数据”或最小 recovery-SFT。当前仓库没有 DPO 训练路径，因此 DPO 不属于本轮默认实施范围。
+
+### C0：匹配训练 seed 确认
+
+只有 R1 或 R2 达到工程晋级线时执行。为控制成本，只新增一组预注册匹配 seed `20260813`：
+
+1. 用相同 FALS manifest 分别运行 E2 comparator 与最终新方法；
+2. 两者使用相同训练/生成 seed 和同一 dev 协议；
+3. 报告两个训练 seed 的逐 seed 差值、均值、paired scene bootstrap 和安全约束；
+4. 不在看到第二 seed 后修改方法或阈值。
+
+最低确认标准：
+
+- 新方法相对 E2 在两个 seed 上 PDMS scaled 差值均为正；
+- 两 seed 平均差值 `>= +0.01000`；
+- 两 seed 的 Safe、Collision、TTC 均无方向一致的退化。
+
+不满足时，新方法只能作为单 seed 探索结果；最终候选回退 E2。一个额外匹配 seed 只能降低偶然性风险，不能被描述为充分的多 seed 统计证明。
+
+### F0：最终 checkpoint 审计
+
+方法开发结束后恢复，只对最终候选执行一次。
+
+- 新方法训练前明确保留 step 50 与 step 250；不得事后挑选更多 checkpoint。
+- 复用 step-250 既有 dev；只新增 step-50 的同协议 566-token dev。
+- 只有 step 50 的 PDMS scaled 更高，且 Safe、Collision、TTC 均不低于 step 250，才切换；否则保留 step 250。
+- 若所有新方法均未晋级，则直接执行原 E2 step 50/250 审计。
+- F0 完成后冻结 source、config、manifest、seed 和唯一 checkpoint。
+
+### F1：一次性 held-out
+
+启动条件：
+
+- R1/R2/R3/C0 已按门控完成、跳过或关闭；
+- F0 已冻结唯一 checkpoint；
+- held-out manifest 仍未被此前任何阶段读取；
+- 评估命令、输出目录和失败恢复规则已预注册。
+
+F1 只运行一次。无论结果好坏都不得再改模型、checkpoint 或阈值；最终报告必须同时列出 dev 与 held-out、所有负结果、训练 seed 限制、rollout/reward 成本和适用边界。
+
+## 7. 结果到下一步的唯一映射
+
+| 最新结果 | 下一步 |
+| --- | --- |
+| R0：R1/R2 gate 都失败 | 停止方法扩展，E2 → F0 |
+| R0：仅 R1 gate 通过 | R1；完成后 C0/F0 |
+| R0：仅 R2 gate 通过 | R2-G |
+| R1 全部晋级 | R2 gate 通过则 R2-D，否则 C0 |
+| R1 弱正向或负向 | 不叠加 Dr.GRPO；R2 gate 通过则 R2-G，否则 E2 → F0 |
+| R2 晋级 | R2 成为父候选；决定是否执行非阻塞 R3，然后 C0 |
+| R2 不晋级 | 回退其父候选；决定是否执行非阻塞 R3，然后 C0/F0 |
+| R3 可行性失败 | 关闭 Recovery，不影响核心候选 |
+| R3 可行性通过 | 先新增 preference/SFT 设计决策，不自动训练 |
+| C0 不确认 | 新方法降级为 exploratory，E2 → F0 |
+| C0 确认 | 最终新方法 → F0 |
+| F0 完成 | 冻结唯一 checkpoint → F1 |
+| F1 完成 | 只汇总，不再调整 |
+
+## 8. 未来实现影响面
+
+以下文件是后续阶段的预期最小影响面，不代表本次文档改写已经实现对应功能。
+
+| 阶段 | 预计文件 | 最小改动 | 验证 |
+| --- | --- | --- | --- |
+| R0 | `projects/safe_grpo/analyze_difficulty_bias.py`、`tests/test_safe_grpo.py` | 读取现有 rollout，输出统计与图 | 合成分布、manifest 污染、覆盖、固定 seed |
+| R1 | `core_algos.py`、`config.py`、正式 launcher、tests | 注册 `dr_grpo` 与 R1 入口 | 数学单测、唯一变量 diff、5-step smoke |
+| R2 | `ray_trainer.py`、`config.py`、正式 launcher、tests | exact-zero group filtering 与有界补采 | 零/非零 group、固定有效 batch、上限失败、指标记录 |
+| R3 | 新的 train-only feasibility 工具 | treatment/control 推理与 recovery 统计 | 等预算、无 GT prompt 泄漏、无 dev/held-out |
+| C0/F0/F1 | 正式 launcher 与验收脚本 | seed/checkpoint/held-out 隔离入口 | manifest、目录、一次性门控 |
+
+## 9. 历史与实时执行记录
+
+> 记录 001–019 保留当时的事实、判断和“下一动作”，其中旧下一动作可能已被更晚记录取代；判断当前动作时只看第 1 节和最新记录。历史记录所称旧版“2.1 节冻结配置”对应当前第 4.2 节。
 
 ### 记录 001：E0 首次 full-actor 尝试失败
 
@@ -401,19 +683,42 @@
 - 决策：不再删除 E0/D0/E2 或 E2 的任一现存 checkpoint；现有空间足以完成 F0-A 和 F0-B。
 - 下一动作：为 E2 `global_step_50` 建立隔离的 validation-only 运行，固定现有 566-token dev、batch 4、token budget 4608、CUDA Graph、vLLM 内置 FlashAttention 和 seed `20260812`，完成后按记录 018 的预注册规则冻结唯一 checkpoint。
 
-## 6. 后续记录模板
+### 记录 020：重新开启方法开发并冻结 R0–R2 自适应路线
 
-每个新结果按以下格式追加，不改写历史事实；“当前快照”同步更新：
+- 状态：计划审计通过；原 F0-A step-50 审计暂停，held-out 继续封存。
+- 触发证据：E2 相对 E0 的 PDMS scaled 与 Safe paired-bootstrap 95% CI 均跨 0；当前只有单训练 seed。E2 仍显著优于 E1/E4，但直接收尾不足以支撑稳定超过 Stage-2 或完整后训练算法贡献。
+- 现有结果：E2 FALS 把 exact-zero std 从 E1 的 `46.30%` 降到 `38.80%`，headroom 从 `0.17365` 提高到 `0.24294`；说明离线选择有效但仍有大量 zero-signal group。E3 SLDR 为负，E4 Std-Floor 只部分补救，不再继续调参。
+- 工程审计：当前 `core_algos.py` 的相关 grouped estimator 已有 GRPO 与 Std-Floor GRPO，但没有 Dr.GRPO；`ray_trainer._make_batch_data` 已有有界生成/过滤循环，但现有 online filtering 按 group mean 区间过滤，并不等价于 zero-variance Dynamic Sampling；仓库没有现成 DPO 训练路径。
+- 方案修正：R0 以同 policy 的 D0 作为 difficulty/variance 主证据，E2 只作训练信号补充；Dynamic Sampling 不绑定 R1 成功，按 R2-D/R2-G 分支执行；补采必须维持固定有效 batch，不能在上限后静默缩小 batch；Recovery 必须先与 blind resampling 做等预算对照，禁止直接把不同 prompt、off-policy refined sample 注入原 GRPO group。
+- 决策：采用 `R0 → R1/R2 自适应分支 → C0 → F0 → F1` 为当前正式路线；R3 为非阻塞可选研究分支。NoRD/DAPO/ELF-VLA 只作为假设来源，所有晋级以本项目预注册门控为准。
+- 下一动作：只实现并运行 R0 离线诊断，生成 `group_metrics.csv`、`r0_report.json`、`advantage_scale.csv` 和图；完成技术验收、写回 R1/R2 gate 后再决定是否修改训练代码。
+
+## 10. 后续记录模板
+
+每个新结果按以下格式追加；历史记录不回写，第 1 节同步更新：
 
 ```text
 ### 记录 NNN：<阶段与事件>
 
-- 状态：通过 / 失败 / 证据不足 / 按门控跳过
-- 代码与配置：<commit、关键参数>
-- 原始证据：<远程实验目录和文件>
-- 覆盖与完整性：<manifest、行数、退出码、资源回收>
-- 关键结果：<指标、耗时、显存>
-- 分析：<结果说明、限制、是否同协议>
-- 决策：<推进、重试、回退、跳过或重跑 baseline>
-- 下一动作：<唯一明确动作及启动门控>
+- 状态：计划中 / 运行中 / 技术通过 / 科学正向 / 科学负向 / 证据不足 / 失败 / 按门控跳过
+- 假设与唯一变量：<本阶段回答什么，只改什么>
+- 预注册门控：<进入条件、技术验收、工程晋级线>
+- 代码与配置：<commit、source status、resolved config、seed>
+- 原始证据：<远程目录和关键文件>
+- 数据边界：<manifest、hash、覆盖、train/dev/held-out 重叠>
+- 技术结果：<退出码、checkpoint、异常、资源回收、墙钟与查询成本>
+- 效果结果：<主指标、安全约束、paired bootstrap；如适用则列训练 seed>
+- 分析边界：<已知事实、解释、尚未确定部分>
+- 决策：<推进 / 回退 / 跳过 / 最小修复重试 / 结束方法开发>
+- 下一动作：<唯一动作及启动门控>
 ```
+
+## 11. 外部动机文献
+
+这些资料只解释为什么提出 R1–R3，不参与本项目效果判定：
+
+1. [NoRD: A Data-Efficient Vision-Language-Action Model that Drives without Reasoning](https://openaccess.thecvf.com/content/CVPR2026/html/Rawal_NoRD_A_Data-Efficient_Vision-Language-Action_Model_that_Drives_without_Reasoning_CVPR_2026_paper.html)
+2. [DAPO](https://github.com/BytedTsinghua-SIA/DAPO) 与 [verl DAPO recipe](https://github.com/verl-project/verl-recipe/blob/main/dapo/README.md)
+3. [ELF-VLA: Unleashing VLA Potentials in Autonomous Driving via Explicit Learning from Failures](https://arxiv.org/abs/2603.01063)
+4. [DriveDPO](https://arxiv.org/abs/2509.17940)
+5. [VL-DPO](https://arxiv.org/abs/2605.20082)

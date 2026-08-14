@@ -4,7 +4,7 @@ The live plan, experiment gates, evidence summaries, and adaptive next-step deci
 [`docs/post_training_execution_loop.md`](../../docs/post_training_execution_loop.md). Update that document after each
 completed stage before starting the next one.
 
-Frozen experiment seed: `20260812`.
+Primary discovery seed: `20260812`. Any matched confirmation seed must first pass the live ledger gate.
 
 Evidence files on the server live under:
 
@@ -13,7 +13,7 @@ Evidence files on the server live under:
 - `logs/`: installation, cache, rollout, reward and training logs
 - `experiments/<name>/`: resolved config, source commit, seed, checkpoint and metrics
 
-GPU experiments must run in this order: E0 Stage-2 baseline, D0 frozen-train rollout diagnosis, E1 vanilla LoRA-GRPO, E2 FALS only, E3 SLDR only, E4 Std-Floor GRPO, E5 grouped reward throughput. Do not assign FALS thresholds or claim improvements before rollout evidence exists. D0 must cover all 4,525 frozen train tokens with four rollouts each; dev and held-out tokens are forbidden.
+E0–E4 are completed historical stages. All new GPU experiments must follow the live order, preregistered gates, and adaptive branches in the execution ledger; R0 is the current offline-only stage, so R1/R2 must not start before its decision is written back. Do not claim improvements before same-protocol evidence exists, and keep held-out sealed until the ledger's final F1 gate.
 
 On a 24 GB GPU, E0 and D0 keep the rank-8 LoRA wrapper at its zero-effect initialization. PEFT initializes the LoRA B projection to zero, so the adapter does not change the Stage-2 output before training; removing the wrapper instead makes the full actor exceed the single-GPU hybrid-engine memory budget.
 
