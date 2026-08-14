@@ -6,10 +6,10 @@
 
 ## 1. 当前决策快照
 
-- 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，P1-S 执行 source `fe6eac6`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
+- 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，P1-S 执行 source `fe6eac6`，P1-M 容量门控 source `9b5fdc1`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
 - 路线结论：停止围绕 GRPO estimator、sampling cap、reward coefficient 或 std normalization 继续追分；已完成的 E0–E4、R1–R3 作为前半段证据冻结。
 - 新核心问题：在固定 rollout / reward-query 预算下，能否把已有 trajectory-level safety/quality reward 转成离线 preference supervision，并以更低在线成本获得比 RSFT、普通 DPO 和现有 FALS-GRPO 更稳定的策略。
-- 当前唯一动作：P0、P1-S 已闭环；进入 P1-M，只按冻结规则构造 PDMS-Pair、Safety-Gap-Pair 与 chosen-only RSFT 数据，先验收 pair 数量、比例、确定性与泄漏，不启动 GPU。
+- 当前唯一动作：P0、P1-S 已闭环；P1-M 因严格 Tier B 数量为 0、最大平衡数据量 `B=0<500` 而按门控关闭当前离线 preference 路线。P2–P6 不执行，不降低 gap quantile、不修改 60/40、不启动 GPU。
 - 冻结开发集：566 token；每个正式方法只允许一次最终 dev 评估，不用 dev 选择 pair 阈值或训练超参数。
 - 旧 565-token held-out 已访问 520 条并永久失去 unseen 资格；部分 rollout 已删除，`F1_HELDOUT_ACCESSED` 永久锁保留，禁止补跑剩余 45 条或把它用于最终确认。
 - P0 证明当前服务器资产无法建立合格的新 final set：旧 manifest 外 97,632 个 token 的 log 可用，但 CAM_F0 图像可用数为 0。P6 预注册为不执行 final-set 推理，除非用户未来明确扩展数据下载范围并在任何新方法 dev 结果产生前重新立项。
@@ -19,12 +19,12 @@
 | --- | --- | ---: | --- | --- |
 | P0 | 已完成 | 0 | 如何保留 GRPO 证据、隔离新路线并修正 final-set 边界 | 无新 final set；旧 split 永久封存 |
 | P1-S | 已完成 | 0 | 18,100 条 scored rollout 是否具备可训练表示 | 18,088 条候选通过 join/round-trip，允许 P1-M |
-| P1-M | 执行中 | 0 | PDMS 与 Safety-Gap 能构成多少可信 pair | 只用 train 构建统计与冻结数据集 |
-| P2 | 被 P1-M 阻塞 | 低 | 只学习 chosen trajectory 是否足够 | chosen-only RSFT |
-| P3 | 被 P1-M 阻塞 | 中低 | pairwise PDMS supervision 是否优于 RSFT/GRPO | 普通 trajectory DPO |
-| P4 | 被 P1-M 阻塞 | 中低 | safety-aware pair mining 是否带来独立增益 | Safety-Gap DPO |
-| P5 | 条件执行 | 中 | policy 更新后刷新一次 pair 是否继续提升 | 只允许一轮 refresh |
-| P6 | 最终阶段 | 中 | 第二 seed、behavior audit 与新 final set 是否确认结论 | 方法、checkpoint、阈值全部冻结后执行 |
+| P1-M | 证据不足，已关闭 | 0 | PDMS 与 Safety-Gap 能构成多少可信 pair | `N_B=0`、`B=0<500`，不生成训练集 |
+| P2 | 按门控跳过 | 0 | 只学习 chosen trajectory 是否足够 | P1-M 未通过，不运行 RSFT |
+| P3 | 按门控跳过 | 0 | pairwise PDMS supervision 是否优于 RSFT/GRPO | P1-M 未通过，不运行 DPO |
+| P4 | 按门控跳过 | 0 | safety-aware pair mining 是否带来独立增益 | P1-M 未通过，不运行 DPO |
+| P5 | 按门控跳过 | 0 | policy 更新后刷新一次 pair 是否继续提升 | 无 P4 候选 |
+| P6 | 本路线不执行 | 0 | 第二 seed、behavior audit 与新 final set 是否确认结论 | 无 preference 候选且 P0 无新 final set |
 
 ## 2. 分支与代码处理决策
 
@@ -50,11 +50,11 @@ git switch -c codex/offline-preference-post-training
 | 位置 | 责任 | 当前状态 |
 | --- | --- | --- |
 | `projects/safe_preference/build_preference_dataset.py` | schema 审计、join、pair mining、LLaMA-Factory 数据输出 | P1-S schema/join/processor 审计已实现；P1-M 待实现 |
-| `projects/safe_preference/analyze_preference_dataset.py` | pair 数量、gap、长度、安全构成与 hash 汇总 | 待实现；只有 builder 过大时才拆分 |
+| `projects/safe_preference/analyze_preference_dataset.py` | pair 数量、gap、长度、安全构成与 hash 汇总 | P1-M 容量门控已实现；结果 `B=0`，不扩展为数据构建 |
 | `sft/preference/` | P2/P3/P4 的冻结 YAML 与 export YAML | 待实现 |
 | `scripts/run_safe_preference_experiment.sh` | smoke、正式训练、导出、状态与证据门控 | 待实现 |
 | `scripts/run_safe_preference_eval.sh` | 复用冻结 NAVSIM dev 协议评估任意 merged model | 待实现 |
-| `tests/test_safe_preference.py` | pair 规则、泄漏、round-trip、确定性与失败语义 | P1-S 5 项测试通过；P1-M 规则测试待补 |
+| `tests/test_safe_preference.py` | pair 规则、泄漏、round-trip、确定性与失败语义 | P1-S/P1-M 共 7 项测试通过 |
 | `projects/safe_grpo/`、`scripts/run_safe_grpo_experiment.sh` | 历史 GRPO 证据 | 只读，不扩展 |
 
 不要先写新的 trainer、reward model 或通用数据框架。第一版只实现一个确定性 builder、三份配置和两个薄启动器。
@@ -554,3 +554,18 @@ P4-v1 frozen model
 - 分析边界：可以声明 D0 的 18,088 条合法 trajectory rollout 能在冻结来源下无占位地恢复为 trajectory-only preference response；不能据此声明可形成足够多的 Safety-Gap pair，更不能声明 DPO/RSFT 有收益。SFT/GRPO prompt 的系统性单行差异必须在后续数据与报告中继续保留审计记录。
 - 决策：P1-S 完成，按门控推进 P1-M；不修改 `5-second → 4-second` 的实际 RL prompt，不降低 P1-M 的 `B>=500`、60/40 或确定性门槛。
 - 下一动作：只实现并执行冻结的 P1-M pair mining；计算一次 `delta=PDMS gap 60th percentile`，验收 `N_P/N_A/N_B/N_C/B`、60/40、P2/P3/P4 等量、零泄漏、processor/round-trip 与字节确定性。若 `B<500`，关闭当前离线 DPO 路线，不启动 GPU。
+
+### 记录 003：P1-M pair 容量不足并按门控关闭路线
+
+- 状态：证据不足；P1-M 技术执行成功，但预注册的平衡 pair 容量门控失败，当前离线 preference 路线关闭，P2–P6 按门控跳过。
+- 假设与唯一变量：只用冻结 D0 train rollout 计算一次 PDMS gap 60th percentile，并按固定 `is_safe = parsed_ok ∧ Collision ∧ DAC ∧ TTC`、Tier A/B/C 与 60/40 规则回答是否存在至少 500 个可比训练 pair；不生成模型输出、不读取 dev/legacy-held-out 指标、不调整阈值。
+- 预注册门控：在四条 rollout 均合法的 scene 上冻结 `delta=q60(PDMS gap)`；PDMS-Pair 只保留 `gap>=delta`；Tier A 必须同时存在 safe/unsafe，Tier B 必须四条均 safe 且 `gap>=delta`；`B` 是不超过 1,000 的最大 5 的倍数，同时满足 `B<=N_P`、`0.6B<=N_A`、`0.4B<=N_B`，且必须 `B>=500`。失败时不得降低门槛或改变 60/40，直接停止 GPU 路线。
+- 代码与环境：最小容量审计器 source `9b5fdc18b9520445f91841b4937f341f083dba3c`；本地/服务器均为 `7 passed`，compile 与 diff check 通过，source status clean。未实现不会被使用的 pair serializer、YAML、launcher 或 trainer。
+- 原始证据：结果写入 `/root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/p1_d0_pairs_seed20260812/preference_stats.json`；`p1_m_source_commit.txt` 与执行 source 一致，`p1_m_input_sha256.txt` 冻结 D0、三个 manifest 与 P1-S `schema_audit.json`，其中 P1-S audit SHA-256 为 `c4aac481a9fb6fa849912c9c4b229f19b1a201c3aa8f5f7c1068415f1b20ae20`，其余输入 hash 与记录 001 一致。
+- 数据边界：D0 token 与 train manifest 精确相等，dev/legacy-held-out overlap 均为 0；4,525 scene 中 4,514 个四条 rollout 全有效，11 个含 parse/shape failure。所有统计只来自 train，没有读取 prompt/SFT 之外的 dev 或 held-out 内容。
+- 技术结果：正式命令退出码 0。PDMS gap 分位数为 q00 `0.0`、q25 `0.0273000010`、q50 `0.8333333333`、q60/delta `0.8846177179`、q75/q100 `1.0/1.0`；`N_P=1,806`、`N_A=2,855`、`N_B=0`、`N_C=1,670`，因此 `B=0`。Tier C 由 1,339 个四条均 safe 但 gap 低于 delta 的 scene、320 个四条均 unsafe scene 和 11 个 parse/shape failure scene 构成。结束后 GPU 无 compute PID、8901 无监听、无残留进程，磁盘可用约 60 GB。
+- 产物边界：`pdms_pair_dataset.json`、`safety_gap_pair_dataset.json`、`rejection_sft_dataset.json`、两个 pair token manifest、`dataset_sha256.txt` 与 `dataset_examples_redacted.json` 全部不存在；没有半成品训练数据、smoke checkpoint 或训练配置。
+- 效果结果：不适用；未训练或评估任何 preference 模型。该结果不能说明 RSFT/DPO 无效，只说明当前 D0 与预注册严格 Tier B/60–40 条件不足以支持可比消融。
+- 分析边界：PDMS gap 候选和 mixed safe/unsafe Tier A 数量本身充足，唯一决定性约束是没有任何“四条均 safe 且 gap>=q60”场景可作为 Tier B。不得把只用 Tier A、降低 q60、放松 safe 到旧 `safe` 字段、修改 60/40 或缩小 `B>=500` 包装成同一预注册实验；这些都会改变科学问题，需要未来以新路线在查看任何新 dev 结果前重新立项。
+- 决策：按“P1-M `B<500`”映射关闭当前离线 DPO 路线；跳过 P2 chosen-only RSFT、P3 PDMS-DPO、P4 Safety-Gap-DPO、P5 refresh、第二 seed 与 preference behavioral audit。稳定候选仍回到既有 E2 单 seed dev 证据，不新增 checkpoint 或最终确认声明。
+- 下一动作：本路线无允许的实验动作；只保留 source、P1-S/P1-M 审计产物与台账，用于最终报告“表示可恢复但严格平衡 pair 条件不足”。除非用户以新的数据/科学问题重新立项，否则不继续训练、调阈值或访问旧 held-out。
