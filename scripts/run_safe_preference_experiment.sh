@@ -38,7 +38,7 @@ RUN_ROOT="$(dirname "$OUTPUT_DIR")"
 TRAIN_ARGS=("$CONFIG")
 if [[ "$MODE" == "resume-check" ]]; then
     test -d "$OUTPUT_DIR/checkpoint-20"
-    TRAIN_ARGS+=(max_steps=21 save_strategy=no)
+    TRAIN_ARGS+=(max_steps=21 'save_strategy="no"')
 else
     test ! -e "$RUN_ROOT"
     mkdir -p "$RUN_ROOT"
