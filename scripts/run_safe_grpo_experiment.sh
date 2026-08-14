@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-STAGE="${1:?Usage: run_safe_grpo_experiment.sh <e0|d0|e1|e2|e3|e4|r1|r2p>}"
+STAGE="${1:?Usage: run_safe_grpo_experiment.sh <e0|d0|e1|e2|e3|e4|r1|r2p|r2g>}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/autodl-tmp/curious-vla-workspace}"
 PROJECT_ROOT="${PROJECT_ROOT:-$WORKSPACE_ROOT/src/curious_vla_post_training}"
 EASYR1_ROOT="$PROJECT_ROOT/EasyR1"
@@ -16,6 +16,7 @@ CACHE_PATH="$WORKSPACE_ROOT/exp_root/metric_cache_released_5656"
 EXPERIMENT_ROOT="$WORKSPACE_ROOT/experiments/safe_grpo"
 E3_DIAGNOSIS="${E3_DIAGNOSIS:-$EXPERIMENT_ROOT/e3_sldr_lora_1k_seed20260812/train_diagnosis.json}"
 R0_REPORT="${R0_REPORT:-$EXPERIMENT_ROOT/r0_difficulty_bias_seed20260812_retry1/results/r0_report.json}"
+R2_PILOT_REPORT="${R2_PILOT_REPORT:-$EXPERIMENT_ROOT/r2p_e2_dynamic_lora_20_seed20260812/pilot_report.json}"
 R1_SMOKE_STEPS="${R1_SMOKE_STEPS:-}"
 R2_PARENT="${R2_PARENT:-}"
 SEED=20260812
@@ -92,6 +93,22 @@ if passed is not True:
     raise SystemExit("R2-P zero-variance prevalence gate failed in the frozen R0 report.")
 PY
         ;;
+    r2g)
+        [[ -n "$FALS_MANIFEST" ]] || { echo "FALS_MANIFEST is required for R2-G." >&2; exit 1; }
+        EXP_NAME=r2g_e2_dynamic_lora_1k_seed20260812
+        ITERATION_MANIFEST="$FALS_MANIFEST"
+        PARENT_EXP_NAME=e2_fals_lora_1k_seed20260812
+        [[ -e "$R2_PILOT_REPORT" ]] || { echo "R2-P report is missing: $R2_PILOT_REPORT" >&2; exit 1; }
+        "$WORKSPACE_ROOT/envs/curious/bin/python" - "$R2_PILOT_REPORT" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    report = json.load(handle)
+if report.get("expected_steps") != 20 or report.get("gates", {}).get("passed") is not True:
+    raise SystemExit("R2-G requires a passed 20-step R2-P report.")
+PY
+        ;;
     *)
         echo "Unknown stage: $STAGE" >&2
         exit 2
@@ -100,21 +117,30 @@ esac
 
 MAX_STEPS=250
 SAVE_FREQ=50
+SAVE_LIMIT=2
 SKIP_FINAL_VALIDATION=false
 SAVE_MODEL_ONLY=false
 ONLINE_FILTERING=false
 FILTER_MODE=mean
 MAX_TRY_MAKE_BATCH=20
 IS_R2_PILOT=false
+TRAIN_ROLLOUT_FILE=train_rollouts.jsonl
+TRAIN_COVERAGE_ARGS=(--expected-train-rollouts 2)
+if [[ "$STAGE" =~ ^r2(p|g)$ ]]; then
+    ONLINE_FILTERING=true
+    FILTER_MODE=zero_variance
+    MAX_TRY_MAKE_BATCH=5
+fi
 if [[ "$STAGE" == r2p ]]; then
     MAX_STEPS=20
     SAVE_FREQ=-1
     SKIP_FINAL_VALIDATION=true
     SAVE_MODEL_ONLY=true
-    ONLINE_FILTERING=true
-    FILTER_MODE=zero_variance
-    MAX_TRY_MAKE_BATCH=5
     IS_R2_PILOT=true
+elif [[ "$STAGE" == r2g ]]; then
+    SAVE_LIMIT=5
+    TRAIN_ROLLOUT_FILE=raw_train_query_rollouts.jsonl
+    TRAIN_COVERAGE_ARGS=()
 fi
 if [[ -n "$R1_SMOKE_STEPS" ]]; then
     [[ "$STAGE" == r1 ]] || { echo "R1_SMOKE_STEPS is only supported for R1." >&2; exit 1; }
@@ -135,7 +161,7 @@ fi
 for path in "$MODEL_PATH" "$DATA_PATH" "$TRAIN_MANIFEST" "$DEV_MANIFEST" "$HELDOUT_MANIFEST" "$CACHE_PATH/metadata"; do
     [[ -e "$path" ]] || { echo "Missing required path: $path" >&2; exit 1; }
 done
-if [[ "$STAGE" =~ ^(e[1-4]|r1|r2p)$ ]]; then
+if [[ "$STAGE" =~ ^(e[1-4]|r1|r2p|r2g)$ ]]; then
     [[ -e "$ITERATION_MANIFEST" ]] || { echo "Missing required path: $ITERATION_MANIFEST" >&2; exit 1; }
     [[ $(grep -cve '^[[:space:]]*$' "$ITERATION_MANIFEST") -eq 1000 ]] || {
         echo "Training manifest must contain exactly 1000 non-empty tokens." >&2
@@ -158,11 +184,11 @@ if [[ "$STAGE" =~ ^(e[1-4]|r1|r2p)$ ]]; then
         exit 1
     }
 fi
-if [[ "$IS_R2_PILOT" == true ]]; then
+if [[ "$STAGE" =~ ^r2(p|g)$ ]]; then
     PARENT_RUN_DIR="$EXPERIMENT_ROOT/$PARENT_EXP_NAME"
-    [[ -e "$PARENT_RUN_DIR/COMPLETE" ]] || { echo "R2-P parent run is incomplete: $PARENT_RUN_DIR" >&2; exit 1; }
+    [[ -e "$PARENT_RUN_DIR/COMPLETE" ]] || { echo "R2 parent run is incomplete: $PARENT_RUN_DIR" >&2; exit 1; }
     [[ -e "$PARENT_RUN_DIR/checkpoints/experiment_log.jsonl" ]] || {
-        echo "R2-P parent training log is missing: $PARENT_RUN_DIR" >&2
+        echo "R2 parent training log is missing: $PARENT_RUN_DIR" >&2
         exit 1
     }
 fi
@@ -183,12 +209,12 @@ git -C "$PROJECT_ROOT" status --porcelain > "$RUN_DIR/source_status.txt"
 cp "$DEV_MANIFEST" "$RUN_DIR/dev_tokens.txt"
 if [[ "$STAGE" == d0 ]]; then
     cp "$TRAIN_MANIFEST" "$RUN_DIR/train_tokens.txt"
-elif [[ "$STAGE" =~ ^(e[1-4]|r1|r2p)$ ]]; then
+elif [[ "$STAGE" =~ ^(e[1-4]|r1|r2p|r2g)$ ]]; then
     cp "$ITERATION_MANIFEST" "$RUN_DIR/train_tokens.txt"
 fi
-printf 'stage=%s\nexperiment=%s\nseed=%s\ntrain_manifest=%s\nreward_function=%s\nadv_estimator=%s\nmax_steps=%s\nskip_final_validation=%s\nonline_filtering=%s\nfilter_mode=%s\nmax_try_make_batch=%s\nparent_experiment=%s\n' \
+printf 'stage=%s\nexperiment=%s\nseed=%s\ntrain_manifest=%s\nreward_function=%s\nadv_estimator=%s\nmax_steps=%s\nsave_freq=%s\nsave_limit=%s\nskip_final_validation=%s\nonline_filtering=%s\nfilter_mode=%s\nmax_try_make_batch=%s\nparent_experiment=%s\n' \
     "$STAGE" "$EXP_NAME" "$SEED" "$ACTIVE_MANIFEST" "$REWARD_FUNCTION" "$ADV_ESTIMATOR" \
-    "$MAX_STEPS" "$SKIP_FINAL_VALIDATION" "$ONLINE_FILTERING" "$FILTER_MODE" \
+    "$MAX_STEPS" "$SAVE_FREQ" "$SAVE_LIMIT" "$SKIP_FINAL_VALIDATION" "$ONLINE_FILTERING" "$FILTER_MODE" \
     "$MAX_TRY_MAKE_BATCH" "${PARENT_EXP_NAME:-}" \
     > "$RUN_DIR/run.env"
 exec > "$RUN_DIR/run.log" 2>&1
@@ -295,7 +321,7 @@ else
         trainer.val_freq=-1 \
         trainer.skip_final_validation="$SKIP_FINAL_VALIDATION" \
         trainer.save_freq="$SAVE_FREQ" \
-        trainer.save_limit=2 \
+        trainer.save_limit="$SAVE_LIMIT" \
         trainer.save_model_only="$SAVE_MODEL_ONLY" \
         trainer.save_checkpoint_path="$RUN_DIR/checkpoints"
 
@@ -336,20 +362,37 @@ PY
         exit 0
     fi
 
+    if [[ "$STAGE" == r2g ]]; then
+        "$WORKSPACE_ROOT/envs/curious/bin/python" "$PROJECT_ROOT/projects/safe_grpo/analyze_dynamic_sampling_pilot.py" \
+            --pilot-log "$RUN_DIR/checkpoints/experiment_log.jsonl" \
+            --parent-log "$PARENT_RUN_DIR/checkpoints/experiment_log.jsonl" \
+            --expected-steps 250 \
+            --max-mean-raw-overhead 2.15 \
+            --output "$RUN_DIR/dynamic_sampling_report.json" \
+            > "$RUN_DIR/dynamic_sampling_report.stdout.json"
+    fi
+
     "$WORKSPACE_ROOT/envs/curious/bin/python" "$PROJECT_ROOT/projects/safe_grpo/split_rollouts.py" \
         "$RUN_DIR/raw_rollouts.jsonl" \
         --train-manifest "$ITERATION_MANIFEST" \
         --dev-manifest "$DEV_MANIFEST" \
-        --train-output "$RUN_DIR/train_rollouts.jsonl" \
+        --train-output "$RUN_DIR/$TRAIN_ROLLOUT_FILE" \
         --dev-output "$RUN_DIR/dev_rollouts.jsonl" \
-        --expected-train-rollouts 2 \
+        "${TRAIN_COVERAGE_ARGS[@]}" \
         --expected-dev-rollouts 1 \
         > "$RUN_DIR/rollout_coverage.json"
-    "$WORKSPACE_ROOT/envs/curious/bin/python" "$PROJECT_ROOT/projects/safe_grpo/analyze_rollouts.py" \
-        "$RUN_DIR/train_rollouts.jsonl" \
-        --manifest "$ITERATION_MANIFEST" \
-        --expected-rollouts 2 \
-        > "$RUN_DIR/train_diagnosis.json"
+    if [[ "$STAGE" == r2g ]]; then
+        "$WORKSPACE_ROOT/envs/curious/bin/python" "$PROJECT_ROOT/projects/safe_grpo/analyze_rollouts.py" \
+            "$RUN_DIR/raw_train_query_rollouts.jsonl" \
+            --manifest "$ITERATION_MANIFEST" \
+            > "$RUN_DIR/raw_train_query_diagnosis.json"
+    else
+        "$WORKSPACE_ROOT/envs/curious/bin/python" "$PROJECT_ROOT/projects/safe_grpo/analyze_rollouts.py" \
+            "$RUN_DIR/train_rollouts.jsonl" \
+            --manifest "$ITERATION_MANIFEST" \
+            --expected-rollouts 2 \
+            > "$RUN_DIR/train_diagnosis.json"
+    fi
     "$WORKSPACE_ROOT/envs/curious/bin/python" "$PROJECT_ROOT/projects/safe_grpo/analyze_rollouts.py" \
         "$RUN_DIR/dev_rollouts.jsonl" \
         --manifest "$DEV_MANIFEST" \

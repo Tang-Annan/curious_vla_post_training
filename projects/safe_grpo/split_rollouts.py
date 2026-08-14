@@ -18,7 +18,7 @@ def split_rollouts(
     source: Path,
     train_manifest: Path,
     dev_manifest: Path,
-    expected_train_rollouts: int,
+    expected_train_rollouts: int | None,
     expected_dev_rollouts: int,
 ) -> tuple[list[dict], list[dict]]:
     train_tokens = set(load_manifest(train_manifest))
@@ -51,10 +51,15 @@ def split_rollouts(
         ("dev", dev_rows, dev_tokens, expected_dev_rollouts),
     ):
         counts = Counter(row["token"] for row in rows)
-        mismatched = [token for token in tokens if counts[token] != expected]
+        if expected is None:
+            mismatched = [token for token in tokens if counts[token] == 0]
+            expectation = "at least one"
+        else:
+            mismatched = [token for token in tokens if counts[token] != expected]
+            expectation = str(expected)
         if mismatched:
             raise ValueError(
-                f"Expected {expected} {label} rollouts per token; "
+                f"Expected {expectation} {label} rollouts per token; "
                 f"{len(mismatched)} of {len(tokens)} tokens have different coverage."
             )
 
@@ -74,7 +79,7 @@ def main() -> None:
     parser.add_argument("--dev-manifest", type=Path, required=True)
     parser.add_argument("--train-output", type=Path, required=True)
     parser.add_argument("--dev-output", type=Path, required=True)
-    parser.add_argument("--expected-train-rollouts", type=int, required=True)
+    parser.add_argument("--expected-train-rollouts", type=int)
     parser.add_argument("--expected-dev-rollouts", type=int, required=True)
     args = parser.parse_args()
 

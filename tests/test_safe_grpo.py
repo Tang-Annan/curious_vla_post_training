@@ -350,9 +350,50 @@ def test_formal_launcher_keeps_e2_e3_e4_as_single_factor_ablations():
     assert 'tracker_path.parent / f"global_step_{expected_step}" / "actor"' in source
     assert 'r2p)' in source
     assert 'R2_PARENT must be e2 or r1' in source
+    assert 'r2g)' in source
+    assert 'R2-G requires a passed 20-step R2-P report.' in source
+    assert 'EXP_NAME=r2g_e2_dynamic_lora_1k_seed20260812' in source
     assert "FILTER_MODE=zero_variance" in source
     assert "MAX_TRY_MAKE_BATCH=5" in source
+    assert "SAVE_LIMIT=5" in source
     assert '--pilot-log "$RUN_DIR/checkpoints/experiment_log.jsonl"' in source
+    assert "--expected-steps 250" in source
+    assert "--max-mean-raw-overhead 2.15" in source
+    assert "raw_train_query_rollouts.jsonl" in source
+
+
+def test_split_rollouts_allows_variable_train_queries_but_keeps_dev_exact(tmp_path):
+    splitter = load_module(ROOT / "projects/safe_grpo/split_rollouts.py", "split_rollouts_variable")
+    train_manifest = tmp_path / "train.txt"
+    dev_manifest = tmp_path / "dev.txt"
+    source = tmp_path / "raw.jsonl"
+    train_manifest.write_text("train_a\ntrain_b\n", encoding="utf-8")
+    dev_manifest.write_text("dev\n", encoding="utf-8")
+    rows = [
+        {"token": "train_a"},
+        {"token": "train_a"},
+        {"token": "train_b"},
+        {"token": "dev"},
+    ]
+    source.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    train_rows, dev_rows = splitter.split_rollouts(source, train_manifest, dev_manifest, None, 1)
+
+    assert len(train_rows) == 3
+    assert len(dev_rows) == 1
+
+
+def test_split_rollouts_variable_train_queries_still_require_manifest_coverage(tmp_path):
+    splitter = load_module(ROOT / "projects/safe_grpo/split_rollouts.py", "split_rollouts_variable_missing")
+    train_manifest = tmp_path / "train.txt"
+    dev_manifest = tmp_path / "dev.txt"
+    source = tmp_path / "raw.jsonl"
+    train_manifest.write_text("train_a\ntrain_b\n", encoding="utf-8")
+    dev_manifest.write_text("dev\n", encoding="utf-8")
+    source.write_text(json.dumps({"token": "train_a"}) + "\n" + json.dumps({"token": "dev"}) + "\n")
+
+    with pytest.raises(ValueError, match="Expected at least one train rollout"):
+        splitter.split_rollouts(source, train_manifest, dev_manifest, None, 1)
 
 
 def test_dynamic_sampling_pilot_analysis_uses_preregistered_cost_gates(tmp_path):
