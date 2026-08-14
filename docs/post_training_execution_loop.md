@@ -5,21 +5,21 @@
 ## 1. 当前决策快照
 
 - 最后更新：2026-08-14
-- 开发分支：`codex/post-training-analysis`；R2-P 实现 commit `735ac7d`；R1 服务器运行 checkout `6051499`
+- 开发分支：`codex/post-training-analysis`；paired-analysis 实现 commit `adbabe1`；服务器 checkout clean
 - 当前最佳已训练候选：E2 FALS-only `global_step_250/actor`
-- 当前执行动作：只读监控正式 R1；本地预注册并实现 R2-P，不在 R1 运行期间热更新服务器 checkout
+- 当前执行动作：R1 已完成且科学负向；写回后以 E2/GRPO 为父方法启动 R2-P
 - 当前封存动作：暂停 E2 step-50 dev 审计；held-out 继续完全封存
 - 保留的服务器核心证据：E0、D0、E2、全部 manifest，以及 E2 step 50/250 checkpoint
 - 已排除方向：继续调 SLDR、把 Std-Floor 直接叠加到 E2、为了吞吐改动正式生成协议
-- 当前主线：R0 已确认 selection–optimization mismatch；R1 正式运行中；原 R2 成本门控保持失败，新建前瞻 R2-P pilot 重新评估实际成本
+- 当前主线：R0 已确认 selection–optimization mismatch；R1/Dr.GRPO 被拒绝；原 R2 成本门控保持失败，下一步只运行前瞻 R2-P pilot
 
 | 阶段 | 状态 | 目的 | 当前动作 |
 | --- | --- | --- | --- |
 | E0–E4 | 已闭环 | 建立 Stage-2、Vanilla GRPO、FALS、SLDR、Std-Floor 的证据基线 | 不重跑、不调参 |
 | R0 | 已完成 | R1 gate 通过；R2 预计开销 `2.02779×`，超过 `2.0×` 门槛 | 证据冻结，不重算门槛 |
-| R1 | 正式运行中 | FALS + Dr.GRPO 单因素消融 | Luna 按 ETA 分段静默监控 |
+| R1 | 技术通过、科学负向 | FALS + Dr.GRPO 单因素消融 | 不调参、不重跑、不叠加 |
 | 原 R2 gate | 已失败并冻结 | cap 5 的估计 raw rollout 开销 `2.02779× > 2.0×` | 不改写为通过 |
-| R2-P | 实现与隔离验证通过 | 20-step 无 dev pilot 实测 exact-zero filtering 的可靠性与成本 | R1 完成后按父方法分支执行 |
+| R2-P | 实现与隔离验证通过 | 20-step 无 dev pilot 实测 exact-zero filtering 的可靠性与成本 | 固定以 E2/GRPO 为父方法启动 |
 | R2-D / R2-G | 条件执行 | 只在 R2-P 通过后运行 250-step Dynamic Sampling | 不用 dev 调成本门槛 |
 | R3 | 可选 | Failure-Guided Recovery 等预算可行性对照 | 核心 R1/R2 路线完成后再决定 |
 | C0 | 条件执行 | 最终新方法与 E2 的匹配训练种子确认 | 仅对达到晋级线的方法执行 |
@@ -33,9 +33,8 @@ R0（完成）
 ├─ R1 gate：通过 ──> R1（运行中）
 └─ 原 R2 gate：失败并冻结
 
-R1 结果
-├─ 全部晋级 ──> R2-P(R1 parent)
-└─ 未晋级 ───> R2-P(E2 parent)
+R1（完成，未晋级）
+└─ PDMS/Safe/Collision 明确下降 ──> R2-P(E2 parent)
 
 R2-P
 ├─ 技术与成本门控通过 ──> 正式 R2-D / R2-G
@@ -55,6 +54,7 @@ R3 不在这条硬主线中；它的成功与否不得阻塞最终审计。
 | E2 | FALS 1k + Vanilla GRPO | 0.67230 | 0.69758 | 0.74028 | 0.96908 | 0.76678 | 0.90938 | 0.95406 | 0.92049 | 当前最佳候选 |
 | E3 | 随机 1k + SLDR | 0.62994 | 0.65266 | 0.68905 | 0.95760 | 0.72792 | 0.90941 | 0.93816 | 0.91873 | SLDR 独立贡献为负 |
 | E4 | E3 + Std-Floor | 0.64344 | 0.66691 | 0.70848 | 0.95760 | 0.74558 | 0.91016 | 0.94346 | 0.92049 | 部分补救 E3，未恢复 E0 |
+| R1 | FALS 1k + Dr.GRPO | 0.64292 | 0.66711 | 0.70671 | 0.95760 | 0.74558 | 0.90932 | 0.94346 | 0.92049 | 技术完整但显著弱于 E2，拒绝 Dr.GRPO |
 
 E2 相对 E0 的点估计为：PDMS scaled `+0.01292`、PDMS `+0.01397`、Safe `+0.01590`；Progress `-0.00197`。
 
@@ -76,6 +76,7 @@ E2 相对 E0 的点估计为：PDMS scaled `+0.01292`、PDMS `+0.01397`、Safe `
 | E2 | PDMS scaled | 0.35843 / 0.45048 | 38.80% | 6.70% | 0.24294 | 39.25% | FALS 主动集中困难样本 |
 | E3 | SLDR | 0.66047 / 0.42596 | 44.60% | 15.40% | 0.16895 | 65.40% | reward 定义不同，不与 E1/E2 均值直比 |
 | E4 | SLDR | 0.65341 / 0.42762 | 43.70% | 15.90% | 0.16945 | 64.75% | reward 定义不同，不与 E1/E2 均值直比 |
+| R1 | PDMS scaled | 0.34776 / 0.44767 | 38.90% | 5.20% | 0.25062 | 38.20% | Dr.GRPO 未把 FALS 的训练信号转化为 dev 增益 |
 
 已成立的事实：
 
@@ -86,6 +87,7 @@ E2 相对 E0 的点估计为：PDMS scaled `+0.01292`、PDMS `+0.01397`、Safe `
 5. held-out 尚未使用；所有方法判断都来自 train 诊断与同一 dev 协议。
 6. 当前只有一个正式训练 seed。后续不能把单 seed + scene bootstrap 写成训练稳定性结论。
 7. E1/E3/E4 的大体积原始产物已清理，指标、配置和结论仅由本台账保留；E0/D0/E2 原始证据仍在服务器。
+8. R1 相对 E2 的 PDMS scaled、Safe、Collision paired-bootstrap 95% CI 均小于 0；当前证据拒绝“去掉 std normalization 能改善本项目 FALS 训练”的假设。
 
 ## 3. 新路线要回答的科学问题
 
@@ -750,6 +752,19 @@ F1 只运行一次。无论结果好坏都不得再改模型、checkpoint 或阈
 - 代码与验证：commit `735ac7da9efcd376e78fca8a5928c4489460f6c4` 新增 `zero_variance` group filter、cap-5 固定 batch、结构化 sampling 指标、R2-P launcher 与成本分析器。服务器在 `/tmp/r2p-735ac7d` 隔离 worktree 执行 `bash -n`、`py_compile` 和完整测试，结果 `22 passed`；运行中的主 checkout 仍为 `6051499` 且 status 为空。
 - 解释边界：这是根据实现粒度问题新建的前瞻 pilot，不回写 R0 gate、不使用 dev 调成本门槛、不保证 R2 科学收益。
 - 下一动作：等待 R1 完成并选择父方法；结果写回后才 fast-forward 服务器主 checkout，并启动所选父方法的 R2-P。
+
+### 记录 024：R1 完成、科学负向并回退 E2
+
+- 状态：技术验收通过，科学负向；R1 不晋级、不重跑，R2-P 父方法固定为 E2/GRPO。
+- 原始证据：`experiments/safe_grpo/r1_fals_dr_grpo_lora_1k_seed20260812/`；运行时间 2026-08-14 13:07:05 至 16:06:10 CST，约 2 小时 59 分。`COMPLETE` 存在、`exit_code` 实际内容为 `0`、无 `RUNNING/FAILED`，GPU 与 8901 均已释放。
+- 监控误报：Luna 首次把 `exit_code` 文件的 `size=2 bytes` 误报为内容 `2`；主进程用 `xxd` 验证内容为 `30 0a`，即 `0\n`。该误报只影响状态解析，不影响训练或产物；后续监控必须读取文件内容，不得用 stat size 代替退出码。
+- 代码与配置：运行 source commit `605149902389aadf3628af75dbcc7caeb57cd8ad`、source status 为空；唯一变量为 `adv_estimator=dr_grpo`。结果完成后服务器才 fast-forward 到 `adbabe139593e2a9ff7ec1cdcbb450ca93de92b2` 运行 paired analysis。
+- 技术验收：tracker 为 step 250，actor 文件完整；raw/train/dev rollout 为 `2,566/2,000/566` 行，对应 train `1,000×2`、dev `566×1`；train/dev/held-out 两两重叠为 0。parse success `1.0`、clipped response `0`、250 个训练 step 无非有限指标或异常堆栈。
+- 训练稳定性：gradient norm mean/max 为 `0.01233/0.02201`，raw advantage 始终位于 `[-0.5,+0.5]`；平均 step time `39.11s`。train reward mean/std、exact-zero、headroom 为 `0.34776/0.44767/0.389/0.25062`。
+- dev 点估计：PDMS scaled `0.64292`、PDMS `0.66711`、Safe `0.70671`、Collision `0.95760`、DAC `0.74558`、Progress `0.90932`、TTC `0.94346`、Comfort `0.92049`。
+- 相对 E2：PDMS scaled `-0.02938`、Safe `-0.03357`、Collision `-0.01148`、TTC `-0.01060`，未达到任何晋级条件。固定 seed `20260814`、20,000 次 token-paired bootstrap 的 PDMS scaled 95% CI 为 `[-0.05494,-0.00368]`，Safe 为 `[-0.06184,-0.00530]`，Collision 为 `[-0.02297,-0.00177]`。
+- 结论边界：R1 证明当前 FALS + Dr.GRPO 单因素在 discovery seed 上明确劣于 E2；它不证明所有 Driving VLA 或其他 group size 上 Dr.GRPO 无效。不得通过调 LR、clip 或 reward 对该负结果追分。
+- 下一动作：提交本记录并同步服务器；确认 source clean、GPU/8901、FALS hash 与 R2-P 目录后，以 `R2_PARENT=e2` 启动 20-step 无 dev pilot。
 
 ## 10. 后续记录模板
 
