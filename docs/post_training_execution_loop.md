@@ -5,13 +5,13 @@
 ## 1. 当前决策快照
 
 - 最后更新：2026-08-14
-- 开发分支：`codex/post-training-analysis`；R2-G 正式入口 `6ead3e3`、原始 checkpoint 轮转恢复 `1a2e39c`；运行中的服务器 source commit `1a2e39c` 且 status clean
+- 开发分支：`codex/post-training-analysis`；R2-G 训练 source `1a2e39c`、后处理修复 `d21be76`；服务器 checkout clean
 - 当前最佳已训练候选：E2 FALS-only `global_step_250/actor`
-- 当前执行动作：250-step R2-G 已以 E2/GRPO 为父方法正常启动；Luna 按 ETA 分档静默监控
+- 当前执行动作：R2-G 工程通过但科学负向，回退 E2；冻结 345-token R3 proxy manifest 后运行 E2 step-250 四 rollout persistent-failure gate
 - 当前封存动作：暂停 E2 step-50 dev 审计；held-out 继续完全封存
 - 保留的服务器核心证据：E0、D0、E2、全部 manifest，以及 E2 step 50/250 checkpoint
 - 已排除方向：继续调 SLDR、把 Std-Floor 直接叠加到 E2、为了吞吐改动正式生成协议
-- 当前主线：R0 已确认 selection–optimization mismatch；R1/Dr.GRPO 被拒绝；原 R2 成本门控保持失败；前瞻 R2-P 已通过，获准运行正式 R2-G
+- 当前主线：R1/Dr.GRPO 与正式 R2-G 均未晋级；C0 跳过。R3 仅先做 train-only Recovery 可行性门控，通过才设计后续训练，否则 E2 进入 F0
 
 | 阶段 | 状态 | 目的 | 当前动作 |
 | --- | --- | --- | --- |
@@ -20,9 +20,9 @@
 | R1 | 技术通过、科学负向 | FALS + Dr.GRPO 单因素消融 | 不调参、不重跑、不叠加 |
 | 原 R2 gate | 已失败并冻结 | cap 5 的估计 raw rollout 开销 `2.02779× > 2.0×` | 不改写为通过 |
 | R2-P | 技术与成本通过 | 20-step 无 dev pilot 实测 exact-zero filtering 的可靠性与成本 | 证据冻结，不把 pilot reward 当效果结论 |
-| R2-D / R2-G | R2-D 跳过；R2-G 运行中 | R1 未晋级，因此只运行 E2 + Dynamic Sampling 的 250-step R2-G | 等待完成/异常信号，不用 dev 调成本门槛 |
-| R3 | 可选 | Failure-Guided Recovery 等预算可行性对照 | 核心 R1/R2 路线完成后再决定 |
-| C0 | 条件执行 | 最终新方法与 E2 的匹配训练种子确认 | 仅对达到晋级线的方法执行 |
+| R2-D / R2-G | R2-D 跳过；R2-G 工程通过、科学负向 | E2 + Dynamic Sampling 的 250-step 单因素实验 | 回退 E2，不调阈值/cap、不重跑 |
+| R3 | train-only gate 待执行 | Frozen E2 四 rollout persistent-failure 与 Failure-Guided Recovery 等预算可行性 | 先验证 10% 下界，再决定最多 200-token 对照 |
+| C0 | 按门控跳过 | R1/R2 均未达到工程晋级线 | 不运行第二训练 seed |
 | F0 | 暂停 | 只审计最终胜出方法的预注册 checkpoint | 方法开发结束后恢复 |
 | F1 | 封存 | 一次性 held-out 确认 | 代码、方法、checkpoint 全部冻结后执行 |
 
@@ -39,9 +39,12 @@ R1（完成，未晋级）
 R2-P（完成，门控通过）
 └─ R1 未晋级，父方法为 E2 ──> 正式 R2-G
 
-R2-G
-├─ 工程与科学晋级线通过 ──> C0
-└─ 任一晋级线未通过 ──────> 回退 E2，进入 F0
+R2-G（完成，工程通过、科学负向）
+└─ 回退 E2；C0 跳过 ──> R3 train-only feasibility gate
+
+R3 gate
+├─ frozen-E2 persistent failure 与等预算 recovery 全通过 ──> 新训练设计决策
+└─ 任一门控未通过 ─────────────────────────────> 关闭 R3，E2 进入 F0
 ```
 
 R3 不在这条硬主线中；它的成功与否不得阻塞最终审计。
@@ -379,6 +382,8 @@ R3 是可选研究分支，不是 R1/R2 的必做后继。只有核心方法冻�
 2. 用当前最佳冻结 checkpoint 对候选重新生成 4 个 baseline rollout；
 3. 4 个 rollout 全部 unsafe，或 `max PDMS_scaled == 0`，才进入集合；
 4. 固定抽取最多 200 个 token；样本和模板在生成结果前冻结。
+
+R2-G 关闭后的执行采用保守两阶段筛选：现有 E2 训练期 2-rollout 只用于冻结 proxy candidate，不作 persistent-failure 结论；随后用冻结 E2 step 250 对这些候选各生成 4 条 baseline。若确认集合至少有 100 个 token，即已建立 FALS 1,000-token 集合中 persistent failure `>=10%` 的保守下界，不必为证明同一门槛再查询其余 655 个 token；少于 100 时关闭 R3，不用扩大筛选追门槛。Treatment/Control 仍只从确认集合中按固定顺序取最多 200 个。
 
 **等预算对照**
 
@@ -798,6 +803,22 @@ F1 只运行一次。无论结果好坏都不得再改模型、checkpoint 或阈
 - 监控：复用 `/root/luna_r2g_monitor` 只读接管新运行。每次在子代理内部显示 step、进度、ETA、健康状态与下一间隔；剩余 `>60/60–30/30–10/<=10` 分钟时分别按 `60/30/10/5` 分钟检查。常态不回传主对话，只在完成或异常时通知；原始轮转导致 step 50 被删除不判为异常。
 - 分析边界：重启由显式 checkpoint 策略变更触发，发生在首次运行尚无 checkpoint 时；不是根据 reward/dev 结果追分。首步只证明健康启动，不作效果判断。训练期间不再 fast-forward 服务器 source、不修改阈值或配置。
 - 下一动作：等待 Luna 的完成或异常信号；完成后先做技术、覆盖、成本和资源验收，再按预注册工程/科学门槛决定 C0 或回退 E2/F0。
+
+### 记录 027：R2-G 完成、后处理恢复且科学负向
+
+- 状态：250-step Dynamic Sampling 训练与 final dev 完整；工程成本门控通过，科学晋级线失败。R2-G 不晋级、不调参、不重跑，最终候选回退 E2，C0 按门控跳过。
+- 原始运行：`experiments/safe_grpo/r2g_e2_dynamic_lora_1k_seed20260812/`；训练 source commit `1a2e39c423df8d06f03c56987014c479f17fc9ba`、source status 为空。启动与原始退出时间为 2026-08-14 17:01:23 至 20:29:32 CST；250 step 累计 `11525.09s`，p50/p90 为 `45.48/51.82s`。
+- 后处理失败与恢复：训练日志含 250 条有 sampling 的训练记录，final validation 又以 `step=250` 写入第 251 条无 sampling 记录。旧分析器按 step 字典保留最后一条，误报缺少 sampling，故原 `exit_code` 内容为 `1` 且未写 `COMPLETE`；该错误发生在 checkpoint、final validation 与 `raw_rollouts.jsonl` 已完成之后。commit `d21be76` 改为按训练必需字段筛选并拒绝筛选后重复 step，远程测试 `25 passed`；仅重跑后处理成功，保留原 `exit_code=1`，新增 `postprocess_exit_code=0`、`POSTPROCESS_RECOVERED` 与恢复来源记录后写入 `COMPLETE`。未重跑训练或推理。
+- Checkpoint 与覆盖：tracker `last_global_step=250`、`best_global_step=50`；原始 `save_limit=2` 实际保留 step 50/250 actor。raw train query `4,208` 条、final dev `566` 条，均来自冻结 manifest；dev 每 token 恰好 1 条。raw train query parse success `0.99976`（1 条失败）、clipped `0`；dev parse success `1.0`、clipped `0`。
+- Dynamic Sampling 成本：250/250 step 均 `used_groups=4`，共 generated/kept/dropped `2104/1252/852` groups；平均 raw overhead `2.104× <=2.15×`，最大 `4.0×`；generation batches 平均 `2.104`、最大 `4<=5`，cap exhaustion 为 0。相对 E2 step wall-time ratio `1.23864<=2.0`，所有成本 gate 为 true。
+- Dev 点估计：PDMS scaled `0.65326`、PDMS `0.67718`、Safe `0.71555`、Collision `0.96555`、DAC `0.74205`、Progress `0.91150`、TTC `0.95406`、Comfort `0.92049`。
+- 相对 E2：PDMS scaled `-0.01904`，95% CI `[-0.04567,+0.00760]`；Safe `-0.02473`，CI `[-0.05477,+0.00353]`；Collision `-0.00353`，CI `[-0.01413,+0.00707]`；TTC 与 Comfort 均 `0`。Progress `+0.00212` 且 CI `[+0.00013,+0.00427]`，不足以抵消主指标与 Safe 的下降。
+- 查询效率：R2-G 使用 4,208 条 train reward query，而 E2 使用 2,000 条；主指标仍下降。折合每 1,000 条 R2-G query 的相对收益约 `-0.00452`，按额外 2,208 条 query 归一约 `-0.00862/1k extra query`，不存在用成本换得的科学收益。
+- 资源：恢复后 GPU 0 MiB、8901 关闭、无训练/reward/Ray 残留；运行目录约 16 GB，`/root/autodl-tmp` 可用约 31 GB。R1 权重已按记录 026 删除，R2-G checkpoint 暂保留为正式负结果证据。
+- 结论边界：exact-zero filtering 在当前 FALS/E2 设置下可靠地提高了 optimizer batch 的 informative-group 密度，但单 discovery seed 的 final dev 明确未达到 `Delta PDMS_scaled>=+0.01000`，Safe 也下降。该结果否定当前实现的晋级，不证明其他模型、group size 或训练预算下 Dynamic Sampling 普遍无效。
+- R3 前置证据：现有 E2 1,000 个训练期 2-rollout group 中，345 个同时满足“两条均 unsafe”与 `max PDMS_scaled=0`，proxy ratio `34.5%`。这只用于冻结候选，不代替 frozen-E2 四 rollout persistent-failure 门控。
+- 决策：不运行 C0；下一步只执行 train-only R3 gate。先冻结上述 345-token proxy manifest，用 E2 step 250 各生成 4 条 baseline；确认至少 100 个 persistent-failure token 才进入最多 200-token 的 Treatment/Control recovery feasibility，否则关闭 R3 并以 E2 进入 F0。
+- 下一动作：实现 deterministic proxy manifest、frozen E2 checkpoint inference 与严格四 rollout 验收；代码、manifest 和 feedback 模板在生成 recovery 结果前冻结，held-out 继续不访问。
 
 ## 10. 后续记录模板
 
