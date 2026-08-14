@@ -142,6 +142,8 @@ class TrainerConfig:
     """save frequency, -1 means no saving"""
     save_limit: int = -1
     """max number of checkpoints to save, -1 means no limit"""
+    keep_checkpoint_steps: Tuple[int, ...] = ()
+    """checkpoint steps protected from save-limit rotation"""
     save_model_only: bool = False
     """save model only, no optimizer state dict"""
     save_checkpoint_path: Optional[str] = None

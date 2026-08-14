@@ -118,6 +118,7 @@ esac
 MAX_STEPS=250
 SAVE_FREQ=50
 SAVE_LIMIT=2
+KEEP_CHECKPOINT_STEPS='[]'
 SKIP_FINAL_VALIDATION=false
 SAVE_MODEL_ONLY=false
 ONLINE_FILTERING=false
@@ -138,7 +139,7 @@ if [[ "$STAGE" == r2p ]]; then
     SAVE_MODEL_ONLY=true
     IS_R2_PILOT=true
 elif [[ "$STAGE" == r2g ]]; then
-    SAVE_LIMIT=5
+    KEEP_CHECKPOINT_STEPS='[50]'
     TRAIN_ROLLOUT_FILE=raw_train_query_rollouts.jsonl
     TRAIN_COVERAGE_ARGS=()
 fi
@@ -212,9 +213,9 @@ if [[ "$STAGE" == d0 ]]; then
 elif [[ "$STAGE" =~ ^(e[1-4]|r1|r2p|r2g)$ ]]; then
     cp "$ITERATION_MANIFEST" "$RUN_DIR/train_tokens.txt"
 fi
-printf 'stage=%s\nexperiment=%s\nseed=%s\ntrain_manifest=%s\nreward_function=%s\nadv_estimator=%s\nmax_steps=%s\nsave_freq=%s\nsave_limit=%s\nskip_final_validation=%s\nonline_filtering=%s\nfilter_mode=%s\nmax_try_make_batch=%s\nparent_experiment=%s\n' \
+printf 'stage=%s\nexperiment=%s\nseed=%s\ntrain_manifest=%s\nreward_function=%s\nadv_estimator=%s\nmax_steps=%s\nsave_freq=%s\nsave_limit=%s\nkeep_checkpoint_steps=%s\nskip_final_validation=%s\nonline_filtering=%s\nfilter_mode=%s\nmax_try_make_batch=%s\nparent_experiment=%s\n' \
     "$STAGE" "$EXP_NAME" "$SEED" "$ACTIVE_MANIFEST" "$REWARD_FUNCTION" "$ADV_ESTIMATOR" \
-    "$MAX_STEPS" "$SAVE_FREQ" "$SAVE_LIMIT" "$SKIP_FINAL_VALIDATION" "$ONLINE_FILTERING" "$FILTER_MODE" \
+    "$MAX_STEPS" "$SAVE_FREQ" "$SAVE_LIMIT" "$KEEP_CHECKPOINT_STEPS" "$SKIP_FINAL_VALIDATION" "$ONLINE_FILTERING" "$FILTER_MODE" \
     "$MAX_TRY_MAKE_BATCH" "${PARENT_EXP_NAME:-}" \
     > "$RUN_DIR/run.env"
 exec > "$RUN_DIR/run.log" 2>&1
@@ -322,6 +323,7 @@ else
         trainer.skip_final_validation="$SKIP_FINAL_VALIDATION" \
         trainer.save_freq="$SAVE_FREQ" \
         trainer.save_limit="$SAVE_LIMIT" \
+        trainer.keep_checkpoint_steps="$KEEP_CHECKPOINT_STEPS" \
         trainer.save_model_only="$SAVE_MODEL_ONLY" \
         trainer.save_checkpoint_path="$RUN_DIR/checkpoints"
 
