@@ -35,8 +35,10 @@ print(yaml.safe_load(open(sys.argv[1]))["output_dir"])
 PY
 )"
 RUN_ROOT="$(dirname "$OUTPUT_DIR")"
+TRAIN_ARGS=("$CONFIG")
 if [[ "$MODE" == "resume-check" ]]; then
     test -d "$OUTPUT_DIR/checkpoint-20"
+    TRAIN_ARGS+=(max_steps=21 save_strategy=no)
 else
     test ! -e "$RUN_ROOT"
     mkdir -p "$RUN_ROOT"
@@ -58,7 +60,7 @@ PY
 fi
 
 set +e
-"$TRAIN_ENV/bin/llamafactory-cli" train "$CONFIG"
+"$TRAIN_ENV/bin/llamafactory-cli" train "${TRAIN_ARGS[@]}"
 EXIT_CODE=$?
 set -e
 printf '%s\n' "$EXIT_CODE" > "$RUN_ROOT/${MODE}_exit_code"

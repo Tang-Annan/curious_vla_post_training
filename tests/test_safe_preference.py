@@ -444,6 +444,13 @@ def test_preference_smoke_configs_are_exact_20_step_derivatives():
         assert differing == {"max_steps", "output_dir", "save_steps"}
 
 
+def test_preference_resume_check_runs_one_step_without_new_checkpoint():
+    source = (ROOT / "scripts/run_safe_preference_experiment.sh").read_text(encoding="utf-8")
+
+    assert 'TRAIN_ARGS+=(max_steps=21 save_strategy=no)' in source
+    assert 'llamafactory-cli" train "${TRAIN_ARGS[@]}"' in source
+
+
 def test_preference_dataset_registration_matches_training_schema():
     info = json.loads((ROOT / "sft/preference/dataset_info.json").read_text(encoding="utf-8"))
 

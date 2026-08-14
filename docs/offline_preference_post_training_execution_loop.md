@@ -9,7 +9,7 @@
 - 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，P1-S 执行 source `fe6eac6`，P1-M 容量门控 source `9b5fdc1`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
 - 路线结论：停止围绕 GRPO estimator、sampling cap、reward coefficient 或 std normalization 继续追分；已完成的 E0–E4、R1–R3 作为前半段证据冻结。
 - 新核心问题：在固定 rollout / reward-query 预算下，能否把已有 trajectory-level safety/quality reward 转成离线 preference supervision，并以更低在线成本获得比 RSFT、普通 DPO 和现有 FALS-GRPO 更稳定的策略。
-- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。当前进入 M2/M3/M4 配置审计与 M2 smoke，不读取 dev。
+- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。M2 20-step smoke 与自动恢复检查已通过，当前只允许从 Stage-2 独立启动 M2 正式 180-step 训练，不读取 dev。
 - 冻结开发集：566 token；每个正式方法只允许一次最终 dev 评估，不用 dev 选择 pair 阈值或训练超参数。
 - 旧 565-token held-out 已访问 520 条并永久失去 unseen 资格；部分 rollout 已删除，`F1_HELDOUT_ACCESSED` 永久锁保留，禁止补跑剩余 45 条或把它用于最终确认。
 - P0 证明当前服务器资产无法建立合格的新 final set：旧 manifest 外 97,632 个 token 的 log 可用，但 CAM_F0 图像可用数为 0。P6 预注册为不执行 final-set 推理，除非用户未来明确扩展数据下载范围并在任何新方法 dev 结果产生前重新立项。
@@ -27,9 +27,9 @@
 | P6 | 本路线不执行 | 0 | 第二 seed、behavior audit 与新 final set 是否确认结论 | 无 preference 候选且 P0 无新 final set |
 | M0 | 已预注册 | 0 | 如何在不篡改 P1-M 负结论下形成可辨识 DPO 对照 | matched Tier-A hard-negative 设计 |
 | M1 | 已完成 | 0 | 960 个严格 matched scene 能否生成确定性多模态数据 | 全门控通过，数据与 hash 冻结 |
-| M2 | 执行中 | 低 | 同一 chosen-only RSFT 的收益 | 冻结配置，20-step smoke 后 3 epochs |
-| M3 | 等待 M2 smoke | 中低 | worst-PDMS easy-negative DPO 是否优于 RSFT | 与 M4 同 token/chosen 的 DPO 对照 |
-| M4 | 等待 M2 smoke | 中低 | hard-unsafe negative 是否优于 easy-negative | 唯一变量为 rejected trajectory |
+| M2 | smoke 通过，正式训练待启动 | 低 | 同一 chosen-only RSFT 的收益 | 从 Stage-2 独立执行 3 epochs / 180 steps |
+| M3 | 等待 M2 正式训练 | 中低 | worst-PDMS easy-negative DPO 是否优于 RSFT | 与 M4 同 token/chosen 的 DPO 对照 |
+| M4 | 等待 M2 正式训练 | 中低 | hard-unsafe negative 是否优于 easy-negative | 唯一变量为 rejected trajectory |
 | M5 | 被 M2–M4 阻塞 | 0 | DPO 是否形成正向、负向或证据不足闭环 | paired bootstrap 后停止或条件第二 seed |
 
 ## 2. 分支与代码处理决策
@@ -658,3 +658,10 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - 失败位置：LLaMA-Factory 已加载 dataset registration 并开始 tokenizer preprocessing，但 YAML 未显式设置 `media_dir`，相对 `navsim/...jpg` 被回退为相对 source checkout 的路径，随后触发 `FileNotFoundError`。失败发生在 model/optimizer step 0 之前，GPU 仅出现约 386 MiB 初始化占用；没有 checkpoint、adapter、loss 或 dev 结果。
 - 根因边界：M1 全量 processor 已用 `/root/autodl-tmp/curious-vla-workspace/data` 验证 960/960 图像，因此不是数据缺失，也不授权替换样本。唯一修复是在全部六份 YAML 显式加入同一绝对 `media_dir`；M2 retry 使用全新 `m2_rsft_smoke20_seed20260812_retry1`，不覆盖 attempt 0。该字段只解析已冻结 image，不改变 token/prompt/chosen、训练超参或科学变量。
 - 决策：补充 config regression assertion、冻结新 source 并重做 GPU parser/preflight 后只运行 M2 smoke retry1。retry1 通过并写回前，M2 正式训练仍阻塞。
+
+### 记录 009：M2 smoke retry1 与自动恢复门控
+
+- 状态：通过。retry1 source `facf3b6c01924d32a4daae7e91218c27da5d0ea7`；正式运行目录为 `/root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m2_rsft_smoke20_seed20260812_retry1/`，与 attempt 0 隔离。20-step smoke 的 `smoke_exit_code=0`，20/20 optimizer steps 完成；20 条 loss 与 grad norm 全部 finite，loss 从 `6.8868189` 降至 `6.6146002`，grad norm 范围 `3.2009–3.7203`，train runtime `195.62` 秒，监控峰值显存约 `22,462 MiB`。trainable params 为 3,686,400（0.0981%），vision tower/projector 冻结，gradient checkpointing 与 SDPA 生效；无 OOM、NaN 或 traceback。
+- checkpoint/恢复门控：首次 smoke 生成可恢复的 `checkpoint-20`，包含 optimizer、scheduler 与 RNG 状态。自动恢复成功识别 checkpoint-20/global step 20；由于 Trainer 对等于既有 `max_steps` 的恢复边界会继续运行，原检查额外完成了技术验证 step 21，loss `6.619`、grad norm `3.857`、learning rate `0`，并生成 `checkpoint-21`，`resume-check_exit_code=0`。这不改变 20-step smoke 的通过结论；step 21 和全部 smoke 权重永久不用于正式训练或 dev。
+- runner 闭环：后续 `resume-check` 显式覆盖为 `max_steps=21 save_strategy=no`，语义固定为从 checkpoint-20 恢复后只运行一个技术验证 step，并保留 checkpoint-20；普通 `smoke` 与 `train` 命令不变。现有 retry1 的 checkpoint-21 作为本次边界行为证据保留，不作为任何后续 runner 输入。
+- 决策：M2 smoke 的配置、数值稳定性、显存与自动恢复门控全部通过，允许进入 M2 正式训练。正式训练必须使用 `m2_rsft.yaml` 从 `/root/autodl-tmp/curious-vla-workspace/models/sft_stage2` 独立开始，目标目录 `/root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m2_rsft_seed20260812/` 必须在启动前不存在；不得从 smoke checkpoint 续训，不读取 dev。
