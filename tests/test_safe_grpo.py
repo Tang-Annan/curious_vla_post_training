@@ -422,6 +422,10 @@ def test_dynamic_sampling_pilot_analysis_uses_preregistered_cost_gates(tmp_path)
         parent_rows.append({"step": step, "timing_s": {"step": 40.0}})
     pilot_log.write_text("".join(json.dumps(row) + "\n" for row in pilot_rows), encoding="utf-8")
     parent_log.write_text("".join(json.dumps(row) + "\n" for row in parent_rows), encoding="utf-8")
+    with pilot_log.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"step": 20, "validation": {"reward": 1.0}}) + "\n")
+    with parent_log.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"step": 20, "validation": {"reward": 1.0}}) + "\n")
 
     report = analysis.analyze(pilot_log, parent_log)
 

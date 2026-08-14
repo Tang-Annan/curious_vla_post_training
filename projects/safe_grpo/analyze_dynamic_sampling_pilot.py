@@ -3,9 +3,16 @@ import json
 from pathlib import Path
 
 
-def load_steps(path: Path, expected_steps: int) -> list[dict]:
+def load_steps(path: Path, expected_steps: int, required_keys: tuple[str, ...]) -> list[dict]:
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    by_step = {int(row["step"]): row for row in rows if 1 <= int(row["step"]) <= expected_steps}
+    selected = [
+        row
+        for row in rows
+        if 1 <= int(row["step"]) <= expected_steps and all(key in row for key in required_keys)
+    ]
+    by_step = {int(row["step"]): row for row in selected}
+    if len(by_step) != len(selected):
+        raise ValueError(f"Duplicate training steps in {path} after filtering for {required_keys}.")
     expected = set(range(1, expected_steps + 1))
     if set(by_step) != expected:
         missing = sorted(expected - set(by_step))
@@ -31,8 +38,8 @@ def analyze(
     max_mean_raw_overhead: float = 2.30,
     max_wall_time_ratio: float = 2.0,
 ) -> dict:
-    pilot_rows = load_steps(pilot_log, expected_steps)
-    parent_rows = load_steps(parent_log, expected_steps)
+    pilot_rows = load_steps(pilot_log, expected_steps, ("sampling", "timing_s"))
+    parent_rows = load_steps(parent_log, expected_steps, ("timing_s",))
     sampling = [row.get("sampling") for row in pilot_rows]
     if any(item is None for item in sampling):
         raise ValueError("Pilot log is missing structured sampling metrics.")
