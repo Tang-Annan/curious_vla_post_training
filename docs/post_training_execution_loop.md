@@ -5,7 +5,7 @@
 ## 1. 当前决策快照
 
 - 最后更新：2026-08-14
-- 开发分支：`codex/post-training-analysis`；R1 服务器运行 Git HEAD：`6051499`
+- 开发分支：`codex/post-training-analysis`；R2-P 实现 commit `735ac7d`；R1 服务器运行 checkout `6051499`
 - 当前最佳已训练候选：E2 FALS-only `global_step_250/actor`
 - 当前执行动作：只读监控正式 R1；本地预注册并实现 R2-P，不在 R1 运行期间热更新服务器 checkout
 - 当前封存动作：暂停 E2 step-50 dev 审计；held-out 继续完全封存
@@ -19,7 +19,7 @@
 | R0 | 已完成 | R1 gate 通过；R2 预计开销 `2.02779×`，超过 `2.0×` 门槛 | 证据冻结，不重算门槛 |
 | R1 | 正式运行中 | FALS + Dr.GRPO 单因素消融 | Luna 按 ETA 分段静默监控 |
 | 原 R2 gate | 已失败并冻结 | cap 5 的估计 raw rollout 开销 `2.02779× > 2.0×` | 不改写为通过 |
-| R2-P | 已重新预注册 | 20-step 无 dev pilot 实测 exact-zero filtering 的可靠性与成本 | R1 完成后按父方法分支执行 |
+| R2-P | 实现与隔离验证通过 | 20-step 无 dev pilot 实测 exact-zero filtering 的可靠性与成本 | R1 完成后按父方法分支执行 |
 | R2-D / R2-G | 条件执行 | 只在 R2-P 通过后运行 250-step Dynamic Sampling | 不用 dev 调成本门槛 |
 | R3 | 可选 | Failure-Guided Recovery 等预算可行性对照 | 核心 R1/R2 路线完成后再决定 |
 | C0 | 条件执行 | 最终新方法与 E2 的匹配训练种子确认 | 仅对达到晋级线的方法执行 |
@@ -742,13 +742,14 @@ F1 只运行一次。无论结果好坏都不得再改模型、checkpoint 或阈
 
 ### 记录 023：R2 成本模型复审并新增前瞻 R2-P
 
-- 状态：原 R2 gate 失败事实冻结；R2-P 已重新预注册，尚未实现或运行。
+- 状态：原 R2 gate 失败事实冻结；R2-P 已重新预注册、实现并通过隔离远程测试，尚未运行 GPU pilot。
 - 触发原因：原 cap-5 Monte Carlo 平均 raw rollout overhead `2.02779×` 只比 `2.0×` 高约 1.4%，用户要求复核该成本门槛是否过严。
 - 复审结果：在 informative ratio `0.612`、每 generation batch 固定 4 group 的现有骨架下，cap-5 精确期望 overhead 为 `2.02823×`；原 `<=2.0×` 对该离散实现近乎结构性不可达。cap 4 的 250-step 累计失败率约 `15.33%`，cap 5 约 `0.74%`，不能通过降低可靠性换成本。
 - 新门控：先运行 cap-5、20-step、无 dev R2-P；固定 4 个有效 group且不得 fallback。平均 raw overhead `<=2.30×`、相对父方法前 20 step wall time `<=2.0×` 才允许正式 R2；正式阶段平均 raw overhead 收紧为 `<=2.15×`。
 - 父方法：R1 全部晋级则使用 Dr.GRPO；否则使用 E2/GRPO。两者都从同一 Stage-2 base 开始，Dynamic Sampling 是唯一新增训练变量。
+- 代码与验证：commit `735ac7da9efcd376e78fca8a5928c4489460f6c4` 新增 `zero_variance` group filter、cap-5 固定 batch、结构化 sampling 指标、R2-P launcher 与成本分析器。服务器在 `/tmp/r2p-735ac7d` 隔离 worktree 执行 `bash -n`、`py_compile` 和完整测试，结果 `22 passed`；运行中的主 checkout 仍为 `6051499` 且 status 为空。
 - 解释边界：这是根据实现粒度问题新建的前瞻 pilot，不回写 R0 gate、不使用 dev 调成本门槛、不保证 R2 科学收益。
-- 下一动作：R1 运行期间只在本地实现和测试 R2-P；R1 完成、结果写回后才同步服务器并启动所选父方法的 pilot。
+- 下一动作：等待 R1 完成并选择父方法；结果写回后才 fast-forward 服务器主 checkout，并启动所选父方法的 R2-P。
 
 ## 10. 后续记录模板
 
