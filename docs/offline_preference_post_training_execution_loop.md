@@ -6,10 +6,10 @@
 
 ## 1. 当前决策快照
 
-- 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
+- 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，P1-S 执行 source `fe6eac6`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
 - 路线结论：停止围绕 GRPO estimator、sampling cap、reward coefficient 或 std normalization 继续追分；已完成的 E0–E4、R1–R3 作为前半段证据冻结。
 - 新核心问题：在固定 rollout / reward-query 预算下，能否把已有 trajectory-level safety/quality reward 转成离线 preference supervision，并以更低在线成本获得比 RSFT、普通 DPO 和现有 FALS-GRPO 更稳定的策略。
-- 当前唯一动作：P0 已闭环；进入 P1-S，只定位并冻结原始 assistant template，随后实现 D0 schema/join/round-trip 审计，不启动 GPU。
+- 当前唯一动作：P0、P1-S 已闭环；进入 P1-M，只按冻结规则构造 PDMS-Pair、Safety-Gap-Pair 与 chosen-only RSFT 数据，先验收 pair 数量、比例、确定性与泄漏，不启动 GPU。
 - 冻结开发集：566 token；每个正式方法只允许一次最终 dev 评估，不用 dev 选择 pair 阈值或训练超参数。
 - 旧 565-token held-out 已访问 520 条并永久失去 unseen 资格；部分 rollout 已删除，`F1_HELDOUT_ACCESSED` 永久锁保留，禁止补跑剩余 45 条或把它用于最终确认。
 - P0 证明当前服务器资产无法建立合格的新 final set：旧 manifest 外 97,632 个 token 的 log 可用，但 CAM_F0 图像可用数为 0。P6 预注册为不执行 final-set 推理，除非用户未来明确扩展数据下载范围并在任何新方法 dev 结果产生前重新立项。
@@ -18,8 +18,8 @@
 | 阶段 | 状态 | GPU | 回答的问题 | 下一动作 |
 | --- | --- | ---: | --- | --- |
 | P0 | 已完成 | 0 | 如何保留 GRPO 证据、隔离新路线并修正 final-set 边界 | 无新 final set；旧 split 永久封存 |
-| P1-S | 执行中 | 0 | 18,100 条 scored rollout 是否具备可训练表示 | 定位 assistant template，审计 schema/join/round-trip |
-| P1-M | 被 P1-S 阻塞 | 0 | PDMS 与 Safety-Gap 能构成多少可信 pair | 只用 train 构建统计与冻结数据集 |
+| P1-S | 已完成 | 0 | 18,100 条 scored rollout 是否具备可训练表示 | 18,088 条候选通过 join/round-trip，允许 P1-M |
+| P1-M | 执行中 | 0 | PDMS 与 Safety-Gap 能构成多少可信 pair | 只用 train 构建统计与冻结数据集 |
 | P2 | 被 P1-M 阻塞 | 低 | 只学习 chosen trajectory 是否足够 | chosen-only RSFT |
 | P3 | 被 P1-M 阻塞 | 中低 | pairwise PDMS supervision 是否优于 RSFT/GRPO | 普通 trajectory DPO |
 | P4 | 被 P1-M 阻塞 | 中低 | safety-aware pair mining 是否带来独立增益 | Safety-Gap DPO |
@@ -49,12 +49,12 @@ git switch -c codex/offline-preference-post-training
 
 | 位置 | 责任 | 当前状态 |
 | --- | --- | --- |
-| `projects/safe_preference/build_preference_dataset.py` | schema 审计、join、pair mining、LLaMA-Factory 数据输出 | P1-S 待实现 |
+| `projects/safe_preference/build_preference_dataset.py` | schema 审计、join、pair mining、LLaMA-Factory 数据输出 | P1-S schema/join/processor 审计已实现；P1-M 待实现 |
 | `projects/safe_preference/analyze_preference_dataset.py` | pair 数量、gap、长度、安全构成与 hash 汇总 | 待实现；只有 builder 过大时才拆分 |
 | `sft/preference/` | P2/P3/P4 的冻结 YAML 与 export YAML | 待实现 |
 | `scripts/run_safe_preference_experiment.sh` | smoke、正式训练、导出、状态与证据门控 | 待实现 |
 | `scripts/run_safe_preference_eval.sh` | 复用冻结 NAVSIM dev 协议评估任意 merged model | 待实现 |
-| `tests/test_safe_preference.py` | pair 规则、泄漏、round-trip、确定性与失败语义 | 待实现 |
+| `tests/test_safe_preference.py` | pair 规则、泄漏、round-trip、确定性与失败语义 | P1-S 5 项测试通过；P1-M 规则测试待补 |
 | `projects/safe_grpo/`、`scripts/run_safe_grpo_experiment.sh` | 历史 GRPO 证据 | 只读，不扩展 |
 
 不要先写新的 trainer、reward model 或通用数据框架。第一版只实现一个确定性 builder、三份配置和两个薄启动器。
@@ -538,3 +538,19 @@ P4-v1 frozen model
 - P1 前置缺口：D0 18,100 行确认不含 `response`；服务器存在 103,288 行 RL parquet prompt/image/token，但预设的原始 103k SFT JSON 不存在。实际 trajectory stats 路径修正为 `stats/trajectory_stats_train.json`。
 - 决策：P0 完成；关闭当前 final-set 分支。允许进入 P1-S，只定位可验证的 assistant-template 来源并实现 train-only 表示审计，仍不启动 GPU。
 - 下一动作：检查官方已下载数据或 Hugging Face 发布文件是否能恢复与 RL token 一一对应的原始 assistant JSON；找不到则按 P1-S 门控阻塞，不生成占位 response。
+
+### 记录 002：P1-S assistant-template、join、round-trip 与 processor 门控闭环
+
+- 状态：技术通过；P1-S 全部硬门控通过，允许进入 P1-M，仍未启动 GPU、reward server、训练或任何 dev/legacy-held-out 推理。
+- 假设与唯一变量：只回答 D0 的 score/denormalized pose 能否与实际 GRPO prompt、image 和官方合法 assistant JSON template 以 token 一一对应，并无损生成 LLaMA-Factory 多模态 preference response；不选择 pair、不读取 dev 指标、不改变模型。
+- 预注册门控：D0 必须为 18,100 行、4,525 token、每 token 4 条；RL/SFT join 均为 4,525/4,525；与 dev/legacy-held-out overlap 为 0；所有候选 trajectory 经 6 位小数序列化、当前 parser 与 denormalize 后误差 `<=1e-4`；图像存在；官方 assistant JSON schema 全量合法；确定性抽取 30 个样本经 pinned LLaMA-Factory `qwen2_vl` processor 后 response 长度 `<=512`。
+- 代码与环境：实现与测试 source `fe6eac6bc60c254fd41054610781c70ece0df0bd`，本地/服务器均为 `5 passed`，compile、`pip check` 与 diff check 通过，source status clean。LLaMA-Factory 冻结在 `f28afaf6355af515454dfb16c97d728307c93897`；processor-only Python 3.11 环境为 LLaMA-Factory `0.9.6.dev0`、Torch `2.8.0+cpu`、Transformers `5.8.0`、Datasets `4.0.0`、Accelerate `1.11.0`、PEFT `0.18.1`、TRL `0.24.0`。该 CPU 环境只用于 P1 schema/processor 验证；正式 P2–P4 GPU trainer 环境仍须在 P1-M 通过后单独冻结与 smoke 验收。
+- assistant-template 来源：官方发布地址 `MashiroLn/Curious-VLA-dev` 实际是 Hugging Face model repo，而仓库 `docs/train_sft.md` 的 `--repo-type dataset` 已失效。只下载 `CuriousVLA_data/QA_sft_navsim_train_cot_1view_103k_baseline_norm.json`，大小 553,008,318 bytes，LFS 与本地 SHA-256 均为 `0c5b1e689c259d007d2fdb8735ee10dfd4a93bd80ec977f66be9682e8736fcf5`；未下载整库或额外 sensor shard。
+- 原始证据：正式输出目录 `/root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/p1_d0_pairs_seed20260812/`；`schema_audit.json` 的 `all_core_gates_passed/all_gates_passed` 均为 `true`，`join_failures.jsonl` 与 `roundtrip_failures.jsonl` 均为 0 bytes，`source_commit.txt` 与执行 source 一致。其余输入 hash 与记录 001 一致；新增 SFT hash 如上。Stage-2 processor 文件 `tokenizer.json`、`tokenizer_config.json`、`preprocessor_config.json`、`chat_template.json` 的 hash 已写入 `schema_audit.json`。
+- 数据边界：D0 为 18,100 行、4,525 个唯一 train token、每 token 4 条；train manifest 精确相等，dev/legacy-held-out overlap 均为 0。RL parquet 与 SFT JSON 都是 103,288 行/唯一 token，D0 join 均为 4,525/4,525；SFT/RL image 对应 4,525/4,525，实际文件存在 4,525/4,525；4,525 个 assistant response 全部是无重复 key 的合法四字段 JSON 与 8×3 trajectory。
+- prompt 版本差异：SFT prompt 与实际 RL/GRPO prompt 的 byte-exact match 为 0/4,525，但全部且只存在同一处官方版本差异：Task 2 的 `optimal future 5-second trajectory` 在 SFT 中修正为 `4-second`；两者的 Task 4 均要求 4 秒、8 点 trajectory。正式 preference 表示原样保留 RL prompt，不改写 prompt；SFT 只提供同 token/image 的合法非 trajectory assistant 字段，因此未生成占位 explanation、伪标签或第二 prompt 真值源。
+- 技术结果：12 条 `parsed_ok=false` 或非 8×3 rollout 按预注册规则只计入统计、不进入候选池；其余 18,088 条全部 round-trip 通过，最大绝对误差 `0.0`，失败 0。30 个 salted-hash 确定性 processor 样本全部通过 `Qwen2_5_VLProcessor`，chosen/rejected response 为 394–419 tokens，完整多模态输入为 2,111–2,134 tokens，既满足 response `<=512`，也低于全局 cutoff 4,096。正式命令退出码 0；结束后 GPU 无 compute PID、8901 无监听、无残留 builder/pip 进程，磁盘可用约 60 GB。
+- 效果结果：不适用；P1-S 只证明表示、join、parser 与 processor 技术可行，未生成 preference dataset、未训练模型、未读取任何 dev 效果。
+- 分析边界：可以声明 D0 的 18,088 条合法 trajectory rollout 能在冻结来源下无占位地恢复为 trajectory-only preference response；不能据此声明可形成足够多的 Safety-Gap pair，更不能声明 DPO/RSFT 有收益。SFT/GRPO prompt 的系统性单行差异必须在后续数据与报告中继续保留审计记录。
+- 决策：P1-S 完成，按门控推进 P1-M；不修改 `5-second → 4-second` 的实际 RL prompt，不降低 P1-M 的 `B>=500`、60/40 或确定性门槛。
+- 下一动作：只实现并执行冻结的 P1-M pair mining；计算一次 `delta=PDMS gap 60th percentile`，验收 `N_P/N_A/N_B/N_C/B`、60/40、P2/P3/P4 等量、零泄漏、processor/round-trip 与字节确定性。若 `B<500`，关闭当前离线 DPO 路线，不启动 GPU。
