@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -385,3 +386,72 @@ def test_matched_audit_blocks_dev_leakage(tmp_path):
 
     assert not audit["gates"]["zero_dev_overlap"]
     assert not audit["all_core_gates_passed"]
+
+
+def load_preference_config(name):
+    return yaml.safe_load((ROOT / "sft/preference" / name).read_text(encoding="utf-8"))
+
+
+def test_preference_training_configs_freeze_budget_and_method_variables():
+    m2 = load_preference_config("m2_rsft.yaml")
+    m3 = load_preference_config("m3_easyneg_dpo.yaml")
+    m4 = load_preference_config("m4_hardneg_dpo.yaml")
+
+    for config in (m2, m3, m4):
+        assert config["model_name_or_path"].endswith("/models/sft_stage2")
+        assert config["image_max_pixels"] == 262144
+        assert config["finetuning_type"] == "lora"
+        assert config["lora_rank"] == 8
+        assert config["lora_alpha"] == 16
+        assert config["lora_target"] == "q_proj,k_proj,v_proj,o_proj"
+        assert config["freeze_vision_tower"]
+        assert config["freeze_multi_modal_projector"]
+        assert not config["disable_gradient_checkpointing"]
+        assert config["cutoff_len"] == 4096
+        assert config["per_device_train_batch_size"] == 1
+        assert config["gradient_accumulation_steps"] == 16
+        assert config["num_train_epochs"] == 3.0
+        assert config["seed"] == config["data_seed"] == 20260812
+        assert 960 * config["num_train_epochs"] / config["gradient_accumulation_steps"] == 180
+
+    assert m2["stage"] == "sft" and m2["learning_rate"] == 1.0e-5
+    for config in (m3, m4):
+        assert config["stage"] == "dpo"
+        assert config["learning_rate"] == 5.0e-6
+        assert config["pref_loss"] == "sigmoid"
+        assert config["pref_beta"] == 0.1
+
+    allowed_differences = {"dataset", "output_dir"}
+    assert {key for key in m3 if m3[key] != m4[key]} == allowed_differences
+
+
+def test_preference_smoke_configs_are_exact_20_step_derivatives():
+    pairs = (
+        ("m2_rsft.yaml", "m2_rsft_smoke.yaml"),
+        ("m3_easyneg_dpo.yaml", "m3_easyneg_dpo_smoke.yaml"),
+        ("m4_hardneg_dpo.yaml", "m4_hardneg_dpo_smoke.yaml"),
+    )
+    for formal_name, smoke_name in pairs:
+        formal = load_preference_config(formal_name)
+        smoke = load_preference_config(smoke_name)
+        assert smoke["max_steps"] == 20
+        assert smoke["save_steps"] == 20
+        assert "max_steps" not in formal
+        assert formal["save_steps"] == 180
+        differing = {key for key in set(formal) | set(smoke) if formal.get(key) != smoke.get(key)}
+        assert differing == {"max_steps", "output_dir", "save_steps"}
+
+
+def test_preference_dataset_registration_matches_training_schema():
+    info = json.loads((ROOT / "sft/preference/dataset_info.json").read_text(encoding="utf-8"))
+
+    assert not info["m2_matched_rsft"].get("ranking", False)
+    assert info["m3_matched_easyneg_dpo"]["ranking"]
+    assert info["m4_matched_hardneg_dpo"]["ranking"]
+    assert info["m2_matched_rsft"]["file_name"].endswith("/m2_rsft.json")
+    assert info["m3_matched_easyneg_dpo"]["file_name"].endswith("/m3_pdms_easyneg_dpo.json")
+    assert info["m4_matched_hardneg_dpo"]["file_name"].endswith("/m4_safety_hardneg_dpo.json")
+    for dataset in info.values():
+        assert dataset["columns"]["messages"] == "conversations"
+        assert dataset["columns"]["images"] == "images"
+        assert dataset["columns"]["system"] == "system"

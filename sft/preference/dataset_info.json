@@ -1,0 +1,35 @@
+{
+  "m2_matched_rsft": {
+    "file_name": "/root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m1_matched_tier_a_seed20260812/m2_rsft.json",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations",
+      "images": "images",
+      "system": "system"
+    }
+  },
+  "m3_matched_easyneg_dpo": {
+    "file_name": "/root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m1_matched_tier_a_seed20260812/m3_pdms_easyneg_dpo.json",
+    "ranking": true,
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations",
+      "chosen": "chosen",
+      "rejected": "rejected",
+      "images": "images",
+      "system": "system"
+    }
+  },
+  "m4_matched_hardneg_dpo": {
+    "file_name": "/root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m1_matched_tier_a_seed20260812/m4_safety_hardneg_dpo.json",
+    "ranking": true,
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations",
+      "chosen": "chosen",
+      "rejected": "rejected",
+      "images": "images",
+      "system": "system"
+    }
+  }
+}

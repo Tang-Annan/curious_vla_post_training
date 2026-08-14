@@ -1,0 +1,55 @@
+### model
+model_name_or_path: /root/autodl-tmp/curious-vla-workspace/models/sft_stage2
+image_max_pixels: 262144
+trust_remote_code: true
+flash_attn: sdpa
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 8
+lora_alpha: 16
+lora_dropout: 0.0
+lora_target: q_proj,k_proj,v_proj,o_proj
+freeze_vision_tower: true
+freeze_multi_modal_projector: true
+disable_gradient_checkpointing: false
+
+### dataset
+dataset_dir: sft/preference
+dataset: m2_matched_rsft
+template: qwen2_vl
+cutoff_len: 4096
+packing: false
+overwrite_cache: true
+preprocessing_num_workers: 8
+dataloader_num_workers: 4
+
+### output
+output_dir: /root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m2_rsft_smoke20_seed20260812/adapter
+logging_steps: 1
+save_strategy: steps
+save_steps: 20
+save_total_limit: 1
+plot_loss: true
+overwrite_output_dir: false
+save_only_model: false
+report_to: none
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 1.0e-5
+num_train_epochs: 3.0
+max_steps: 20
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+weight_decay: 0.0
+max_grad_norm: 1.0
+optim: adamw_torch
+bf16: true
+seed: 20260812
+data_seed: 20260812
+ddp_timeout: 180000000
+resume_from_checkpoint: null
