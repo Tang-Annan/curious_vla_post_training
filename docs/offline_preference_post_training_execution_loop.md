@@ -9,7 +9,7 @@
 - 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，P1-S 执行 source `fe6eac6`，P1-M 容量门控 source `9b5fdc1`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
 - 路线结论：停止围绕 GRPO estimator、sampling cap、reward coefficient 或 std normalization 继续追分；已完成的 E0–E4、R1–R3 作为前半段证据冻结。
 - 新核心问题：在固定 rollout / reward-query 预算下，能否把已有 trajectory-level safety/quality reward 转成离线 preference supervision，并以更低在线成本获得比 RSFT、普通 DPO 和现有 FALS-GRPO 更稳定的策略。
-- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。M2 与 M3 正式训练均已通过，当前只允许执行 M4 hard-unsafe DPO 的 20-step smoke，不读取 dev。
+- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。M2/M3 正式训练与 M4 20-step smoke 均已通过，当前只允许执行 M4 checkpoint-20 单步自动恢复门控，不读取 dev。
 - 冻结开发集：566 token；每个正式方法只允许一次最终 dev 评估，不用 dev 选择 pair 阈值或训练超参数。
 - 旧 565-token held-out 已访问 520 条并永久失去 unseen 资格；部分 rollout 已删除，`F1_HELDOUT_ACCESSED` 永久锁保留，禁止补跑剩余 45 条或把它用于最终确认。
 - P0 证明当前服务器资产无法建立合格的新 final set：旧 manifest 外 97,632 个 token 的 log 可用，但 CAM_F0 图像可用数为 0。P6 预注册为不执行 final-set 推理，除非用户未来明确扩展数据下载范围并在任何新方法 dev 结果产生前重新立项。
@@ -29,7 +29,7 @@
 | M1 | 已完成 | 0 | 960 个严格 matched scene 能否生成确定性多模态数据 | 全门控通过，数据与 hash 冻结 |
 | M2 | 正式训练完成，等待唯一 dev | 0 | 同一 chosen-only RSFT 的收益 | M3/M4 训练闭环后才执行冻结 dev |
 | M3 | 正式训练完成，等待唯一 dev | 0 | worst-PDMS easy-negative DPO 是否优于 RSFT | M4 训练闭环后才执行冻结 dev |
-| M4 | smoke 待启动 | 中低 | hard-unsafe negative 是否优于 easy-negative | 先执行 20-step smoke 与自动恢复门控 |
+| M4 | smoke 通过，resume-check 待执行 | 中低 | hard-unsafe negative 是否优于 easy-negative | 从 checkpoint-20 执行单步恢复门控 |
 | M5 | 被 M2–M4 阻塞 | 0 | DPO 是否形成正向、负向或证据不足闭环 | paired bootstrap 后停止或条件第二 seed |
 
 ## 2. 分支与代码处理决策
@@ -693,3 +693,10 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - 训练结果：`train_exit_code=0`，3 epochs、180/180 optimizer steps；`trainer_log.jsonl` 含 step 1–180 与 final summary，最终 trainer state 为 global step 180/epoch 3，checkpoint-180 state 也为 global step 180。逐项检查 loss、grad norm、learning rate、chosen/rejected reward、accuracy/margin、logps/logits 与汇总指标，全部 finite；final train loss `0.7331261`，train runtime `3983.8569` 秒，steps/s `0.045`。
 - 产物与资源：`checkpoint-180` 完整包含 adapter、optimizer、scheduler、RNG、trainer state 与 training args；final adapter 与 checkpoint-180 adapter SHA-256 相同（`0221e46b...4183cc`）。LoRA trainable params 为 3,686,400/3,757,762,560（0.0981%），vision tower/projector frozen，gradient checkpointing 与 torch SDPA 生效；观测峰值显存约 `22,605 MiB`，Trainer GPU peak delta `15,292,894,208` bytes。source/config/M1 hashes 一致，错误扫描为空；结束后训练/launcher 进程、GPU compute 与 8901 均已清场，磁盘剩余 52 GB。
 - 决策：M3 只完成训练稳定性门控，尚未读取冻结 dev，不能判断 easy-negative DPO 是否优于 M2 RSFT。M3 adapter/checkpoint/metrics 进入保留集合，不得清理。下一动作只允许从同一 Stage-2 独立执行 M4 hard-unsafe DPO 20-step smoke；通过自动恢复并写回前，不启动 M4 正式训练或任何 dev 评估。
+
+### 记录 014：M4 hard-unsafe DPO smoke
+
+- 状态：通过。source `de1fe154ee489223375209d0dcb59f7051079a57`；目录为 `/root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m4_hardneg_dpo_smoke20_seed20260812/`。启动前 16 项测试、runner `bash -n`、source/M1 hashes、GPU/8901 空闲、目标目录不存在与磁盘门控全部通过；训练只使用冻结 M4 hard-unsafe rejected 数据，没有读取 dev 或 M2/M3 checkpoint。
+- 训练结果：`smoke_exit_code=0`，20/20 optimizer steps；loss、grad norm、learning rate、chosen/rejected reward、accuracy/margin、logps/logits 与汇总指标全部 finite。final train loss `0.7023400`，train runtime `443.8984` 秒，steps/s `0.045`。LoRA trainable params 为 3,686,400/3,757,762,560（0.0981%），vision tower/projector frozen，gradient checkpointing 与 torch SDPA 生效；观测峰值显存约 `22,543 MiB`。
+- 产物与清场：`checkpoint-20` 完整包含 adapter、optimizer、scheduler、RNG、trainer state 与 training args；final adapter 与 checkpoint-20 adapter SHA-256 相同（`b188e60f...ec726dc2`）。source/config/M1 hashes 一致，错误扫描为空；结束后训练/launcher 进程、GPU compute 与 8901 均已清场，磁盘剩余 52 GB。
+- 决策：M4 smoke 数值稳定性与资源门控通过，但正式训练仍被自动恢复检查阻塞。下一动作只允许从 checkpoint-20 显式恢复并执行技术验证 step 21，使用已修复的 `max_steps=21` 与字符串 `save_strategy="no"`；不得生成 checkpoint-21。恢复通过并写回后，才允许从 Stage-2 独立启动 M4 正式训练。
