@@ -595,7 +595,7 @@ P4-v1 frozen model
 - common chosen：全部 rollout 中 quality tuple 最大者，同时必须等于 safe rollout 中最大者；
 - M3 easy-unsafe rejected：全部 rollout 中 quality tuple 最小者，同时必须 unsafe；
 - M4 hard-unsafe rejected：unsafe rollout 中 quality tuple 最大者；
-- 只保留 M3/M4 rejected 的 rollout index 不同的 scene；因此 P2、M3、M4 的 token/prompt/image/chosen 完全相同，M3→M4 唯一数据变量是 rejected trajectory；
+- 只保留 M3/M4 rejected 的 rollout index 不同，且去掉末项 `-rollout_index` 后前五项 measured quality tuple 严格不同的 scene；仅靠 deterministic index tie-break 产生的两个 rejected 不是可辨识的 easy/hard-quality 对照，必须排除。因此 P2、M3、M4 的 token/prompt/image/chosen 完全相同，M3→M4 唯一数据变量是 rejected trajectory；
 - 按 hard-unsafe rejected 的 quality tuple 降序、token 升序稳定排序，冻结前 960 个 scene。960 等于 60 个 global batch，3 epochs 恰为 180 个 optimizer step，不按 dev 结果修改。
 
 train-only 容量预审计得到 987 个严格 eligible scene，足够冻结 960；不得为追求更多样本加入 pair 相同、chosen 不同、easy rejected 为 safe 或 parse failure 的 scene。输出目录固定为：
@@ -627,3 +627,10 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - train-only 依据：原 Tier A 为 2,855 scene；要求 positive PDMS gap、common chosen 相同、M3 easy rejected unsafe、M3/M4 rejected 不同后仍有 987 scene，冻结 B=960。预审计中 common chosen 960/960 相同、两种 rejected 960/960 不同且 unsafe；hard rejected 相对 easy rejected 的 progress 中位差为 `+0.02417`，说明新对照改变的是更具进展性的 unsafe hard negative，而不是重复原 PDMS pair。
 - 决策：进入 M1 数据冻结；原 P1-M 的 q60/60–40 负结论继续保留，不再作为新 M 路线的数据门槛。
 - 下一动作：实现最小 matched dataset builder 和规则测试，正式输出前先冻结 source；M1 全门控通过前不创建 YAML、不安装 GPU trainer、不启动 GPU。
+
+### 记录 005：M1 source preflight 与遗漏条件显式化
+
+- 状态：技术预检完成，尚未生成 M1 正式目录、未启动 GPU。M1 builder source `8407d39` 的 11 项 fixture 测试在本地与服务器均通过，但第一次全量 train-only selection preflight 暴露了台账文字与记录 004 数值之间的不一致。
+- 证据：若只执行“easy/hard rejected index 不同”，严格候选为 1,662，冻结前 960 后 hard−easy `ego_progress` 中位差为 `0.00000`，不能复现记录 004 的 987 / `+0.02417`。其中 675 个 scene 的 easy/hard 前五项 measured quality 完全相同，只因末项 `-rollout_index` tie-break 被分为不同 index。
+- 修正边界：在任何正式数据输出或 dev 访问前，把“去掉 `-rollout_index` 后 measured quality 必须严格不同”显式写入 M1。该条件精确得到 987 个候选，冻结前 960 的 hard−easy `ego_progress` 中位差为 `+0.0241652`，与记录 004 预审计一致；它不改变 `is_safe`、quality 排序、960 数量或训练超参，只排除没有可观测 quality 差异的 arbitrary tie-break。
+- 决策：补充对应回归测试并重新冻结 source 后执行 M1；不得使用 1,662-candidate 版本生成数据。M1 仍阻塞所有 YAML、GPU trainer 与训练。

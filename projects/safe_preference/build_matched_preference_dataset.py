@@ -91,6 +91,9 @@ def select_matched_scenes(
         if easy["rollout_index"] == hard["rollout_index"]:
             filters["same_rejected"] += 1
             continue
+        if easy["quality"][:-1] == hard["quality"][:-1]:
+            filters["rejected_differs_only_by_index_tie_break"] += 1
+            continue
         eligible.append(
             {
                 "token": token,

@@ -286,6 +286,25 @@ def test_matched_quality_tie_break_prefers_lower_rollout_index():
     assert builder.quality_tuple(row, 0) > builder.quality_tuple(row, 1)
 
 
+def test_matched_selection_excludes_rejections_that_differ_only_by_index_tie_break():
+    builder = load_matched_builder()
+    rows = [
+        matched_metric_row("eligible", 1.0, 1.0, safe=True, pose=0.0),
+        matched_metric_row("eligible", 0.8, 0.8, safe=True, pose=1.0),
+        matched_metric_row("eligible", 0.7, 0.9, safe=False, pose=2.0),
+        matched_metric_row("eligible", 0.1, 0.1, safe=False, pose=3.0),
+        matched_metric_row("tie", 1.0, 1.0, safe=True, pose=4.0),
+        matched_metric_row("tie", 0.8, 0.8, safe=True, pose=5.0),
+        matched_metric_row("tie", 0.0, 0.0, safe=False, pose=6.0),
+        matched_metric_row("tie", 0.0, 0.0, safe=False, pose=7.0),
+    ]
+
+    _, report = builder.select_matched_scenes(rows, expected_rollouts=4, pair_count=1)
+
+    assert report["strict_eligible"] == 1
+    assert report["excluded"]["rejected_differs_only_by_index_tie_break"] == 1
+
+
 def test_matched_datasets_are_deterministic_with_same_chosen_and_different_rejected(tmp_path):
     builder = load_matched_builder()
     image_root, _, rl_rows, sft_rows = records(tmp_path)
