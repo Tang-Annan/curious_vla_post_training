@@ -5,26 +5,26 @@
 ## 1. 当前决策快照
 
 - 最后更新：2026-08-14
-- 开发分支：`codex/post-training-analysis`；F0 source `681a85b`；服务器 checkout clean
-- 冻结的最终候选：E2 FALS-only `global_step_250/actor`
-- 当前执行动作：F0 已按规则保留 step 250；冻结 F1 一次性入口后运行 565-token held-out
-- 当前封存动作：F1 启动前 held-out 继续完全封存；F1 后不得再改模型、checkpoint、方法或阈值
-- 保留的服务器核心证据：E0、D0、E2、全部 manifest，以及 E2 step 50/250 checkpoint
+- 开发分支：`codex/post-training-analysis`；服务器 checkout clean；GRPO 路线已由用户终止
+- 保留的基线：E2 FALS-only `global_step_250/actor`，仅供新路线比较或初始化，不再继续 GRPO 扩展
+- 当前执行动作：停止全部 GRPO/R1/R2/R3/F1 尝试，清理确认失败路线的远端产物，转入新技术路线设计
+- Held-out 边界：F1 被终止时已产生 520/565 条部分 rollout；无完整指标，部分产物已删除，永久访问锁保留，旧 held-out 不得再作为未访问终测集
+- 保留的服务器核心证据：E0、D0、R0 retry1、E2、F0、全部 manifest、E2 step 50/250 checkpoint 与 `F1_HELDOUT_ACCESSED`
 - 已排除方向：继续调 SLDR、把 Std-Floor 直接叠加到 E2、为了吞吐改动正式生成协议
-- 当前主线：R1/Dr.GRPO、正式 R2-G 与 R3 gate 均未晋级；C0 跳过，停止方法扩展，以 E2 进入 F0
+- 当前主线：GRPO 方法开发与终测已停止；E2 仅作保留基线，下一阶段重新预注册非 GRPO 技术路线
 
 | 阶段 | 状态 | 目的 | 当前动作 |
 | --- | --- | --- | --- |
 | E0–E4 | 已闭环 | 建立 Stage-2、Vanilla GRPO、FALS、SLDR、Std-Floor 的证据基线 | 不重跑、不调参 |
 | R0 | 已完成 | R1 gate 通过；R2 预计开销 `2.02779×`，超过 `2.0×` 门槛 | 证据冻结，不重算门槛 |
-| R1 | 技术通过、科学负向 | FALS + Dr.GRPO 单因素消融 | 不调参、不重跑、不叠加 |
+| R1 | 技术通过、科学负向；产物已清理 | FALS + Dr.GRPO 单因素消融 | 仅保留台账结论 |
 | 原 R2 gate | 已失败并冻结 | cap 5 的估计 raw rollout 开销 `2.02779× > 2.0×` | 不改写为通过 |
-| R2-P | 技术与成本通过 | 20-step 无 dev pilot 实测 exact-zero filtering 的可靠性与成本 | 证据冻结，不把 pilot reward 当效果结论 |
-| R2-D / R2-G | R2-D 跳过；R2-G 工程通过、科学负向 | E2 + Dynamic Sampling 的 250-step 单因素实验 | 回退 E2，不调阈值/cap、不重跑 |
-| R3 | gate 未通过、已关闭 | Frozen E2 四 rollout persistent-failure 与 Failure-Guided Recovery 等预算可行性 | 56/1,000 的保守下界低于 10%，不扩大、不做 recovery 对照 |
+| R2-P | 技术与成本通过；产物已清理 | 20-step 无 dev pilot 实测 exact-zero filtering 的可靠性与成本 | 仅保留台账结论 |
+| R2-D / R2-G | R2-D 跳过；R2-G 科学负向；产物已清理 | E2 + Dynamic Sampling 的 250-step 单因素实验 | 路线终止 |
+| R3 | gate 未通过、已关闭；产物已清理 | Frozen E2 四 rollout persistent-failure 与 Failure-Guided Recovery 等预算可行性 | 仅保留 5.6% 门控结论 |
 | C0 | 按门控跳过 | R1/R2 均未达到工程晋级线 | 不运行第二训练 seed |
 | F0 | 已完成 | 只审计最终胜出方法 E2 的预注册 checkpoint | step 50 四项选择条件均失败，冻结 step 250 |
-| F1 | 待一次性执行 | 冻结 E2 step 250 的 565-token held-out 确认 | 入口与失败语义冻结后只运行一次 |
+| F1 | 用户终止、证据不完整 | 原计划为 E2 step 250 的 565-token held-out 确认 | 520/565 后停止并删部分产物；禁止重跑 |
 
 R0 后当前已解析路线为：
 
@@ -48,8 +48,8 @@ R3 gate（完成）
 F0（完成）
 └─ step 50 的 PDMS/Safe/Collision/TTC 均更低 ──> 冻结 E2 step 250
 
-F1（下一步）
-└─ 唯一 checkpoint × 565-token held-out × 1 response ──> 只汇总，不再调整
+F1（用户终止）
+└─ 520/565 条部分 rollout，无完整指标，产物删除且访问锁保留 ──> GRPO 路线结束，切换技术路线
 ```
 
 R3 不在这条硬主线中；它的成功与否不得阻塞最终审计。
@@ -870,6 +870,18 @@ F1 只运行一次。无论结果好坏都不得再改模型、checkpoint 或阈
 - 失败语义：若生成中断或覆盖不完整，F1 标记技术失败并保留已有证据，不重新生成；若 565 条推理已完成但仅后处理失败，只允许基于原 rollout 做一次最小后处理恢复，不再次访问模型。不得因 held-out 指标调 checkpoint、阈值、seed 或方法。
 - 完成验收：要求 `COMPLETE`、`exit_code=0`、565 行/565 unique×1、parse/clipping、完整指标、source/config/manifest/lock 和资源回收证据。最终台账同时报告 dev、held-out、R1/R2/R3 负结果、单训练 seed 限制、rollout/reward 成本与适用边界。
 - 下一动作：提交入口与本记录，通过 Git 同步服务器；远端 shell/test/资源/锁门控全部通过后只启动一次 F1，并交由 Luna 静默监控。
+
+### 记录 032：用户终止 GRPO 路线、F1 中止并清理失败产物
+
+- 状态：用户方向终止；GRPO、Dr.GRPO、Dynamic Sampling、Recovery 与 F1 全部停止，不再训练、补跑或调参，准备切换技术路线。
+- F1 实际边界：source `27a0783ef49525d133b6a2a0ba5276a67ab0f885` 通过远端 `bash -n`、compile 与 `30 passed` 后启动；永久 `F1_HELDOUT_ACCESSED` 锁已在推理前创建。用户终止指令到达时日志进度为 127/142 batch，debug reward 日志最终写入 520/565 条部分 held-out rollout。
+- 停止结果：向 F1 `main_adas` 主进程发送 SIGTERM 后 launcher 按 trap 退出，`exit_code` 内容为 `134`，`RUNNING` 消失。GPU、Ray、vLLM、Gunicorn/reward、ADAS 和 8901 均已释放；这是用户主动停止，不是算法或基础设施故障。
+- 证据语义：F1 未覆盖 565 token，未生成 `heldout_metrics.json`，不得报告 held-out 点估计或作科学结论；不得补跑剩余 45 条。旧 held-out 已被模型访问，未来必须降级为已访问分析集或为新路线建立新的版本化终测集。
+- 删除范围：不可恢复地删除 R0 首次技术失败、R1 正式与 smoke、R2-P、R2-G、R3 首次与 retry1、F1 部分运行，以及对应 debug/ADAS/launcher 产物。R1/R2/R3 的设计、数值结论、门控和适用边界继续由本台账保存。
+- 保留范围：E0、D0、R0 retry1、E2、F0、全部 split manifest、E2 step 50/250 与永久 F1 访问锁。E2 step 250 只保留为后续路线的对照或初始化点，不再授权继续 GRPO 方法扩展。
+- 空间与健康：清理前 `/root/autodl-tmp` 可用约 31 GB，清理后约 63 GB；失败路线目录和同名 debug/ADAS 无残留。服务器 source 仍为 `27a0783` 且 clean，GPU 空闲、8901 无监听。
+- 决策：本路线以“E2 在单 discovery seed 的 dev 点估计优于 Vanilla GRPO、但相对 Stage-2 CI 跨 0；R1/R2/R3 均未建立新增科学贡献”收尾。原 F1 计划被本记录取代。
+- 下一动作：使用 `docs/next_route_execution_handoff.md` 交接服务器、Git、测试、监控和数据边界；下一对话先提出非 GRPO 的预注册技术路线，不复用旧 held-out 作为一次性终测。
 
 ## 10. 后续记录模板
 
