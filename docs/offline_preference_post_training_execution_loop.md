@@ -9,7 +9,7 @@
 - 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，P1-S 执行 source `fe6eac6`，P1-M 容量门控 source `9b5fdc1`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
 - 路线结论：停止围绕 GRPO estimator、sampling cap、reward coefficient 或 std normalization 继续追分；已完成的 E0–E4、R1–R3 作为前半段证据冻结。
 - 新核心问题：在固定 rollout / reward-query 预算下，能否把已有 trajectory-level safety/quality reward 转成离线 preference supervision，并以更低在线成本获得比 RSFT、普通 DPO 和现有 FALS-GRPO 更稳定的策略。
-- 当前唯一动作：P0、P1-S 已闭环；P1-M 因严格 Tier B 数量为 0、最大平衡数据量 `B=0<500` 而按门控关闭当前离线 preference 路线。P2–P6 不执行，不降低 gap quantile、不修改 60/40、不启动 GPU。
+- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；经用户明确授权，以新的科学问题启动 M0–M5 matched Tier-A 路线。当前进入 M1，只冻结 960 个同 token、同 chosen、不同 unsafe rejected 的 P2/P3/P4 数据，不启动 GPU。
 - 冻结开发集：566 token；每个正式方法只允许一次最终 dev 评估，不用 dev 选择 pair 阈值或训练超参数。
 - 旧 565-token held-out 已访问 520 条并永久失去 unseen 资格；部分 rollout 已删除，`F1_HELDOUT_ACCESSED` 永久锁保留，禁止补跑剩余 45 条或把它用于最终确认。
 - P0 证明当前服务器资产无法建立合格的新 final set：旧 manifest 外 97,632 个 token 的 log 可用，但 CAM_F0 图像可用数为 0。P6 预注册为不执行 final-set 推理，除非用户未来明确扩展数据下载范围并在任何新方法 dev 结果产生前重新立项。
@@ -25,6 +25,12 @@
 | P4 | 按门控跳过 | 0 | safety-aware pair mining 是否带来独立增益 | P1-M 未通过，不运行 DPO |
 | P5 | 按门控跳过 | 0 | policy 更新后刷新一次 pair 是否继续提升 | 无 P4 候选 |
 | P6 | 本路线不执行 | 0 | 第二 seed、behavior audit 与新 final set 是否确认结论 | 无 preference 候选且 P0 无新 final set |
+| M0 | 已预注册 | 0 | 如何在不篡改 P1-M 负结论下形成可辨识 DPO 对照 | matched Tier-A hard-negative 设计 |
+| M1 | 执行中 | 0 | 960 个严格 matched scene 能否生成确定性多模态数据 | 全量 schema/processor/泄漏/确定性验收 |
+| M2 | 被 M1 阻塞 | 低 | 同一 chosen-only RSFT 的收益 | 20-step smoke 后 3 epochs |
+| M3 | 被 M1 阻塞 | 中低 | worst-PDMS easy-negative DPO 是否优于 RSFT | 与 M4 同 token/chosen 的 DPO 对照 |
+| M4 | 被 M1 阻塞 | 中低 | hard-unsafe negative 是否优于 easy-negative | 唯一变量为 rejected trajectory |
+| M5 | 被 M2–M4 阻塞 | 0 | DPO 是否形成正向、负向或证据不足闭环 | paired bootstrap 后停止或条件第二 seed |
 
 ## 2. 分支与代码处理决策
 
@@ -569,3 +575,55 @@ P4-v1 frozen model
 - 分析边界：PDMS gap 候选和 mixed safe/unsafe Tier A 数量本身充足，唯一决定性约束是没有任何“四条均 safe 且 gap>=q60”场景可作为 Tier B。不得把只用 Tier A、降低 q60、放松 safe 到旧 `safe` 字段、修改 60/40 或缩小 `B>=500` 包装成同一预注册实验；这些都会改变科学问题，需要未来以新路线在查看任何新 dev 结果前重新立项。
 - 决策：按“P1-M `B<500`”映射关闭当前离线 DPO 路线；跳过 P2 chosen-only RSFT、P3 PDMS-DPO、P4 Safety-Gap-DPO、P5 refresh、第二 seed 与 preference behavioral audit。稳定候选仍回到既有 E2 单 seed dev 证据，不新增 checkpoint 或最终确认声明。
 - 下一动作：本路线无允许的实验动作；只保留 source、P1-S/P1-M 审计产物与台账，用于最终报告“表示可恢复但严格平衡 pair 条件不足”。除非用户以新的数据/科学问题重新立项，否则不继续训练、调阈值或访问旧 held-out。
+
+## 18. 用户授权后的 matched Tier-A DPO 路线
+
+### 18.1 与原路线的关系
+
+记录 003 的 `N_B=0/B=0` 结论保持有效且不被重解释；M 路线不是降低 q60、放松 `is_safe`、缩小原门槛或恢复原 P2–P6，而是用户在看到该 train-only 容量结论后明确授权的新科学问题。新结论只适用于含 safe/unsafe rollout 且不同 pair construction 真实产生不同 rejected trajectory 的 mixed-safety scenes，不能外推到原计划的 60% safety + 40% safe-quality mixture。
+
+### 18.2 M1：matched 数据冻结
+
+每个 rollout 的 `is_safe` 继续严格定义为 `parsed_ok ∧ Collision=1 ∧ DAC=1 ∧ TTC=1`。仅保留四条 rollout 全部合法、同时存在 safe/unsafe 且 `max(pdms_scaled)>min(pdms_scaled)` 的 train scene。对 rollout 定义唯一冻结 quality tuple：
+
+```text
+(pdms_scaled, ego_progress, history_comfort, pdms,
+ no_at_fault_collisions + drivable_area_compliance + time_to_collision_within_bound,
+ -rollout_index)
+```
+
+- common chosen：全部 rollout 中 quality tuple 最大者，同时必须等于 safe rollout 中最大者；
+- M3 easy-unsafe rejected：全部 rollout 中 quality tuple 最小者，同时必须 unsafe；
+- M4 hard-unsafe rejected：unsafe rollout 中 quality tuple 最大者；
+- 只保留 M3/M4 rejected 的 rollout index 不同的 scene；因此 P2、M3、M4 的 token/prompt/image/chosen 完全相同，M3→M4 唯一数据变量是 rejected trajectory；
+- 按 hard-unsafe rejected 的 quality tuple 降序、token 升序稳定排序，冻结前 960 个 scene。960 等于 60 个 global batch，3 epochs 恰为 180 个 optimizer step，不按 dev 结果修改。
+
+train-only 容量预审计得到 987 个严格 eligible scene，足够冻结 960；不得为追求更多样本加入 pair 相同、chosen 不同、easy rejected 为 safe 或 parse failure 的 scene。输出目录固定为：
+
+```text
+/root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m1_matched_tier_a_seed20260812/
+```
+
+至少包含 `m2_rsft.json`、`m3_pdms_easyneg_dpo.json`、`m4_safety_hardneg_dpo.json`、共同 token manifest、pair stats、input/dataset hash、source/LLaMA-Factory commit 与 30 条只读抽查。硬门控为：三份数据均 960 个唯一 train token；dev/legacy-held-out overlap 为 0；M2/M3/M4 chosen byte-identical；M3/M4 rejected 960/960 byte-different 且都 unsafe；trajectory round-trip、JSON 和 pinned LLaMA-Factory processor 100% 通过；response `<=512`、完整输入 `<=4096`；独立重复构建字节一致。任一失败只修 M1，不启动 GPU。
+
+### 18.3 M2/M3/M4：训练唯一变量
+
+三者都从 `/root/autodl-tmp/curious-vla-workspace/models/sft_stage2` 独立开始，使用同一 960 token、seed `20260812`、3 epochs、bf16、LoRA rank 8/alpha 16、`q/k/v/o_proj`、冻结 vision tower/projector、micro batch 1、gradient accumulation 16、gradient checkpointing、cutoff 4096、image max pixels 262,144。M2 为 chosen-only SFT、learning rate `1e-5`；M3/M4 均为 sigmoid DPO、beta `0.1`、learning rate `5e-6`。M3/M4 的 config 除 dataset 名称外必须字节等价。
+
+每个方法先运行独立 20-step smoke，只验收多模态 batch、finite loss/grad、显存、保存与恢复；smoke 权重删除或明确标为非正式，不评估 dev。正式训练必须各完成 180 optimizer step，保存 adapter/export、resolved config、日志、dataset hash 与 peak memory。技术失败只允许修复环境/格式/OOM batch 实现，不改数据、beta、learning rate、epoch 或模型范围。
+
+### 18.4 冻结 dev 与结论映射
+
+M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 的温度、top-p、max response length、parser 与九项 NAVSIM 指标；不访问 legacy-held-out，不执行官方 checkpoint sanity check，也不构造新 final set。M5 报告 M3−M2 与 M4−M3 的 token-paired 差值、20,000 次 bootstrap 95% CI、Safe/Collision/DAC/TTC、Progress/Comfort、parse/clipping 与训练成本。
+
+- 若 M4−M3 的 PDMS scaled `>=+0.01000`、bootstrap 95% CI 下界 `>0`，且 Safe/Collision/DAC/TTC 均不下降，则 hard-unsafe DPO 进入 seed `20260813` 的 matched M3/M4 确认；第二 seed 配置与数据不变。
+- 若点估计正向但未同时达到上述条件，结论为单 seed exploratory，不调参、不跑第二 seed。
+- 若 M4 不优于 M3，结论为 hard-unsafe negative 在当前协议下无独立收益；若 M3 也不优于 M2，则进一步说明 pairwise supervision 未超过同 chosen exposure。负向结果同样构成完整 DPO 闭环，不恢复 q60/Tier B 或搜索超参数。
+- 若 M3/M4 技术上无法在 24 GB GPU 完成且最小的 gradient checkpointing/attention 实现修复仍失败，则记录资源边界；不得用缩短 prompt、减少 960 数据、降低 cutoff 或换模型伪造同协议结论。
+
+### 记录 004：M0 matched hard-negative 路线预注册
+
+- 状态：计划中；用户在记录 003 后明确要求修改计划并继续执行到 DPO 有效闭环，M0 已在任何新 dev 结果产生前冻结。
+- train-only 依据：原 Tier A 为 2,855 scene；要求 positive PDMS gap、common chosen 相同、M3 easy rejected unsafe、M3/M4 rejected 不同后仍有 987 scene，冻结 B=960。预审计中 common chosen 960/960 相同、两种 rejected 960/960 不同且 unsafe；hard rejected 相对 easy rejected 的 progress 中位差为 `+0.02417`，说明新对照改变的是更具进展性的 unsafe hard negative，而不是重复原 PDMS pair。
+- 决策：进入 M1 数据冻结；原 P1-M 的 q60/60–40 负结论继续保留，不再作为新 M 路线的数据门槛。
+- 下一动作：实现最小 matched dataset builder 和规则测试，正式输出前先冻结 source；M1 全门控通过前不创建 YAML、不安装 GPU trainer、不启动 GPU。
