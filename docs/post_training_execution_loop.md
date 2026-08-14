@@ -215,7 +215,7 @@ D0 是 difficulty/variance 关联的主证据，因为所有 scene 来自同一 
 - `group_metrics.csv`；
 - `r0_report.json`；
 - `advantage_scale.csv`；
-- `difficulty_bias.png`；
+- `difficulty_bias.svg`；
 - source、命令、输入 manifest/hash 和 `COMPLETE`。
 
 **R1 启动门控**

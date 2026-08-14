@@ -198,7 +198,6 @@ def test_rollout_analysis_uses_training_reward_and_sample_group_std(tmp_path):
 
 
 def test_r0_difficulty_bias_analysis_and_gates(tmp_path):
-    pytest.importorskip("matplotlib")
     analysis = load_module(
         ROOT / "projects/safe_grpo/analyze_difficulty_bias.py", "analyze_difficulty_bias"
     )
@@ -257,7 +256,7 @@ def test_r0_difficulty_bias_analysis_and_gates(tmp_path):
     assert report["gates"]["r1"]["passed"] is True
     assert report["gates"]["r2"]["passed"] is True
     assert report["next_stage"] == "r1"
-    for filename in ("group_metrics.csv", "advantage_scale.csv", "r0_report.json", "difficulty_bias.png"):
+    for filename in ("group_metrics.csv", "advantage_scale.csv", "r0_report.json", "difficulty_bias.svg"):
         assert (output_dir / filename).stat().st_size > 0
 
 

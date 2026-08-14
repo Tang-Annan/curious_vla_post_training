@@ -7,11 +7,7 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-import matplotlib
 import numpy as np
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
 
 from analyze_rollouts import load_manifest, training_reward
 
@@ -194,34 +190,61 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
-def write_plot(path: Path, d0_rows: list[dict], e2_rows: list[dict], report: dict) -> None:
-    figure, axes = plt.subplots(2, 2, figsize=(11, 8))
-    axes[0, 0].scatter(
-        [row["difficulty"] for row in d0_rows],
-        [row["reward_std"] for row in d0_rows],
-        s=6,
-        alpha=0.25,
+def write_plot(path: Path, d0_rows: list[dict], advantage: list[dict]) -> None:
+    width, height = 1200, 520
+    panels = ((70, 55, 500, 400), (660, 55, 500, 400))
+
+    def scale(value: float, low: float, high: float, start: float, length: float, invert: bool = False) -> float:
+        ratio = 0.5 if high == low else (value - low) / (high - low)
+        return start + length * (1.0 - ratio if invert else ratio)
+
+    difficulty = np.asarray([row["difficulty"] for row in d0_rows], dtype=float)
+    std = np.asarray([row["reward_std"] for row in d0_rows], dtype=float)
+    e2_advantage = [row for row in advantage if row["dataset"] == "e2"]
+    gap = np.asarray([row["reward_gap"] for row in e2_advantage], dtype=float)
+    dr_abs = np.asarray([row["dr_grpo_abs_mean"] for row in e2_advantage], dtype=float)
+    grpo_abs = np.asarray([row["grpo_abs_mean"] for row in e2_advantage], dtype=float)
+
+    elements = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+        '<rect width="100%" height="100%" fill="white"/>',
+        '<style>text{font-family:Arial,sans-serif;fill:#222}.axis{stroke:#333;stroke-width:1}.label{font-size:15px}.title{font-size:18px;font-weight:bold}</style>',
+    ]
+    for left, top, panel_width, panel_height in panels:
+        elements.append(f'<rect x="{left}" y="{top}" width="{panel_width}" height="{panel_height}" fill="none" class="axis"/>')
+
+    left, top, panel_width, panel_height = panels[0]
+    for x_value, y_value in zip(difficulty, std):
+        x = scale(float(x_value), float(difficulty.min()), float(difficulty.max()), left, panel_width)
+        y = scale(float(y_value), 0.0, float(std.max()), top, panel_height, invert=True)
+        elements.append(f'<circle cx="{x:.2f}" cy="{y:.2f}" r="1.5" fill="#2878b5" fill-opacity="0.28"/>')
+    elements.extend(
+        [
+            f'<text x="{left}" y="30" class="title">D0 difficulty vs. reward variance</text>',
+            f'<text x="{left + panel_width / 2}" y="490" text-anchor="middle" class="label">Difficulty (1 - mean reward)</text>',
+            f'<text x="20" y="{top + panel_height / 2}" transform="rotate(-90 20 {top + panel_height / 2})" text-anchor="middle" class="label">Sample std</text>',
+        ]
     )
-    axes[0, 0].set(xlabel="Difficulty (1 - mean reward)", ylabel="Group reward std")
 
-    quintiles = report["d0"]["difficulty_quintiles"]
-    axes[0, 1].plot([row["quintile"] for row in quintiles], [row["reward_gap_mean"] for row in quintiles], marker="o", label="gap")
-    axes[0, 1].plot([row["quintile"] for row in quintiles], [row["reward_std_mean"] for row in quintiles], marker="o", label="std")
-    axes[0, 1].set(xlabel="Difficulty quintile", ylabel="Mean value", xticks=range(1, 6))
-    axes[0, 1].legend()
-
-    nonzero_gap = [row["reward_gap"] for row in e2_rows if row["reward_gap"] > 0]
-    axes[1, 0].hist(nonzero_gap, bins=20)
-    axes[1, 0].set(xlabel="E2 nonzero reward gap", ylabel="Groups")
-
-    sampling = report["dynamic_sampling"]["caps"]
-    axes[1, 1].plot([row["max_generation_batches"] for row in sampling], [row["run_fill_failure_probability"] for row in sampling], marker="o", label="run failure")
-    axes[1, 1].plot([row["max_generation_batches"] for row in sampling], [row["mean_raw_rollout_overhead"] for row in sampling], marker="o", label="overhead")
-    axes[1, 1].set(xlabel="Generation-batch cap", yscale="log")
-    axes[1, 1].legend()
-    figure.tight_layout()
-    figure.savefig(path, dpi=180)
-    plt.close(figure)
+    left, top, panel_width, panel_height = panels[1]
+    y_max = max(float(dr_abs.max()), float(grpo_abs.max()))
+    for x_value, dr_value, grpo_value in zip(gap, dr_abs, grpo_abs):
+        x = scale(float(x_value), 0.0, float(gap.max()), left, panel_width)
+        y_dr = scale(float(dr_value), 0.0, y_max, top, panel_height, invert=True)
+        y_grpo = scale(float(grpo_value), 0.0, y_max, top, panel_height, invert=True)
+        elements.append(f'<circle cx="{x:.2f}" cy="{y_dr:.2f}" r="2" fill="#d95319" fill-opacity="0.45"/>')
+        elements.append(f'<circle cx="{x:.2f}" cy="{y_grpo:.2f}" r="1.5" fill="#2878b5" fill-opacity="0.28"/>')
+    elements.extend(
+        [
+            f'<text x="{left}" y="30" class="title">E2 reward gap vs. advantage magnitude</text>',
+            f'<text x="{left + panel_width / 2}" y="490" text-anchor="middle" class="label">Reward gap</text>',
+            f'<text x="610" y="{top + panel_height / 2}" transform="rotate(-90 610 {top + panel_height / 2})" text-anchor="middle" class="label">Mean |advantage|</text>',
+            f'<circle cx="{left + 20}" cy="{top + 20}" r="4" fill="#d95319"/><text x="{left + 30}" y="{top + 25}" class="label">Dr.GRPO</text>',
+            f'<circle cx="{left + 125}" cy="{top + 20}" r="4" fill="#2878b5"/><text x="{left + 135}" y="{top + 25}" class="label">GRPO</text>',
+        ]
+    )
+    elements.append("</svg>")
+    path.write_text("\n".join(elements) + "\n", encoding="utf-8")
 
 
 def analyze(args: argparse.Namespace) -> dict:
@@ -308,14 +331,12 @@ def analyze(args: argparse.Namespace) -> dict:
 
     args.output_dir.mkdir(parents=True, exist_ok=False)
     write_csv(args.output_dir / "group_metrics.csv", d0_rows + e2_rows)
-    write_csv(
-        args.output_dir / "advantage_scale.csv",
-        advantage_rows("d0", d0_groups) + advantage_rows("e2", e2_groups),
-    )
+    advantage = advantage_rows("d0", d0_groups) + advantage_rows("e2", e2_groups)
+    write_csv(args.output_dir / "advantage_scale.csv", advantage)
     (args.output_dir / "r0_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    write_plot(args.output_dir / "difficulty_bias.png", d0_rows, e2_rows, report)
+    write_plot(args.output_dir / "difficulty_bias.svg", d0_rows, advantage)
     return report
 
 

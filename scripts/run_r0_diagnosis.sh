@@ -5,7 +5,7 @@ WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/autodl-tmp/curious-vla-workspace}"
 PROJECT_ROOT="${PROJECT_ROOT:-$WORKSPACE_ROOT/src/curious_vla_post_training}"
 PYTHON="$WORKSPACE_ROOT/envs/curious/bin/python"
 EXPERIMENT_ROOT="$WORKSPACE_ROOT/experiments/safe_grpo"
-RUN_DIR="$EXPERIMENT_ROOT/r0_difficulty_bias_seed20260812"
+RUN_DIR="$EXPERIMENT_ROOT/${R0_RUN_NAME:-r0_difficulty_bias_seed20260812}"
 D0_DIR="$EXPERIMENT_ROOT/d0_stage2_train_n4_seed20260812"
 E2_DIR="$EXPERIMENT_ROOT/e2_fals_lora_1k_seed20260812"
 TRAIN_MANIFEST="$WORKSPACE_ROOT/manifests/train_tokens.txt"
@@ -43,7 +43,7 @@ if [[ $status -ne 0 ]]; then
     exit "$status"
 fi
 
-for artifact in group_metrics.csv advantage_scale.csv r0_report.json difficulty_bias.png; do
+for artifact in group_metrics.csv advantage_scale.csv r0_report.json difficulty_bias.svg; do
     [[ -s "$RUN_DIR/results/$artifact" ]] || { echo "Missing R0 artifact: $artifact" >&2; exit 1; }
 done
 touch "$RUN_DIR/COMPLETE"
