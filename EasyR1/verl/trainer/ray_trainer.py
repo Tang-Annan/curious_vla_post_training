@@ -75,6 +75,29 @@ class Role(IntEnum):
     ActorRolloutRef = auto()
 
 
+def select_group_filter_indices(
+    uids: np.ndarray,
+    scores: list[float],
+    mode: str,
+    low: float,
+    high: float,
+) -> list[int]:
+    uid2scores = defaultdict(list)
+    for uid, score in zip(uids, scores):
+        uid2scores[uid].append(score)
+
+    if mode == "mean":
+        kept_uids = {
+            uid for uid, values in uid2scores.items() if low < float(np.mean(values)) < high
+        }
+    elif mode == "zero_variance":
+        kept_uids = {uid for uid, values in uid2scores.items() if max(values) != min(values)}
+    else:
+        raise ValueError(f"Unknown group filter mode: {mode}")
+
+    return [idx for idx, uid in enumerate(uids) if uid in kept_uids]
+
+
 @dataclass
 class ResourcePoolManager:
     """
@@ -475,6 +498,8 @@ class RayPPOTrainer:
         batch = None
         all_metrics = defaultdict(list)
         num_try_make_batch = 0
+        generated_groups = 0
+        kept_groups = 0
         print("Start generating batch...")
         while True:
             num_try_make_batch += 1
@@ -490,6 +515,8 @@ class RayPPOTrainer:
                 "video_fps": self.config.data.video_fps,
             }
             new_batch: DataProto = DataProto.from_single_dict(batch_dict, meta_info=meta_info)
+            new_group_count = len(new_batch)
+            generated_groups += new_group_count
             new_batch.non_tensor_batch["uid"] = np.array(
                 [str(uuid.uuid4()) for _ in range(len(new_batch.batch))], dtype=object
             )
@@ -531,24 +558,23 @@ class RayPPOTrainer:
 
                 filter_scores = reward_metrics[self.config.algorithm.filter_key]
                 uids = new_batch.non_tensor_batch["uid"]
-                uid2scores = defaultdict(list)
-                for uid, score in zip(uids, filter_scores):
-                    uid2scores[uid].append(score)
-
-                uid2mean = {uid: np.mean(scores) for uid, scores in uid2scores.items()}
-                kept_uids = [
-                    uid
-                    for uid, avg_score in uid2mean.items()
-                    if avg_score > self.config.algorithm.filter_low and avg_score < self.config.algorithm.filter_high
-                ]
-                kept_sample_idxs = [idx for idx, uid in enumerate(uids) if uid in kept_uids]
-                if len(kept_sample_idxs) == 0:
+                kept_sample_idxs = select_group_filter_indices(
+                    uids,
+                    filter_scores,
+                    self.config.algorithm.filter_mode,
+                    self.config.algorithm.filter_low,
+                    self.config.algorithm.filter_high,
+                )
+                kept_group_count = len({uids[idx] for idx in kept_sample_idxs})
+                kept_groups += kept_group_count
+                if kept_group_count == 0 and self.config.algorithm.filter_mode == "mean":
                     raise RuntimeError("No sample is kept after filtering. Please check your data.")
 
-                new_batch = new_batch[kept_sample_idxs]
+                new_batch = new_batch[kept_sample_idxs] if kept_group_count > 0 else None
 
-            batch = DataProto.concat([batch, new_batch]) if batch is not None else new_batch
-            current_batch_size = len(batch) // self.config.worker.rollout.n
+            if new_batch is not None:
+                batch = DataProto.concat([batch, new_batch]) if batch is not None else new_batch
+            current_batch_size = 0 if batch is None else len(batch) // self.config.worker.rollout.n
             rollout_batch_size = self.config.data.rollout_batch_size
             if current_batch_size < rollout_batch_size:
                 print(f"{current_batch_size=} < {rollout_batch_size=}")
@@ -563,6 +589,17 @@ class RayPPOTrainer:
                 print(f"{current_batch_size=} >= {rollout_batch_size=}. Finish generating.")
                 if self.config.algorithm.online_filtering:
                     metrics.update({f"reward/{k}": v for k, v in reduce_metrics(all_metrics).items()})
+                    metrics.update(
+                        {
+                            "sampling/generated_groups": generated_groups,
+                            "sampling/kept_groups": kept_groups,
+                            "sampling/used_groups": rollout_batch_size,
+                            "sampling/dropped_groups": generated_groups - kept_groups,
+                            "sampling/unused_kept_groups": kept_groups - rollout_batch_size,
+                            "sampling/generation_batches": num_try_make_batch,
+                            "sampling/raw_rollout_overhead": generated_groups / rollout_batch_size,
+                        }
+                    )
 
                 return batch[: self.config.data.rollout_batch_size * self.config.worker.rollout.n]
 

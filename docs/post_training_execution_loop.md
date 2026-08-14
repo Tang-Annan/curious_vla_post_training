@@ -5,20 +5,22 @@
 ## 1. 当前决策快照
 
 - 最后更新：2026-08-14
-- 开发分支：`codex/post-training-analysis`；服务器同步 Git HEAD：`5c2e261`
+- 开发分支：`codex/post-training-analysis`；R1 服务器运行 Git HEAD：`6051499`
 - 当前最佳已训练候选：E2 FALS-only `global_step_250/actor`
-- 当前唯一下一动作：实现并验证 R1 FALS + Dr.GRPO；R1 正常启动前不改变训练配置
+- 当前执行动作：只读监控正式 R1；本地预注册并实现 R2-P，不在 R1 运行期间热更新服务器 checkout
 - 当前封存动作：暂停 E2 step-50 dev 审计；held-out 继续完全封存
 - 保留的服务器核心证据：E0、D0、E2、全部 manifest，以及 E2 step 50/250 checkpoint
 - 已排除方向：继续调 SLDR、把 Std-Floor 直接叠加到 E2、为了吞吐改动正式生成协议
-- 当前主线：R0 已确认 selection–optimization mismatch；R1 门控通过，R2 成本门控失败，当前只推进 Dr.GRPO 单因素实验
+- 当前主线：R0 已确认 selection–optimization mismatch；R1 正式运行中；原 R2 成本门控保持失败，新建前瞻 R2-P pilot 重新评估实际成本
 
 | 阶段 | 状态 | 目的 | 当前动作 |
 | --- | --- | --- | --- |
 | E0–E4 | 已闭环 | 建立 Stage-2、Vanilla GRPO、FALS、SLDR、Std-Floor 的证据基线 | 不重跑、不调参 |
 | R0 | 已完成 | R1 gate 通过；R2 预计开销 `2.02779×`，超过 `2.0×` 门槛 | 证据冻结，不重算门槛 |
-| R1 | 待实现 | FALS + Dr.GRPO 单因素消融 | 当前唯一动作 |
-| R2-D / R2-G | 按门控暂停 | 补采 cap 5 才满足可靠性，但平均 raw rollout 开销超限 | 不事后放宽成本门槛 |
+| R1 | 正式运行中 | FALS + Dr.GRPO 单因素消融 | Luna 按 ETA 分段静默监控 |
+| 原 R2 gate | 已失败并冻结 | cap 5 的估计 raw rollout 开销 `2.02779× > 2.0×` | 不改写为通过 |
+| R2-P | 已重新预注册 | 20-step 无 dev pilot 实测 exact-zero filtering 的可靠性与成本 | R1 完成后按父方法分支执行 |
+| R2-D / R2-G | 条件执行 | 只在 R2-P 通过后运行 250-step Dynamic Sampling | 不用 dev 调成本门槛 |
 | R3 | 可选 | Failure-Guided Recovery 等预算可行性对照 | 核心 R1/R2 路线完成后再决定 |
 | C0 | 条件执行 | 最终新方法与 E2 的匹配训练种子确认 | 仅对达到晋级线的方法执行 |
 | F0 | 暂停 | 只审计最终胜出方法的预注册 checkpoint | 方法开发结束后恢复 |
@@ -28,12 +30,16 @@ R0 后当前已解析路线为：
 
 ```text
 R0（完成）
-├─ R1 gate：通过 ──> R1
-└─ R2 gate：失败 ──> 不执行 Dynamic Sampling
+├─ R1 gate：通过 ──> R1（运行中）
+└─ 原 R2 gate：失败并冻结
 
-R1
-├─ 达到工程晋级线 ──> C0 匹配 seed 确认
-└─ 未达到工程晋级线 ─> 回退 E2，进入 F0
+R1 结果
+├─ 全部晋级 ──> R2-P(R1 parent)
+└─ 未晋级 ───> R2-P(E2 parent)
+
+R2-P
+├─ 技术与成本门控通过 ──> 正式 R2-D / R2-G
+└─ 未通过 ───────────> 回退对应父方法，进入 C0/F0
 ```
 
 R3 不在这条硬主线中；它的成功与否不得阻塞最终审计。
@@ -291,11 +297,17 @@ Dr.GRPO 使用 `A = r - group_mean`，不做组内标准差归一化。不得同
 
 **结果分支**
 
-- 达到全部晋级线：R1 成为当前父候选；若 R2 gate 通过，进入 R2-D。
-- 主指标为正但 `< +0.01`，或任一安全约束下降：记为弱/负结果，不叠加；若 R2 gate 通过，回到 E2 执行 R2-G。
+- 达到全部晋级线：R1 成为当前父候选，进入以 R1 为父方法的 R2-P。
+- 主指标为正但 `< +0.01`，或任一安全约束下降：记为弱/负结果，不叠加；回到 E2 执行 R2-P。
 - `Delta PDMS_scaled <= 0` 或训练不稳定：拒绝 R1；只有确认实现错误时允许一次最小修复重试。
 
-### R2-D / R2-G：有界 Dynamic Sampling
+### R2-P → R2-D / R2-G：有界 Dynamic Sampling
+
+**重新开启的边界**
+
+R0 的原预注册 R2 gate 仍记为失败，不事后改成通过。复审发现，`2.02779×` 主要来自当前补采骨架每轮固定生成 4 个 group 的离散粒度：在 informative ratio `0.612` 下，cap 5 的精确期望为 `2.02823×`，原 `<=2.0×` 门槛对该实现近乎结构性不可达。cap 4 的 250-step 累计填充失败率约 `15.33%`，cap 5 约 `0.74%`，因此不通过降低 cap 换取表面成本。
+
+这项复审只授权一个新的前瞻 `R2-P` pilot；它不改变 R0 输出，不保证正式 R2 必须执行，也不允许看到 pilot 后再放宽门槛。
 
 **父方法选择**
 
@@ -324,10 +336,17 @@ group reward 存在差异
 当前 `ray_trainer._make_batch_data` 已有“生成—过滤—补采”和 `max_try_make_batch` 骨架，但现有 `online_filtering` 按 group mean 区间过滤，不是 zero-variance filtering。R2 只复用其循环和上限，不得把现有 mean-filter 直接当作 DAPO。
 
 - 过滤标量必须与 advantage 使用的 training reward 完全一致；
-- 补采上限由 R0 Monte Carlo 选择，硬上限 8；
+- R2-P 固定 `max_generation_batches=5`；
 - 达到上限仍不足 4 个有效 group 时本 step/阶段直接失败，不回退到不足 batch 或未过滤路径；
-- 先做 20-step、无 dev pilot，验证 batch、日志、资源与成本，再启动正式 250-step；
+- 先做 20-step、无 dev、model-only checkpoint pilot，验证 batch、日志、资源与成本，再决定是否启动正式 250-step；
 - 记录 generated/kept/dropped groups、attempts/step、reward queries、p50/p90 step time 和总 wall time。
+
+**R2-P 技术与成本门控**
+
+- 20 个 optimizer step 全部保持 4 个 informative group，cap exhaustion 为 0，无 OOM、traceback、parse/clipping 新异常；
+- 每步 raw rollout overhead 直接写入结构化训练日志；20-step 平均值 `<=2.30×`。该上限来自期望 `2.02823×` 与 20-step 标准误约 `0.12943` 的 95% 上界取整，不是按 pilot 结果选择；
+- 相对父方法同为前 20 step 的 wall time 不超过 `2.0×`；
+- pilot 不运行 dev，不产生方法效果结论。任一门控失败即关闭 R2。
 
 **吞吐条件门控**
 
@@ -340,7 +359,7 @@ group reward 存在差异
 - `Delta PDMS_scaled >= +0.01000`；
 - Safe、Collision、TTC 不低于父方法；
 - parse/clipping 不退化；
-- 平均 raw rollout 与 wall time 不超过父方法 2.0 倍；
+- 250-step 平均 raw rollout overhead `<=2.15×`，总 wall time不超过父方法 `2.0×`；
 - 同时报告相对 E2 的绝对结果和“每 1,000 reward query 的收益”，避免只展示等 step 分数。
 
 未达线则回退到父方法，不调 zero 阈值、不增加 generation 上限追分。
@@ -426,10 +445,12 @@ F1 只运行一次。无论结果好坏都不得再改模型、checkpoint 或阈
 | 最新结果 | 下一步 |
 | --- | --- |
 | R0：R1/R2 gate 都失败 | 停止方法扩展，E2 → F0 |
-| R0：仅 R1 gate 通过 | R1；完成后 C0/F0 |
+| R0：仅 R1 gate 通过 | R1；原 R2 gate 保持失败 |
 | R0：仅 R2 gate 通过 | R2-G |
-| R1 全部晋级 | R2 gate 通过则 R2-D，否则 C0 |
-| R1 弱正向或负向 | 不叠加 Dr.GRPO；R2 gate 通过则 R2-G，否则 E2 → F0 |
+| R1 全部晋级 | R2-P(R1 parent)；pilot 通过才执行 R2-D |
+| R1 弱正向或负向 | 不叠加 Dr.GRPO；R2-P(E2 parent)，pilot 失败则 E2 → F0 |
+| R2-P 技术或成本失败 | 关闭 Dynamic Sampling，回退对应父方法 → C0/F0 |
+| R2-P 全部门控通过 | 冻结实现与成本上限，执行对应正式 R2 |
 | R2 晋级 | R2 成为父候选；决定是否执行非阻塞 R3，然后 C0 |
 | R2 不晋级 | 回退其父候选；决定是否执行非阻塞 R3，然后 C0/F0 |
 | R3 可行性失败 | 关闭 Recovery，不影响核心候选 |
@@ -706,6 +727,28 @@ F1 只运行一次。无论结果好坏都不得再改模型、checkpoint 或阈
 - R2 门控：E2 exact-zero std 为 `0.388`，通过比例门槛；要使 250-step 整体填充失败概率低于 1%，最小 generation-batch cap 为 5，对应估计失败率 `0.00499`，但平均 raw rollout 开销 `2.02779×` 超过预注册 `2.0×`。成本门控失败，即使只超出约 1.4% 也不事后放宽。
 - 决策：冻结 R0 结果；当前只推进 R1，不实现或运行 R2-D/R2-G。R3 仍为非阻塞可选分支，held-out 继续封存。
 - 下一动作：新增 `dr_grpo` estimator、R1 正式启动入口与数学/唯一变量测试；保持 E2 的 FALS manifest、250 steps、reward、LoRA、KL、生成和 final-dev 协议不变。
+
+### 记录 022：R1 实现、smoke 与正式启动
+
+- 状态：正式运行中；实现、远程完整测试、5-step smoke 和健康启动均通过。
+- 假设与唯一变量：相对 E2 只把 `adv_estimator` 从 `grpo` 改为 `dr_grpo`；FALS manifest、Stage-2 base、250 steps、rank-8 LoRA、原 PDMS reward、KL、生成参数、seed 与 final-dev 协议保持一致。
+- 代码与配置：commit `605149902389aadf3628af75dbcc7caeb57cd8ad`；新增 `A=r-group_mean` estimator、R1 launcher 和仅供短 smoke 使用的 `skip_final_validation`。服务器经 GitHub HTTPS 直连 `fetch + merge --ff-only` 成功同步，source status 为空。
+- 远程验证：`bash -n`、Python `py_compile` 与 `tests/test_safe_grpo.py` 全部通过，结果为 `20 passed`；本地不再重复运行完整环境测试。
+- smoke 证据：`experiments/safe_grpo/r1_fals_dr_grpo_lora_1k_seed20260812_smoke5/` 有 `COMPLETE`、`exit_code=0`、step-5 actor/optimizer；无 traceback/OOM，final validation 确认跳过，GPU 与 8901 已释放。
+- 正式启动：目录 `experiments/safe_grpo/r1_fals_dr_grpo_lora_1k_seed20260812/`；FALS SHA-256 为 `fd62a6f204806beff51fa7e1fb0f853027655b4b47f00f9633c787b04e0ffed0`，source commit/status、GPU、端口与目标目录门控均通过。首个 optimizer step 约 `41.7s`，reward HTTP 200，GPU 约 `20.3 GiB`，训练段 ETA 约 `2h53m`。
+- 监控：Luna 按剩余 ETA `60/30/10/5` 分钟分档只读检查；常态静默，只在完成或明确异常时回传主进程。
+- GitHub 恢复策略：先直连重试一次；失败时仅在单次 Git shell 中 `source /etc/network_turbo`；仍失败则使用增量 Git bundle，并继续以 `git fetch` 与 `merge --ff-only` 保持历史可追溯。
+- 下一动作：等待 Luna 完成信号，先做 R1 技术验收和 paired analysis，再按预注册门槛选择 R2-P 父方法。
+
+### 记录 023：R2 成本模型复审并新增前瞻 R2-P
+
+- 状态：原 R2 gate 失败事实冻结；R2-P 已重新预注册，尚未实现或运行。
+- 触发原因：原 cap-5 Monte Carlo 平均 raw rollout overhead `2.02779×` 只比 `2.0×` 高约 1.4%，用户要求复核该成本门槛是否过严。
+- 复审结果：在 informative ratio `0.612`、每 generation batch 固定 4 group 的现有骨架下，cap-5 精确期望 overhead 为 `2.02823×`；原 `<=2.0×` 对该离散实现近乎结构性不可达。cap 4 的 250-step 累计失败率约 `15.33%`，cap 5 约 `0.74%`，不能通过降低可靠性换成本。
+- 新门控：先运行 cap-5、20-step、无 dev R2-P；固定 4 个有效 group且不得 fallback。平均 raw overhead `<=2.30×`、相对父方法前 20 step wall time `<=2.0×` 才允许正式 R2；正式阶段平均 raw overhead 收紧为 `<=2.15×`。
+- 父方法：R1 全部晋级则使用 Dr.GRPO；否则使用 E2/GRPO。两者都从同一 Stage-2 base 开始，Dynamic Sampling 是唯一新增训练变量。
+- 解释边界：这是根据实现粒度问题新建的前瞻 pilot，不回写 R0 gate、不使用 dev 调成本门槛、不保证 R2 科学收益。
+- 下一动作：R1 运行期间只在本地实现和测试 R2-P；R1 完成、结果写回后才同步服务器并启动所选父方法的 pilot。
 
 ## 10. 后续记录模板
 

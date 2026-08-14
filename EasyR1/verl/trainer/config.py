@@ -92,6 +92,8 @@ class AlgorithmConfig:
     """target kl for adaptive kl controller"""
     online_filtering: bool = False
     """use online filtering"""
+    filter_mode: str = "mean"
+    """group filter mode, including `mean` and `zero_variance`"""
     filter_key: str = "overall"
     """reward key for filtering samples"""
     filter_low: float = 0.01
@@ -102,6 +104,8 @@ class AlgorithmConfig:
     def post_init(self):
         if self.std_floor <= 0:
             raise ValueError("algorithm.std_floor must be positive.")
+        if self.filter_mode not in {"mean", "zero_variance"}:
+            raise ValueError("algorithm.filter_mode must be `mean` or `zero_variance`.")
 
 
 @dataclass

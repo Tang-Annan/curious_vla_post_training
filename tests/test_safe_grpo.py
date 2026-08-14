@@ -127,6 +127,17 @@ def test_dr_grpo_centers_without_std_normalization():
     assert torch.equal(returns, advantages)
 
 
+def test_zero_variance_group_filter_keeps_only_informative_groups():
+    pytest.importorskip("torch")
+    pytest.importorskip("ray")
+    numpy = pytest.importorskip("numpy")
+    trainer = importlib.import_module("verl.trainer.ray_trainer")
+    uids = numpy.array(["zero", "zero", "signal", "signal", "other", "other"], dtype=object)
+    scores = [0.5, 0.5, 0.2, 0.8, 0.0, 0.0]
+
+    assert trainer.select_group_filter_indices(uids, scores, "zero_variance", 0.01, 0.99) == [2, 3]
+
+
 def test_rollout_pairwise_distances():
     pytest.importorskip("numpy")
     analysis = load_module(ROOT / "projects/safe_grpo/analyze_rollouts.py", "analyze_rollouts")
@@ -337,6 +348,46 @@ def test_formal_launcher_keeps_e2_e3_e4_as_single_factor_ablations():
     assert 'R1_SMOKE_STEPS="${R1_SMOKE_STEPS:-}"' in source
     assert 'trainer.skip_final_validation="$SKIP_FINAL_VALIDATION"' in source
     assert 'tracker_path.parent / f"global_step_{expected_step}" / "actor"' in source
+    assert 'r2p)' in source
+    assert 'R2_PARENT must be e2 or r1' in source
+    assert "FILTER_MODE=zero_variance" in source
+    assert "MAX_TRY_MAKE_BATCH=5" in source
+    assert '--pilot-log "$RUN_DIR/checkpoints/experiment_log.jsonl"' in source
+
+
+def test_dynamic_sampling_pilot_analysis_uses_preregistered_cost_gates(tmp_path):
+    analysis = load_module(
+        ROOT / "projects/safe_grpo/analyze_dynamic_sampling_pilot.py", "analyze_dynamic_sampling_pilot"
+    )
+    pilot_log = tmp_path / "pilot.jsonl"
+    parent_log = tmp_path / "parent.jsonl"
+    pilot_rows = []
+    parent_rows = []
+    for step in range(1, 21):
+        pilot_rows.append(
+            {
+                "step": step,
+                "sampling": {
+                    "generated_groups": 8,
+                    "kept_groups": 5,
+                    "used_groups": 4,
+                    "dropped_groups": 3,
+                    "unused_kept_groups": 1,
+                    "generation_batches": 2,
+                    "raw_rollout_overhead": 2.0,
+                },
+                "timing_s": {"step": 60.0},
+            }
+        )
+        parent_rows.append({"step": step, "timing_s": {"step": 40.0}})
+    pilot_log.write_text("".join(json.dumps(row) + "\n" for row in pilot_rows), encoding="utf-8")
+    parent_log.write_text("".join(json.dumps(row) + "\n" for row in parent_rows), encoding="utf-8")
+
+    report = analysis.analyze(pilot_log, parent_log)
+
+    assert report["sampling"]["mean_raw_rollout_overhead"] == pytest.approx(2.0)
+    assert report["timing"]["wall_time_ratio"] == pytest.approx(1.5)
+    assert report["gates"]["passed"] is True
 
 
 def test_inference_loader_keeps_final_partial_batch(monkeypatch, tmp_path):
