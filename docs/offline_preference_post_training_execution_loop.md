@@ -6,19 +6,19 @@
 
 ## 1. 当前决策快照
 
-- 当前证据基线：`023139a`；开发分支已切换为 `codex/offline-preference-post-training`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
+- 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
 - 路线结论：停止围绕 GRPO estimator、sampling cap、reward coefficient 或 std normalization 继续追分；已完成的 E0–E4、R1–R3 作为前半段证据冻结。
 - 新核心问题：在固定 rollout / reward-query 预算下，能否把已有 trajectory-level safety/quality reward 转成离线 preference supervision，并以更低在线成本获得比 RSFT、普通 DPO 和现有 FALS-GRPO 更稳定的策略。
-- 当前唯一动作：在新分支完成 P0 本地/服务器资产、旧 F1 锁与新 final-set 可行性审计；P0 结论写回前不进入 P1-S。
+- 当前唯一动作：P0 已闭环；进入 P1-S，只定位并冻结原始 assistant template，随后实现 D0 schema/join/round-trip 审计，不启动 GPU。
 - 冻结开发集：566 token；每个正式方法只允许一次最终 dev 评估，不用 dev 选择 pair 阈值或训练超参数。
 - 旧 565-token held-out 已访问 520 条并永久失去 unseen 资格；部分 rollout 已删除，`F1_HELDOUT_ACCESSED` 永久锁保留，禁止补跑剩余 45 条或把它用于最终确认。
-- 新路线最终确认集尚未建立；必须在读取任何新方法 dev 结果前冻结一个版本化、此前未用于模型推理且与既有 split 互斥的新 manifest，否则 P6 不执行 final-set 推理。
+- P0 证明当前服务器资产无法建立合格的新 final set：旧 manifest 外 97,632 个 token 的 log 可用，但 CAM_F0 图像可用数为 0。P6 预注册为不执行 final-set 推理，除非用户未来明确扩展数据下载范围并在任何新方法 dev 结果产生前重新立项。
 - 明确排除：不下载或评估官方 final checkpoint；不重做完整 FTE；不开展 ELF-VLA teacher feedback；不继续 Dr.GRPO、Dynamic Sampling、SLDR/Std-Floor 组合或 sweep。
 
 | 阶段 | 状态 | GPU | 回答的问题 | 下一动作 |
 | --- | --- | ---: | --- | --- |
-| P0 | 执行中 | 0 | 如何保留 GRPO 证据、隔离新路线并修正 final-set 边界 | 审计服务器资产与新 final-set 可行性 |
-| P1-S | 待执行 | 0 | 18,100 条 scored rollout 是否具备可训练表示 | 审计 schema、prompt/image/response join 与轨迹 round-trip |
+| P0 | 已完成 | 0 | 如何保留 GRPO 证据、隔离新路线并修正 final-set 边界 | 无新 final set；旧 split 永久封存 |
+| P1-S | 执行中 | 0 | 18,100 条 scored rollout 是否具备可训练表示 | 定位 assistant template，审计 schema/join/round-trip |
 | P1-M | 被 P1-S 阻塞 | 0 | PDMS 与 Safety-Gap 能构成多少可信 pair | 只用 train 构建统计与冻结数据集 |
 | P2 | 被 P1-M 阻塞 | 低 | 只学习 chosen trajectory 是否足够 | chosen-only RSFT |
 | P3 | 被 P1-M 阻塞 | 中低 | pairwise PDMS supervision 是否优于 RSFT/GRPO | 普通 trajectory DPO |
@@ -49,7 +49,7 @@ git switch -c codex/offline-preference-post-training
 
 | 位置 | 责任 | 当前状态 |
 | --- | --- | --- |
-| `projects/safe_preference/build_preference_dataset.py` | schema 审计、join、pair mining、LLaMA-Factory 数据输出 | 待实现 |
+| `projects/safe_preference/build_preference_dataset.py` | schema 审计、join、pair mining、LLaMA-Factory 数据输出 | P1-S 待实现 |
 | `projects/safe_preference/analyze_preference_dataset.py` | pair 数量、gap、长度、安全构成与 hash 汇总 | 待实现；只有 builder 过大时才拆分 |
 | `sft/preference/` | P2/P3/P4 的冻结 YAML 与 export YAML | 待实现 |
 | `scripts/run_safe_preference_experiment.sh` | smoke、正式训练、导出、状态与证据门控 | 待实现 |
@@ -176,8 +176,8 @@ D0 的 score/pose 能否与训练时的 prompt、image 和合法 assistant respo
 ```text
 D0:       experiments/safe_grpo/d0_stage2_train_n4_seed20260812/d0_train_rollouts.jsonl
 RL data:  src/curious_vla_post_training/EasyR1/data/QA_navtrain_poutine_style_full/data/train.parquet
-SFT data: src/curious_vla_post_training/datasets/QA_sft_navsim_train_cot_1view_103k_baseline_norm.json
-stats:    src/curious_vla_post_training/EasyR1/verl/utils/reward_score/navsim/trajectory_stats_train.json
+SFT data: 待 P1-S 定位并冻结的原始 103k assistant-template 数据
+stats:    src/curious_vla_post_training/stats/trajectory_stats_train.json
 manifest: manifests/train_tokens.txt
 ```
 
@@ -523,3 +523,18 @@ P4-v1 frozen model
 4. [LLaMA-Factory preference data format](https://github.com/hiyouga/LLaMA-Factory/blob/main/data/README.md)：只作为 pinned trainer 的格式参考；正式运行以服务器实际 commit 为准。
 
 本项目最终只能声明由 P2/P3/P4/P5 自身同协议证据支持的结论；外部论文报告的 benchmark 数值不得与本项目 566-dev 数值直接横比。
+
+## 17. 实时执行记录
+
+### 记录 001：P0 分支、资产与 final-set 边界闭环
+
+- 状态：技术通过；新路线分支与既有证据封存完成。新 final set 在当前资产下不可行，P6 不执行 final-set 推理。
+- 假设与唯一变量：只审计本地/服务器 source、保留资产、旧 F1 永久锁和旧 manifest 外数据可用性；不训练、不运行模型推理、不访问 dev 或 legacy-held-out 内容。
+- 代码与环境：从 `023139a` 建立 `codex/offline-preference-post-training`；台账首提交 `e54ae57`。确定性候选 builder 与测试 source `c36767a`，本地/服务器均为 `4 passed`，compile 与 diff check 通过。该 builder 完成 P0 审计使命后从活跃树移除，历史由 Git 保留。
+- 服务器同步：source fast-forward 至 `c36767a` 且 status clean；GPU 无 compute PID，8901 无监听，`/root/autodl-tmp` 为 `58/120 GB`、可用约 `63 GB`。E0、D0、R0 retry1、E2、F0、三个旧 split 和 `F1_HELDOUT_ACCESSED` 全部存在。
+- 冻结输入：D0 rollout SHA-256 `2ededee1d08d754c251a1f1777d2df4e44e52f4a859e884afeed95521e6ef9d6`；RL parquet `86db9581c4bf29552822fdcc7c6bc71dee4a5d7f78c0f9c44b262bad4048f5dd`；trajectory stats `3f272a89b634def0f5cee65175e45cad288b1b6c85e7a1a708505fe38958ec49`；train/dev/legacy-held-out manifest 分别为 `4a19947abd86d4265e055a6408fc8a6d579fcc083cb5bc4c207159d5c60d8168`、`49dd1fae7f8e77589a27af832835bce8f705c0c5b9062145e180890bf3934cfd`、`6972791333181f03143f636ab565771c970c01a54b5920df3c8c5645dc2085ef`；旧 F1 锁 hash 为 `a994d13c76e0630b388ca066345045f135f7d4ef28597e984bb7c447eb83c6b5`。
+- 数据审计：RL parquet 为 103,288 行/唯一 token；旧 train/dev/legacy-held-out union 为 5,656，parquet 外剩余 97,632。第一次按 salted SHA-256 选择 566 个候选时，首个候选缺少 CAM_F0 图像，builder 在创建输出目录前按门控失败。随后全量审计确认 97,632 个候选的 trainval log 可用数为 97,632，但 image 可用数为 0；两个候选输出目录均不存在，没有留下半成品。
+- final-set 结论：当前 17 GB NAVSIM 资产只覆盖旧 5,656 split 的 sensor blobs。下载额外大规模 sensor shards 属于新的数据与预算范围，P0 不擅自扩展；因此不构造伪 unseen set，不补跑旧 F1 剩余 45 条。最终报告必须明确没有 unseen final-set 证据。
+- P1 前置缺口：D0 18,100 行确认不含 `response`；服务器存在 103,288 行 RL parquet prompt/image/token，但预设的原始 103k SFT JSON 不存在。实际 trajectory stats 路径修正为 `stats/trajectory_stats_train.json`。
+- 决策：P0 完成；关闭当前 final-set 分支。允许进入 P1-S，只定位可验证的 assistant-template 来源并实现 train-only 表示审计，仍不启动 GPU。
+- 下一动作：检查官方已下载数据或 Hugging Face 发布文件是否能恢复与 RL token 一一对应的原始 assistant JSON；找不到则按 P1-S 门控阻塞，不生成占位 response。
