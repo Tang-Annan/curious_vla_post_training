@@ -341,6 +341,24 @@ def test_f0_checkpoint_audit_is_validation_only_and_preregistered():
     assert '"heldout_used": False' in source
 
 
+def test_f1_launcher_is_one_time_and_uses_only_the_frozen_checkpoint():
+    source = (ROOT / "scripts/run_f1_heldout_once.sh").read_text(encoding="utf-8")
+    assert "EXPECTED_HELDOUT_SHA256=6972791333181f03143f636ab565771c970c01a54b5920df3c8c5645dc2085ef" in source
+    assert 'F1_LOCK="$EXPERIMENT_ROOT/F1_HELDOUT_ACCESSED"' in source
+    assert '[[ ! -e "$F1_LOCK" ]]' in source
+    assert "set -o noclobber" in source
+    assert 'FROZEN_CHECKPOINT="$E2_RUN/checkpoints/global_step_250"' in source
+    assert 'selection.get("selected_step") != 250' in source
+    assert 'data.token_filter_file="$HELDOUT_MANIFEST"' in source
+    assert 'data.val_token_filter_file="$HELDOUT_MANIFEST"' in source
+    assert "worker.rollout.n=1" in source
+    assert "worker.rollout.temperature=0.6" in source
+    assert "worker.rollout.top_p=0.95" in source
+    assert 'trainer.load_checkpoint_path="$FROZEN_CHECKPOINT"' in source
+    assert "trainer.max_steps=" not in source
+    assert "--expected-rollouts 1" in source
+
+
 def test_e0_and_d0_keep_zero_effect_lora_wrapper():
     source = (ROOT / "scripts/run_safe_grpo_experiment.sh").read_text(encoding="utf-8")
     assert "worker.actor.model.lora.rank=0" not in source

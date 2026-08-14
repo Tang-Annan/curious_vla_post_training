@@ -5,10 +5,10 @@
 ## 1. 当前决策快照
 
 - 最后更新：2026-08-14
-- 开发分支：`codex/post-training-analysis`；R3 gate 修复与 retry source `6ef79b8`；服务器 checkout clean
-- 当前最佳已训练候选：E2 FALS-only `global_step_250/actor`
-- 当前执行动作：R3 persistent-failure gate 未通过并关闭；恢复 F0，只新增 E2 step-50 的同协议 566-token dev
-- 当前封存动作：F0 按预注册规则选择唯一 checkpoint 前，held-out 继续完全封存
+- 开发分支：`codex/post-training-analysis`；F0 source `681a85b`；服务器 checkout clean
+- 冻结的最终候选：E2 FALS-only `global_step_250/actor`
+- 当前执行动作：F0 已按规则保留 step 250；冻结 F1 一次性入口后运行 565-token held-out
+- 当前封存动作：F1 启动前 held-out 继续完全封存；F1 后不得再改模型、checkpoint、方法或阈值
 - 保留的服务器核心证据：E0、D0、E2、全部 manifest，以及 E2 step 50/250 checkpoint
 - 已排除方向：继续调 SLDR、把 Std-Floor 直接叠加到 E2、为了吞吐改动正式生成协议
 - 当前主线：R1/Dr.GRPO、正式 R2-G 与 R3 gate 均未晋级；C0 跳过，停止方法扩展，以 E2 进入 F0
@@ -23,8 +23,8 @@
 | R2-D / R2-G | R2-D 跳过；R2-G 工程通过、科学负向 | E2 + Dynamic Sampling 的 250-step 单因素实验 | 回退 E2，不调阈值/cap、不重跑 |
 | R3 | gate 未通过、已关闭 | Frozen E2 四 rollout persistent-failure 与 Failure-Guided Recovery 等预算可行性 | 56/1,000 的保守下界低于 10%，不扩大、不做 recovery 对照 |
 | C0 | 按门控跳过 | R1/R2 均未达到工程晋级线 | 不运行第二训练 seed |
-| F0 | 恢复执行 | 只审计最终胜出方法 E2 的预注册 checkpoint | 仅评估 step 50；复用 step 250 既有 dev |
-| F1 | 封存 | 一次性 held-out 确认 | 代码、方法、checkpoint 全部冻结后执行 |
+| F0 | 已完成 | 只审计最终胜出方法 E2 的预注册 checkpoint | step 50 四项选择条件均失败，冻结 step 250 |
+| F1 | 待一次性执行 | 冻结 E2 step 250 的 565-token held-out 确认 | 入口与失败语义冻结后只运行一次 |
 
 R0 后当前已解析路线为：
 
@@ -45,8 +45,11 @@ R2-G（完成，工程通过、科学负向）
 R3 gate（完成）
 └─ 56/1,000 = 5.6% < 10% ──> 关闭 R3，不做 recovery 对照
 
-F0（当前）
-└─ E2 step 50 同协议 dev；按预注册规则与既有 step 250 比较 ──> 冻结唯一 checkpoint
+F0（完成）
+└─ step 50 的 PDMS/Safe/Collision/TTC 均更低 ──> 冻结 E2 step 250
+
+F1（下一步）
+└─ 唯一 checkpoint × 565-token held-out × 1 response ──> 只汇总，不再调整
 ```
 
 R3 不在这条硬主线中；它的成功与否不得阻塞最终审计。
@@ -63,6 +66,7 @@ R3 不在这条硬主线中；它的成功与否不得阻塞最终审计。
 | E3 | 随机 1k + SLDR | 0.62994 | 0.65266 | 0.68905 | 0.95760 | 0.72792 | 0.90941 | 0.93816 | 0.91873 | SLDR 独立贡献为负 |
 | E4 | E3 + Std-Floor | 0.64344 | 0.66691 | 0.70848 | 0.95760 | 0.74558 | 0.91016 | 0.94346 | 0.92049 | 部分补救 E3，未恢复 E0 |
 | R1 | FALS 1k + Dr.GRPO | 0.64292 | 0.66711 | 0.70671 | 0.95760 | 0.74558 | 0.90932 | 0.94346 | 0.92049 | 技术完整但显著弱于 E2，拒绝 Dr.GRPO |
+| F0/E2-50 | E2 预注册 step 50 | 0.65305 | 0.67701 | 0.71555 | 0.96555 | 0.74382 | 0.90999 | 0.94700 | 0.92049 | 四项选择条件均失败，保留 step 250 |
 
 E2 相对 E0 的点估计为：PDMS scaled `+0.01292`、PDMS `+0.01397`、Safe `+0.01590`；Progress `-0.00197`。
 
@@ -843,6 +847,29 @@ F1 只运行一次。无论结果好坏都不得再改模型、checkpoint 或阈
 - 分析边界：该门控证明的是“当前冻结 E2 与严格四 rollout 定义下，已确认 persistent failure 的保守下界不足以支撑本轮等预算 recovery 实验”，不是证明其余 train 场景不存在失败，也不是证明 failure-guided learning 普遍无效。按预注册规则不能为达到 10% 而扩大查询或放宽 persistent 定义。
 - 决策：R3 关闭；R1/R2/R3 均无新方法晋级，方法开发结束，最终候选保持 E2。C0 已跳过，恢复 F0 checkpoint 审计。
 - 下一动作：只对 E2 step 50 新增一次与 step 250 相同的 566-token dev；只有 PDMS scaled 更高且 Safe、Collision、TTC 均不低时才切换，否则冻结 step 250。F0 完成前 held-out 继续封存。
+
+### 记录 030：F0 checkpoint 审计完成并冻结 E2 step 250
+
+- 状态：技术通过，checkpoint 选择完成；step 50 未达到任一效果选择条件，唯一最终候选冻结为 E2 `global_step_250`。
+- 协议与实现：commit `681a85bcdedb556fddd8214c03956ecc9c66ea1f` 新增 validation-only launcher；只加载 E2 step 50，不训练、不保存新 checkpoint。固定 566-token dev（SHA-256 `49dd1fae7f8e77589a27af832835bce8f705c0c5b9062145e180890bf3934cfd`）、seed `20260812`、batch 4、`n=1`、temperature `0.6`、top-p `0.95`、response limit 512、CUDA Graph 与既有 step-250 final validation 配置；step 250 不重复推理，直接复用原始 dev rollout。
+- 原始证据：`experiments/safe_grpo/f0_e2_step50_dev_seed20260812/`；2026-08-14 21:20:07 至 21:36:08 CST，约 16 分钟。`COMPLETE` 存在、`RUNNING` 消失、`exit_code` 文件内容为 `0`；source status 为空。
+- 覆盖与健康：step50 rollout 为 566 行、566 个唯一 dev token、每 token 1 条；parse success `1.0`、clipped `0`。GPU、Ray、Gunicorn/8901 与 ADAS 进程均已释放；无 OOM、traceback、RuntimeError、CUDA、no-space 或 killed 异常。held-out 未使用。
+- Step50 点估计：PDMS scaled `0.65305`、PDMS `0.67701`、Safe `0.71555`、Collision `0.96555`、DAC `0.74382`、Progress `0.90999`、TTC `0.94700`、Comfort `0.92049`。
+- 相对 step250：PDMS scaled `-0.01925`，95% CI `[-0.04587,+0.00720]`；Safe `-0.02473`，CI `[-0.05300,+0.00353]`；Collision `-0.00353`，CI `[-0.01413,+0.00530]`；TTC `-0.00707`，CI `[-0.02120,+0.00530]`。Progress `+0.00061` 且 CI 跨 0，Comfort 持平。
+- 选择门控：`pdms_scaled_higher=false`、`safe_not_lower=false`、`collision_not_lower=false`、`ttc_not_lower=false`；四项全失败，故不切换。`f0_selection.json` 与 `frozen_checkpoint.txt` 均指向 E2 `global_step_250`。
+- 分析边界：F0 是预注册 checkpoint 选择，不是额外方法比较；step50 的负差异不能被解释为训练曲线普遍单调，也不授权尝试其他中间 checkpoint。
+- 决策：冻结 E2 step 250、训练 source/config、FALS manifest、dev/held-out split、seed 和生成协议；不删除 step50 原始权重，以保留审计证据，但它不再是候选。
+- 下一动作：建立一次性 F1 held-out 入口；只对冻结 step 250 运行 565-token×1，完成后无论结果好坏都不再调整模型或路线。
+
+### 记录 031：F1 一次性 held-out 预注册
+
+- 状态：计划中；held-out 尚未用于模型推理。
+- 唯一输入：F0 冻结的 E2 `global_step_250`；held-out manifest 固定 565 个唯一 token，SHA-256 `6972791333181f03143f636ab565771c970c01a54b5920df3c8c5645dc2085ef`，与 train 4,525 和 dev 566 重叠均为 0。
+- 推理协议：seed `20260812`、batch 4、每 token 1 response、temperature `0.6`、top-p `0.95`、response limit 512、vLLM CUDA Graph、单 reward worker；除 manifest 外与 F0/E2 final dev 一致。不训练、不比较或选择其他 checkpoint。
+- 一次性门控：launcher 必须验证 F0 `COMPLETE`、`selected_step=250`、冻结 checkpoint 路径、held-out hash/数量/互斥、source clean、GPU/8901 和目标目录；开始前原子写入永久 `F1_HELDOUT_ACCESSED` 锁。锁与运行目录均禁止覆盖或更名重跑。
+- 失败语义：若生成中断或覆盖不完整，F1 标记技术失败并保留已有证据，不重新生成；若 565 条推理已完成但仅后处理失败，只允许基于原 rollout 做一次最小后处理恢复，不再次访问模型。不得因 held-out 指标调 checkpoint、阈值、seed 或方法。
+- 完成验收：要求 `COMPLETE`、`exit_code=0`、565 行/565 unique×1、parse/clipping、完整指标、source/config/manifest/lock 和资源回收证据。最终台账同时报告 dev、held-out、R1/R2/R3 负结果、单训练 seed 限制、rollout/reward 成本与适用边界。
+- 下一动作：提交入口与本记录，通过 Git 同步服务器；远端 shell/test/资源/锁门控全部通过后只启动一次 F1，并交由 Luna 静默监控。
 
 ## 10. 后续记录模板
 
