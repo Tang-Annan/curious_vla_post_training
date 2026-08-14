@@ -9,7 +9,7 @@
 - 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，P1-S 执行 source `fe6eac6`，P1-M 容量门控 source `9b5fdc1`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
 - 路线结论：停止围绕 GRPO estimator、sampling cap、reward coefficient 或 std normalization 继续追分；已完成的 E0–E4、R1–R3 作为前半段证据冻结。
 - 新核心问题：在固定 rollout / reward-query 预算下，能否把已有 trajectory-level safety/quality reward 转成离线 preference supervision，并以更低在线成本获得比 RSFT、普通 DPO 和现有 FALS-GRPO 更稳定的策略。
-- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。M2 正式训练与 M3 20-step smoke 均已通过；M3 resume-check attempt 0 因 CLI override 类型解析在 checkpoint 加载前技术失败，当前只允许修复字符串 quoting 后执行 retry1，不读取 dev。
+- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。M2 正式训练与 M3 20-step smoke/自动恢复门控均已通过，当前只允许从 Stage-2 独立启动 M3 easy-negative DPO 正式 180-step 训练，不读取 dev。
 - 冻结开发集：566 token；每个正式方法只允许一次最终 dev 评估，不用 dev 选择 pair 阈值或训练超参数。
 - 旧 565-token held-out 已访问 520 条并永久失去 unseen 资格；部分 rollout 已删除，`F1_HELDOUT_ACCESSED` 永久锁保留，禁止补跑剩余 45 条或把它用于最终确认。
 - P0 证明当前服务器资产无法建立合格的新 final set：旧 manifest 外 97,632 个 token 的 log 可用，但 CAM_F0 图像可用数为 0。P6 预注册为不执行 final-set 推理，除非用户未来明确扩展数据下载范围并在任何新方法 dev 结果产生前重新立项。
@@ -28,7 +28,7 @@
 | M0 | 已预注册 | 0 | 如何在不篡改 P1-M 负结论下形成可辨识 DPO 对照 | matched Tier-A hard-negative 设计 |
 | M1 | 已完成 | 0 | 960 个严格 matched scene 能否生成确定性多模态数据 | 全门控通过，数据与 hash 冻结 |
 | M2 | 正式训练完成，等待唯一 dev | 0 | 同一 chosen-only RSFT 的收益 | M3/M4 训练闭环后才执行冻结 dev |
-| M3 | smoke 通过，resume-check retry1 待执行 | 中低 | worst-PDMS easy-negative DPO 是否优于 RSFT | 只修复 `save_strategy` 字符串 quoting 后重试恢复门控 |
+| M3 | smoke/恢复通过，正式训练待启动 | 中低 | worst-PDMS easy-negative DPO 是否优于 RSFT | 从 Stage-2 独立执行 3 epochs / 180 steps |
 | M4 | 等待 M3 正式训练 | 中低 | hard-unsafe negative 是否优于 easy-negative | 唯一变量为 rejected trajectory |
 | M5 | 被 M2–M4 阻塞 | 0 | DPO 是否形成正向、负向或证据不足闭环 | paired bootstrap 后停止或条件第二 seed |
 
@@ -679,3 +679,10 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - smoke 结果：`smoke_exit_code=0`，20/20 optimizer steps；20 条 loss、grad norm、learning rate 与 DPO metrics 全部 finite，final train loss `0.7205853`，step-20 loss `0.6721243`，训练段 runtime `443.055` 秒，多模态预处理约 21 分 43 秒。LoRA trainable params 3,686,400/3,757,762,560（0.0981%），vision tower/projector frozen，gradient checkpointing 与 SDPA 生效；观测峰值显存约 `22,543 MiB`。`checkpoint-20` 完整包含 adapter、optimizer、scheduler、RNG、trainer state 与 training args，smoke final adapter 与 checkpoint-20 adapter SHA-256 相同（`31fc3508...b433966`）；错误扫描为空，结束后 GPU/进程/8901 均已清场，磁盘剩余 52 GB。
 - resume-check attempt 0：技术失败，`resume-check_exit_code=1`。runner 原本传入裸 CLI override `save_strategy=no`，LLaMA-Factory 的 YAML override parser 将 YAML 1.1 的 `no` 解析为布尔 `False`，Transformers 随即报 `False is not a valid SaveStrategy`。失败发生在 checkpoint 加载、预处理和 optimizer step 之前；checkpoint-20 与 final adapter 未改变，checkpoint-21 不存在，不产生科学结论。
 - 修复与决策：runner 只把 override 改为带显式字符串值的 `save_strategy="no"`，`max_steps=21`、smoke/formal config 与所有科学变量不变。保留 attempt 0 exit code 和独立日志；冻结新 source 并重做测试/source/GPU/checkpoint 门控后，只允许执行 M3 resume-check retry1。retry1 通过并写回前，M3 正式训练仍阻塞。
+
+### 记录 012：M3 resume-check retry1 闭环
+
+- 状态：通过。retry1 source `bed05c533b982b48422a9e0841c8fe4205df1356`；远端 16 项测试、runner `bash -n`、显式 `save_strategy="no"` 字符串解析、source/M1 hashes、attempt 0 证据、checkpoint-20 hash、GPU/8901 与磁盘门控全部通过。resume 共用 smoke 运行目录，因此目录内 `source_commit.txt` 按设计仍记录首次创建目录的 smoke source `000cfae...`；retry1 source 由独立 retry1 日志、远端 clean HEAD 与本记录共同固定，不把旧文件误写成 retry1 source。
+- 恢复结果：`resume-check_exit_code=0`，attempt 0 的 `resume-check_attempt0_exit_code=1` 独立保留。日志明确从 `adapter/checkpoint-20` 加载，在 global step 20 恢复，`Total optimization steps=21`，只完成技术验证 step 21，没有 step 22。step-21 loss `0.6278689`、grad norm `17.5401821`、learning rate `0`；chosen/rejected reward、accuracy 与 margin 等 DPO metrics 全部 finite，最终 trainer state 为 global step 21。
+- 不变性与清场：checkpoint-20 trainer state 仍为 global step/max steps 20，adapter SHA-256 仍为 `31fc3508...b433966`，optimizer/scheduler/RNG 文件完整且 hash 未改变；`save_strategy="no"` 未生成 checkpoint-21。step-21 learning rate 为 0，final adapter hash 也保持 `31fc3508...b433966`。错误扫描为空，retry1 进程退出，GPU compute 为空，8901 无监听，磁盘剩余 52 GB。
+- 决策：M3 smoke 与自动恢复门控全部通过；全部 smoke/retry 权重永久不进入正式训练或 dev。允许使用 `m3_easyneg_dpo.yaml` 从同一 Stage-2 parent 独立启动 M3 正式 3 epochs / 180 steps，目标目录 `/root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m3_easyneg_dpo_seed20260812/` 必须在启动前不存在。M3 正式训练通过并写回前，M4 与所有 dev 评估仍阻塞。
