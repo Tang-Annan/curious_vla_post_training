@@ -769,3 +769,9 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - 兼容视图：`models/safe_preference/replay/m2_rsft_seed20260812_compat/` 的 shard、index、processor、tokenizer 等除 config 外 9 个文件与原 M2 merged 逐项 inode 相同，未复制 7.1 GB 权重；新 config 复制 Stage-2 parent，SHA-256 从原 export 的 `ef18b5d1...b22fff` 变为兼容的 `965940da...37fd`，其余文件 hash 保持记录 019 的 M2 merged 值。
 - 跨环境验收：Curious Transformers `4.57.1` 的 AutoConfig 与 vLLM `0.11.0` ModelConfig 均识别 `Qwen2_5_VLForConditionalGeneration`；`tie_word_embeddings=true`，全权重加载的 missing/unexpected/mismatched keys 均为空，input/output embedding 实际同址。原 M2 失败的 architecture 丢失和随机 `lm_head` 两个直接故障均在不改权重的情况下消失。
 - 决策：M2 compat 进入 exploratory replay 候选，不启动 GPU 或 dev。下一动作只允许以相同代码和 Stage-2 config 顺序执行 M3、M4 `prepare-replay`；两者均通过并写回前不启用 GPU。
+
+### 记录 025：M3 exploratory compat prepare 闭环
+
+- 状态：无卡准备通过。source `49a48ff4b9fd4f739cb6c11d79ce488fb1f23f1b` 且 clean；M3 replay prepare 的 `prepare_exit_code=0`、`COMPLETE` 存在、`RUNNING` 不存在，进程/GPU/8901 清场，磁盘仍剩余约 31 GB。
+- 兼容与权重：M3 compat 除 config 外 9 个文件与原 M3 merged inode 逐项相同；config 同样从 `ef18b5d1...b22fff` 切换为 Stage-2 `965940da...37fd`。AutoConfig/vLLM architecture 正确、`tie_word_embeddings=true`、input/output embedding 同址，全权重加载 missing/unexpected/mismatched keys 均为空；两份 shard 继续保持 `23b87c28...0674d1` 与 `896a59ae...4c121`。
+- 决策：M2/M3 compat 均进入 replay 候选，仍不启用 GPU。下一动作只允许执行 M4 `prepare-replay`；M4 通过并写回后，再做三套共同无卡门禁并切换 GPU 模式。
