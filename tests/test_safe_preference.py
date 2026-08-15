@@ -451,6 +451,34 @@ def test_preference_resume_check_runs_one_step_without_new_checkpoint():
     assert 'llamafactory-cli" train "${TRAIN_ARGS[@]}"' in source
 
 
+def test_preference_export_configs_only_change_adapter_and_output():
+    names = ("m2_rsft_export.yaml", "m3_easyneg_dpo_export.yaml", "m4_hardneg_dpo_export.yaml")
+    configs = [load_preference_config(name) for name in names]
+    for config in configs:
+        assert config["model_name_or_path"].endswith("/models/sft_stage2")
+        assert config["template"] == "qwen2_vl"
+        assert config["export_device"] == "cpu"
+        assert config["export_size"] == 5
+        assert not config["export_legacy_format"]
+    allowed = {"adapter_name_or_path", "export_dir"}
+    assert {key for key in configs[0] if configs[0][key] != configs[1][key]} == allowed
+    assert {key for key in configs[1] if configs[1][key] != configs[2][key]} == allowed
+
+
+def test_preference_eval_launcher_freezes_one_time_dev_protocol():
+    source = (ROOT / "scripts/run_safe_preference_eval.sh").read_text(encoding="utf-8")
+
+    assert "EXPECTED_DEV_SHA256=49dd1fae7f8e77589a27af832835bce8f705c0c5b9062145e180890bf3934cfd" in source
+    assert 'worker.rollout.n=1' in source
+    assert 'worker.rollout.temperature=0.6' in source
+    assert 'worker.rollout.top_p=0.95' in source
+    assert 'data.max_response_length=512' in source
+    assert 'worker.actor.model.lora.rank=0' in source
+    assert 'set -o noclobber' in source
+    assert 'DEV_LOCK="$EXPERIMENT_ROOT/${METHOD^^}_DEV_ACCESSED"' in source
+    assert 'tokens != [str(row["token"]) for row in baseline]' in source
+
+
 def test_preference_dataset_registration_matches_training_schema():
     info = json.loads((ROOT / "sft/preference/dataset_info.json").read_text(encoding="utf-8"))
 

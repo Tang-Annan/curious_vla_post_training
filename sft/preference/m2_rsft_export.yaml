@@ -1,0 +1,11 @@
+### model
+model_name_or_path: /root/autodl-tmp/curious-vla-workspace/models/sft_stage2
+adapter_name_or_path: /root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m2_rsft_seed20260812/adapter
+template: qwen2_vl
+trust_remote_code: true
+
+### export
+export_dir: /root/autodl-tmp/curious-vla-workspace/models/safe_preference/m2_rsft_seed20260812_merged
+export_size: 5
+export_device: cpu
+export_legacy_format: false

@@ -9,7 +9,7 @@
 - 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，P1-S 执行 source `fe6eac6`，P1-M 容量门控 source `9b5fdc1`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
 - 路线结论：停止围绕 GRPO estimator、sampling cap、reward coefficient 或 std normalization 继续追分；已完成的 E0–E4、R1–R3 作为前半段证据冻结。
 - 新核心问题：在固定 rollout / reward-query 预算下，能否把已有 trajectory-level safety/quality reward 转成离线 preference supervision，并以更低在线成本获得比 RSFT、普通 DPO 和现有 FALS-GRPO 更稳定的策略。
-- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。M2/M3/M4 三个正式模型均已完成训练且尚未读取 dev；当前只允许审计并冻结三者各唯一一次 566-token dev 评估入口，门控通过后按固定顺序运行，不访问 legacy-held-out。
+- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。M2/M3/M4 三个正式模型均已完成训练且尚未读取 dev；唯一 dev 入口已预注册，当前只允许按 M2→M3→M4 执行 CPU-only merged-model `prepare`，不启动 reward server 或 dev 推理。
 - 冻结开发集：566 token；每个正式方法只允许一次最终 dev 评估，不用 dev 选择 pair 阈值或训练超参数。
 - 旧 565-token held-out 已访问 520 条并永久失去 unseen 资格；部分 rollout 已删除，`F1_HELDOUT_ACCESSED` 永久锁保留，禁止补跑剩余 45 条或把它用于最终确认。
 - P0 证明当前服务器资产无法建立合格的新 final set：旧 manifest 外 97,632 个 token 的 log 可用，但 CAM_F0 图像可用数为 0。P6 预注册为不执行 final-set 推理，除非用户未来明确扩展数据下载范围并在任何新方法 dev 结果产生前重新立项。
@@ -59,7 +59,7 @@ git switch -c codex/offline-preference-post-training
 | `projects/safe_preference/analyze_preference_dataset.py` | pair 数量、gap、长度、安全构成与 hash 汇总 | P1-M 容量门控已实现；结果 `B=0`，不扩展为数据构建 |
 | `sft/preference/` | P2/P3/P4 的冻结 YAML 与 export YAML | 待实现 |
 | `scripts/run_safe_preference_experiment.sh` | smoke、正式训练、导出、状态与证据门控 | 待实现 |
-| `scripts/run_safe_preference_eval.sh` | 复用冻结 NAVSIM dev 协议评估任意 merged model | 待实现 |
+| `scripts/run_safe_preference_eval.sh` | CPU merge 后复用冻结 NAVSIM dev 协议评估三个正式模型 | 已实现，待 prepare 门控 |
 | `tests/test_safe_preference.py` | pair 规则、泄漏、round-trip、确定性与失败语义 | P1-S/P1-M 共 7 项测试通过 |
 | `projects/safe_grpo/`、`scripts/run_safe_grpo_experiment.sh` | 历史 GRPO 证据 | 只读，不扩展 |
 
@@ -714,3 +714,10 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - 训练结果：`train_exit_code=0`，3 epochs、180/180 optimizer steps；trainer state 与 checkpoint-180 各含完整 step 1–180，loss、grad norm、learning rate、chosen/rejected reward、accuracy/margin、logps/logits 与 epoch 字段全部 finite。step-180 loss `0.5998770`、grad norm `16.4344425`、accuracy `0.75`、margin `0.2461807`；final train loss `0.7221997`，train runtime `3999.4059` 秒，steps/s `0.045`。
 - 产物与资源：唯一 checkpoint-180 完整包含 adapter、optimizer、scheduler、RNG、trainer state 与 training args；不存在 checkpoint-181，final adapter 与 checkpoint-180 adapter SHA-256 相同（`3c600f76...7dc5e1`）。LoRA trainable params 为 3,686,400/3,757,762,560（0.0981%），vision tower/projector frozen，gradient checkpointing 与 torch SDPA 生效；观测峰值显存约 `22,596 MiB`，Trainer GPU peak delta `15,292,894,208` bytes。source/config/M1 hashes 一致，错误扫描为空；结束后训练/launcher 进程、GPU compute 与 8901 均已清场，磁盘剩余 52 GB。
 - 决策：M2/M3/M4 三个正式模型训练门控全部通过，adapter/checkpoint/metrics 均进入保留集合，不得清理；截至本记录仍未读取冻结 566-token dev，因此不存在方法优劣结论。下一动作只允许审计并冻结三者各唯一一次的同协议 dev 评估入口与输出目录，确认 parent+adapter merge、temperature/top-p/max response/parser/九项 NAVSIM 指标、token 顺序、访问锁和互斥门控后，再按 M2→M3→M4 固定顺序执行；不访问 legacy-held-out，不执行官方 checkpoint sanity check。
+
+### 记录 017：三模型唯一 dev 评估入口预注册
+
+- 状态：实现完成，尚未执行任何新模型 dev 推理。三个 export config 只允许 `adapter_name_or_path` 与 `export_dir` 不同，统一从 Stage-2 parent 以 pinned LLaMA-Factory 在 CPU 合并 LoRA，输出标准 Hugging Face Qwen2.5-VL 模型；`prepare` 模式验证正式训练 exit、adapter、source/M1 hashes、shard index 与 merged 全文件 hash，不启动 reward server、不读取 dev rollout。
+- 唯一 dev 协议：`eval` 模式冻结 seed `20260812`、每 token 1 rollout、temperature `0.6`、top-p `0.95`、max response length `512`、Qwen2-VL template、同一 grouped NAVSIM reward/parser、同一 metric cache 与单 GPU vLLM 配置。dev manifest SHA-256 固定为 `49dd1fae...934cfd`，必须为 566 个唯一 token，且与 train/legacy-held-out overlap 为 0；输出必须恰好覆盖 566 token，token 序列与既有 Stage-2/E2 dev rollout 序列完全一致，并逐行包含 PDMS scaled/PDMS/Safe/Collision/DAC/Progress/TTC/Comfort、latency、parse、response length 与 poses。
+- 一次性与顺序门控：固定 M2→M3→M4；每个方法在 reward server 健康、merged hash、source/GPU/8901、run/debug/ADAS 目录均通过后，以 `noclobber` 创建永久 `${METHOD}_DEV_ACCESSED` 锁，再启动推理。任何锁存在即禁止同方法重跑；M3 必须看到 M2 `COMPLETE`，M4 必须看到 M2/M3 `COMPLETE`。性能、parse 或 clipping 数值只报告，不据此重跑或调参；技术失败若发生在锁后也不得再次生成该方法 dev。
+- 决策：先按 M2→M3→M4 执行三个 CPU-only `prepare` 并逐一验收、写回 merged hash/大小/环境与磁盘；此阶段 dev 访问次数保持 0。三者 prepare 全通过后才允许启动 M2 唯一 dev；不访问 legacy-held-out 内容，不执行官方 checkpoint sanity check，不删除 M1 或三套正式训练产物。
