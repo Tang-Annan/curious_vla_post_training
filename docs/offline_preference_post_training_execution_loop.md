@@ -9,7 +9,7 @@
 - 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，P1-S 执行 source `fe6eac6`，P1-M 容量门控 source `9b5fdc1`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
 - 路线结论：停止围绕 GRPO estimator、sampling cap、reward coefficient 或 std normalization 继续追分；已完成的 E0–E4、R1–R3 作为前半段证据冻结。
 - 新核心问题：在固定 rollout / reward-query 预算下，能否把已有 trajectory-level safety/quality reward 转成离线 preference supervision，并以更低在线成本获得比 RSFT、普通 DPO 和现有 FALS-GRPO 更稳定的策略。
-- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。M2/M3/M4 三个正式模型均已完成训练且尚未读取 dev；M2/M3 merged prepare 已通过，当前只允许执行 M4 CPU-only `prepare`，不启动 reward server 或 dev 推理。
+- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 M1 数据与 M2/M3/M4 正式训练均通过，但 M2 唯一 dev 在永久锁创建后因 export/inference Transformers schema 不兼容而于生成前技术失败。M2 不得重跑，M3/M4 被冻结顺序阻塞，M5 以效果证据不足关闭；当前只允许保存现场、台账和结论，不再启动本路线 dev、bootstrap 或第二 seed。
 - 冻结开发集：566 token；每个正式方法只允许一次最终 dev 评估，不用 dev 选择 pair 阈值或训练超参数。
 - 旧 565-token held-out 已访问 520 条并永久失去 unseen 资格；部分 rollout 已删除，`F1_HELDOUT_ACCESSED` 永久锁保留，禁止补跑剩余 45 条或把它用于最终确认。
 - P0 证明当前服务器资产无法建立合格的新 final set：旧 manifest 外 97,632 个 token 的 log 可用，但 CAM_F0 图像可用数为 0。P6 预注册为不执行 final-set 推理，除非用户未来明确扩展数据下载范围并在任何新方法 dev 结果产生前重新立项。
@@ -27,10 +27,10 @@
 | P6 | 本路线不执行 | 0 | 第二 seed、behavior audit 与新 final set 是否确认结论 | 无 preference 候选且 P0 无新 final set |
 | M0 | 已预注册 | 0 | 如何在不篡改 P1-M 负结论下形成可辨识 DPO 对照 | matched Tier-A hard-negative 设计 |
 | M1 | 已完成 | 0 | 960 个严格 matched scene 能否生成确定性多模态数据 | 全门控通过，数据与 hash 冻结 |
-| M2 | 正式训练完成，等待唯一 dev | 0 | 同一 chosen-only RSFT 的收益 | M3/M4 训练闭环后才执行冻结 dev |
-| M3 | 正式训练完成，等待唯一 dev | 0 | worst-PDMS easy-negative DPO 是否优于 RSFT | M4 训练闭环后才执行冻结 dev |
-| M4 | 正式训练完成，等待唯一 dev | 0 | hard-unsafe negative 是否优于 easy-negative | 与 M2/M3 同协议执行冻结 dev |
-| M5 | 被唯一 dev 评估阻塞 | 0 | DPO 是否形成正向、负向或证据不足闭环 | 三模型各一次 dev 后做 paired bootstrap |
+| M2 | 正式训练通过；唯一 dev 技术失败并永久锁定 | 0 | 同一 chosen-only RSFT 的收益 | 0 条 rollout，不能形成效果结论，不得重跑 |
+| M3 | 正式训练通过；dev 按顺序门禁跳过 | 0 | worst-PDMS easy-negative DPO 是否优于 RSFT | M2 无 `COMPLETE`，不得启动唯一 dev |
+| M4 | 正式训练通过；dev 按顺序门禁跳过 | 0 | hard-unsafe negative 是否优于 easy-negative | M2/M3 未完成 dev，且同一 merged config 也不兼容 |
+| M5 | 证据不足，已关闭 | 0 | DPO 是否形成正向、负向或证据不足闭环 | 无同协议 M2/M3/M4 rollout，不运行 bootstrap 或第二 seed |
 
 ## 2. 分支与代码处理决策
 
@@ -57,10 +57,10 @@ git switch -c codex/offline-preference-post-training
 | --- | --- | --- |
 | `projects/safe_preference/build_preference_dataset.py` | schema 审计、join、pair mining、LLaMA-Factory 数据输出 | P1-S schema/join/processor 审计已实现；P1-M 待实现 |
 | `projects/safe_preference/analyze_preference_dataset.py` | pair 数量、gap、长度、安全构成与 hash 汇总 | P1-M 容量门控已实现；结果 `B=0`，不扩展为数据构建 |
-| `sft/preference/` | P2/P3/P4 的冻结 YAML 与 export YAML | 待实现 |
-| `scripts/run_safe_preference_experiment.sh` | smoke、正式训练、导出、状态与证据门控 | 待实现 |
-| `scripts/run_safe_preference_eval.sh` | CPU merge 后复用冻结 NAVSIM dev 协议评估三个正式模型 | 已实现，待 prepare 门控 |
-| `tests/test_safe_preference.py` | pair 规则、泄漏、round-trip、确定性与失败语义 | P1-S/P1-M 共 7 项测试通过 |
+| `sft/preference/` | M2/M3/M4 的冻结训练 YAML 与 export YAML | 已实现；三模型正式训练通过 |
+| `scripts/run_safe_preference_experiment.sh` | smoke、正式训练、恢复、状态与证据门控 | 已实现；M2/M3/M4 正式训练闭环 |
+| `scripts/run_safe_preference_eval.sh` | CPU merge 后复用冻结 NAVSIM dev 协议评估三个正式模型 | 已实现；M2 锁后暴露 export/inference schema 不兼容，路线关闭 |
+| `tests/test_safe_preference.py` | pair 规则、泄漏、round-trip、确定性与失败语义 | 18 项测试通过；未覆盖跨环境 vLLM config 加载 |
 | `projects/safe_grpo/`、`scripts/run_safe_grpo_experiment.sh` | 历史 GRPO 证据 | 只读，不扩展 |
 
 不要先写新的 trainer、reward model 或通用数据框架。第一版只实现一个确定性 builder、三份配置和两个薄启动器。
@@ -746,3 +746,12 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - merged 结果：目录 `/root/autodl-tmp/curious-vla-workspace/models/safe_preference/m4_hardneg_dpo_seed20260812_merged/` 大小约 7.1 GB；10 个顶层文件经 `merged_sha256.txt` 逐项复核全部通过。关键 SHA-256 为 shard 1 `02791421...8dde9`、shard 2 `b82d9bd2...a248d`、index `cd68e2ee...739ec`、processor `2ac992d7...b558a`、config `ef18b5d1...2fff`；index metadata 权重总大小为 7,508,152,320 bytes，两份实际 shard 文件合计 7,508,244,320 bytes。
 - 技术与资源：launcher/export 进程均退出，错误扫描为 0；GPU compute 为空，reward server/8901 无监听，M2/M3/M4 三把 dev 锁仍不存在；磁盘剩余约 31 GB。M4 merged model 进入评估保留集合，不得清理。
 - 决策：M2/M3/M4 三套 CPU-only prepare 与全文件 hash 门控全部通过，且尚未访问冻结 566-token dev。下一动作只允许做三套 prepare 的共同最终门禁；通过后按预注册顺序启动 M2 唯一一次 dev，锁后技术失败也不得重跑。仍不访问 legacy-held-out，不执行官方 Curious-VLA checkpoint sanity check，不恢复 GRPO，也不按 dev 结果调参。
+
+### 记录 022：共同最终门禁与 M2 唯一 dev 技术失败闭环
+
+- 共同门禁：source `704c8686bb2adca67fe5882fbe7b4461e2c31f46` 且 clean，runner `bash -n` 与 18 项测试通过；M2/M3/M4 三套 prepare exit/`COMPLETE`、三份 export 输入与 30 个 merged 顶层文件 hash 全部通过，每套约 7.1 GB。566-token dev manifest SHA-256 仍为 `49dd1fae...934cfd`，数量、唯一性、train/legacy-held-out 互斥、E0 顺序基准、三把锁和输出目录互斥均通过；GPU/8901/相关进程为空，磁盘剩余约 31 GB。首次测试命令误用不含 pytest 的 LLaMA-Factory 环境而在门禁最前端安全停止，未启动 reward server 或创建锁；改用既有 Curious 环境后全门禁通过，没有安装或修改依赖。
+- M2 运行终态：入口先逐项复核 M1 与 M2 merged hash，reward server 于 10:15:38 健康后永久创建 `M2_DEV_ACCESSED`，随后进入模型初始化。运行以 `exit_code=1` 结束，`RUNNING` 已清除且无 `COMPLETE`；未生成 `dev_rollouts.jsonl`、`adas_scores.csv` 或 `final_dev_metrics.json`，因此生成数为 0/566。M3/M4 锁与 dev 输出均不存在；launcher、Ray、reward server、GPU compute 和 8901 已清场，现场与 M2 永久锁保留。
+- 直接错误：Curious 推理环境 Transformers `4.57.1` / vLLM `0.11.0` 在 `vLLMRollout -> LLM -> ModelConfig` 初始化时抛出 `No model architectures are specified`。日志还显示 `lm_head.weight` 未从 checkpoint 初始化而被随机创建；即使只绕过 architecture 检查，输出也不具备有效性。
+- 根因：Stage-2 parent 的 `config.json` 来自 Transformers `4.50.0` 扁平 schema，同一推理环境可读为 `architectures=['Qwen2_5_VLForConditionalGeneration']`、`tie_word_embeddings=True`。CPU export 环境 Transformers `5.8.0` 把文本配置改写进嵌套 `text_config`；虽然文件表面仍有顶层 architectures/tie 字段，推理环境反序列化三套 merged config 后均得到 `architectures=None`、`text_config.architectures=None`、`tie_word_embeddings=False`。三套 merged config SHA-256 相同（`ef18b5d1...2fff`），且 merged 权重索引只有 `model.embed_tokens.weight`、没有 `lm_head.weight`，故 M3/M4 会遇到相同失败或无效随机输出头。此前 prepare 只验证静态文件、shard 与 hash，没有覆盖跨环境 AutoConfig/vLLM 加载契约。
+- 效果结论：M1 数据门控与 M2/M3/M4 smoke、恢复、正式训练稳定性仍成立，但没有任何新模型的同协议 dev rollout，不能声明 RSFT、easy-negative DPO 或 hard-unsafe DPO 的效果为正向或负向，也不能计算 M3−M2、M4−M3 paired bootstrap。M2 锁后技术失败按预注册禁止重跑；M3 必须看到 M2 `COMPLETE`、M4 必须看到 M2/M3 `COMPLETE`，因此不允许绕过顺序继续消耗 dev。
+- 决策：M5 以“效果证据不足”闭环并停止本路线；不运行 M3/M4 dev、第二 seed、legacy-held-out 或官方 Curious-VLA checkpoint sanity check，也不恢复 GRPO 或按 dev 调参。正式 adapters/checkpoints、三套 merged、M1、M2 失败现场与永久锁进入保留集合。若未来要恢复效果评估，必须另立使用全新独立 final set 的协议，并在任何访问锁前冻结 export/inference 同版本环境、跨环境 AutoConfig/tied-head 检查与不读取 final set 的 vLLM canary；这属于新的数据与预算范围，不在本闭环内自行启动。
