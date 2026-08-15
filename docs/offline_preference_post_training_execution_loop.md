@@ -775,3 +775,9 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - 状态：无卡准备通过。source `49a48ff4b9fd4f739cb6c11d79ce488fb1f23f1b` 且 clean；M3 replay prepare 的 `prepare_exit_code=0`、`COMPLETE` 存在、`RUNNING` 不存在，进程/GPU/8901 清场，磁盘仍剩余约 31 GB。
 - 兼容与权重：M3 compat 除 config 外 9 个文件与原 M3 merged inode 逐项相同；config 同样从 `ef18b5d1...b22fff` 切换为 Stage-2 `965940da...37fd`。AutoConfig/vLLM architecture 正确、`tie_word_embeddings=true`、input/output embedding 同址，全权重加载 missing/unexpected/mismatched keys 均为空；两份 shard 继续保持 `23b87c28...0674d1` 与 `896a59ae...4c121`。
 - 决策：M2/M3 compat 均进入 replay 候选，仍不启用 GPU。下一动作只允许执行 M4 `prepare-replay`；M4 通过并写回后，再做三套共同无卡门禁并切换 GPU 模式。
+
+### 记录 026：M4 exploratory compat prepare 闭环
+
+- 状态：无卡准备通过。source `a9fa13426ce818ca379c93bbe1073071d7afb94f` 且 clean；M4 replay prepare 的 `prepare_exit_code=0`、`COMPLETE` 存在、`RUNNING` 不存在，launcher/hash 进程、GPU compute 与 8901 均已清场，磁盘仍剩余约 31 GB。
+- 兼容与权重：M4 compat 除 config 外 9 个文件与原 M4 merged inode/size 逐项相同；config 从 `ef18b5d1...b22fff` 切换为 `965940da...37fd`。AutoConfig/vLLM architecture 正确、`tie_word_embeddings=true`、input/output embedding 同址，全权重加载 missing/unexpected/mismatched keys 均为空；两份 shard 保持 `02791421...8dde9` 与 `b82d9bd2...a248d`。
+- 决策：M2/M3/M4 三套 compat 无卡门禁全部通过，原正式模型、M2 失败现场与锁均未修改。下一动作只允许做三套共同 source/prepare/hash/inode/config/资源门禁；通过后切换 GPU 模式，并在任何 566-dev replay 前先执行不读取 dev 的 train-only 单 token 完整生成 canary。
