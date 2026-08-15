@@ -9,7 +9,7 @@
 - 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，P1-S 执行 source `fe6eac6`，P1-M 容量门控 source `9b5fdc1`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
 - 路线结论：停止围绕 GRPO estimator、sampling cap、reward coefficient 或 std normalization 继续追分；已完成的 E0–E4、R1–R3 作为前半段证据冻结。
 - 新核心问题：在固定 rollout / reward-query 预算下，能否把已有 trajectory-level safety/quality reward 转成离线 preference supervision，并以更低在线成本获得比 RSFT、普通 DPO 和现有 FALS-GRPO 更稳定的策略。
-- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。M2/M3 正式训练与 M4 smoke/自动恢复门控均已通过，当前只允许从 Stage-2 独立启动 M4 hard-unsafe DPO 正式 180-step 训练，不读取 dev。
+- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。M2/M3/M4 三个正式模型均已完成训练且尚未读取 dev；当前只允许审计并冻结三者各唯一一次 566-token dev 评估入口，门控通过后按固定顺序运行，不访问 legacy-held-out。
 - 冻结开发集：566 token；每个正式方法只允许一次最终 dev 评估，不用 dev 选择 pair 阈值或训练超参数。
 - 旧 565-token held-out 已访问 520 条并永久失去 unseen 资格；部分 rollout 已删除，`F1_HELDOUT_ACCESSED` 永久锁保留，禁止补跑剩余 45 条或把它用于最终确认。
 - P0 证明当前服务器资产无法建立合格的新 final set：旧 manifest 外 97,632 个 token 的 log 可用，但 CAM_F0 图像可用数为 0。P6 预注册为不执行 final-set 推理，除非用户未来明确扩展数据下载范围并在任何新方法 dev 结果产生前重新立项。
@@ -29,8 +29,8 @@
 | M1 | 已完成 | 0 | 960 个严格 matched scene 能否生成确定性多模态数据 | 全门控通过，数据与 hash 冻结 |
 | M2 | 正式训练完成，等待唯一 dev | 0 | 同一 chosen-only RSFT 的收益 | M3/M4 训练闭环后才执行冻结 dev |
 | M3 | 正式训练完成，等待唯一 dev | 0 | worst-PDMS easy-negative DPO 是否优于 RSFT | M4 训练闭环后才执行冻结 dev |
-| M4 | smoke/恢复通过，正式训练待启动 | 中低 | hard-unsafe negative 是否优于 easy-negative | 从 Stage-2 独立执行 3 epochs / 180 steps |
-| M5 | 被 M2–M4 阻塞 | 0 | DPO 是否形成正向、负向或证据不足闭环 | paired bootstrap 后停止或条件第二 seed |
+| M4 | 正式训练完成，等待唯一 dev | 0 | hard-unsafe negative 是否优于 easy-negative | 与 M2/M3 同协议执行冻结 dev |
+| M5 | 被唯一 dev 评估阻塞 | 0 | DPO 是否形成正向、负向或证据不足闭环 | 三模型各一次 dev 后做 paired bootstrap |
 
 ## 2. 分支与代码处理决策
 
@@ -707,3 +707,10 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - 恢复结果：`resume-check_exit_code=0`。日志明确从 checkpoint-20/global step 20 恢复，`Total optimization steps=21`，只完成技术验证 step 21，没有 step 22。step-21 loss `0.7491072`、grad norm `20.0541973`、learning rate `0`，chosen/rejected reward、accuracy/margin、logps/logits 全部 finite；final trainer state 为 global step/max steps 21。
 - 不变性与清场：checkpoint-20 trainer state 仍为 global step/max steps 20；adapter SHA-256 保持 `b188e60f...ec726dc2`，optimizer/scheduler/RNG hash 也未改变，final adapter hash 相同；字符串 `save_strategy="no"` 未生成 checkpoint-21。错误扫描为空，resume 进程、GPU compute 与 8901 均已清场，磁盘剩余 52 GB。
 - 决策：M4 smoke 与自动恢复门控全部通过；全部 smoke/resume 权重永久不进入正式训练或 dev。允许使用 `m4_hardneg_dpo.yaml` 从同一 Stage-2 parent 独立启动 M4 正式 3 epochs / 180 steps，目标目录 `/root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m4_hardneg_dpo_seed20260812/` 必须在启动前不存在。M4 正式训练通过并写回前，全部 dev 评估仍阻塞。
+
+### 记录 016：M4 hard-unsafe DPO 正式训练闭环
+
+- 状态：通过。source `2c812484454f11cae45c71412e07e2d85368b580`，pinned LLaMA-Factory `f28afaf6355af515454dfb16c97d728307c93897`；正式目录为 `/root/autodl-tmp/curious-vla-workspace/experiments/safe_preference/m4_hardneg_dpo_seed20260812/`。启动前 16 项测试、runner `bash -n`、source/M1 hashes、GPU/8901 空闲、目标目录不存在与磁盘门控全部通过；训练从 Stage-2 独立开始，没有读取任何 smoke/resume 或 M2/M3 checkpoint。
+- 训练结果：`train_exit_code=0`，3 epochs、180/180 optimizer steps；trainer state 与 checkpoint-180 各含完整 step 1–180，loss、grad norm、learning rate、chosen/rejected reward、accuracy/margin、logps/logits 与 epoch 字段全部 finite。step-180 loss `0.5998770`、grad norm `16.4344425`、accuracy `0.75`、margin `0.2461807`；final train loss `0.7221997`，train runtime `3999.4059` 秒，steps/s `0.045`。
+- 产物与资源：唯一 checkpoint-180 完整包含 adapter、optimizer、scheduler、RNG、trainer state 与 training args；不存在 checkpoint-181，final adapter 与 checkpoint-180 adapter SHA-256 相同（`3c600f76...7dc5e1`）。LoRA trainable params 为 3,686,400/3,757,762,560（0.0981%），vision tower/projector frozen，gradient checkpointing 与 torch SDPA 生效；观测峰值显存约 `22,596 MiB`，Trainer GPU peak delta `15,292,894,208` bytes。source/config/M1 hashes 一致，错误扫描为空；结束后训练/launcher 进程、GPU compute 与 8901 均已清场，磁盘剩余 52 GB。
+- 决策：M2/M3/M4 三个正式模型训练门控全部通过，adapter/checkpoint/metrics 均进入保留集合，不得清理；截至本记录仍未读取冻结 566-token dev，因此不存在方法优劣结论。下一动作只允许审计并冻结三者各唯一一次的同协议 dev 评估入口与输出目录，确认 parent+adapter merge、temperature/top-p/max response/parser/九项 NAVSIM 指标、token 顺序、访问锁和互斥门控后，再按 M2→M3→M4 固定顺序执行；不访问 legacy-held-out，不执行官方 checkpoint sanity check。
