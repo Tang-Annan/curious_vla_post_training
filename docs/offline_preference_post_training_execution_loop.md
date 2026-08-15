@@ -9,7 +9,7 @@
 - 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，P1-S 执行 source `fe6eac6`，P1-M 容量门控 source `9b5fdc1`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
 - 路线结论：停止围绕 GRPO estimator、sampling cap、reward coefficient 或 std normalization 继续追分；已完成的 E0–E4、R1–R3 作为前半段证据冻结。
 - 新核心问题：在固定 rollout / reward-query 预算下，能否把已有 trajectory-level safety/quality reward 转成离线 preference supervision，并以更低在线成本获得比 RSFT、普通 DPO 和现有 FALS-GRPO 更稳定的策略。
-- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。M2/M3/M4 三个正式模型均已完成训练且尚未读取 dev；M2 merged prepare retry1 已通过，当前只允许执行 M3 CPU-only `prepare`，不启动 reward server 或 dev 推理。
+- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。M2/M3/M4 三个正式模型均已完成训练且尚未读取 dev；M2/M3 merged prepare 已通过，当前只允许执行 M4 CPU-only `prepare`，不启动 reward server 或 dev 推理。
 - 冻结开发集：566 token；每个正式方法只允许一次最终 dev 评估，不用 dev 选择 pair 阈值或训练超参数。
 - 旧 565-token held-out 已访问 520 条并永久失去 unseen 资格；部分 rollout 已删除，`F1_HELDOUT_ACCESSED` 永久锁保留，禁止补跑剩余 45 条或把它用于最终确认。
 - P0 证明当前服务器资产无法建立合格的新 final set：旧 manifest 外 97,632 个 token 的 log 可用，但 CAM_F0 图像可用数为 0。P6 预注册为不执行 final-set 推理，除非用户未来明确扩展数据下载范围并在任何新方法 dev 结果产生前重新立项。
@@ -733,3 +733,9 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - 状态：通过，dev 访问仍为 0。verify source `5d08f4131b633ddf39f1f23841de99d8de838f35`；`prepare_attempt0_exit_code=1`、`prepare_retry1_exit_code=0` 与最终 `prepare_exit_code=0` 均保留，`COMPLETE` 已建立。retry1 只验证 attempt 0 已导出的现有 merged 目录，没有再次运行 export、没有修改正式 adapter。
 - merged 结果：目录 `/root/autodl-tmp/curious-vla-workspace/models/safe_preference/m2_rsft_seed20260812_merged/` 大小约 7.1 GB；config、processor、tokenizer、两份 safetensors shard 与 shard index 全部存在，全文件 `sha256sum --check` 通过。关键 SHA-256 为 shard 1 `4818a030...bf3a6b`、shard 2 `a33d905c...e2011`、index `cd68e2ee...739ec`、processor `2ac992d7...b558a`、config `ef18b5d1...2fff`。
 - 资源与决策：verify 只使用 CPU/磁盘，GPU compute、reward server 与 8901 均未启动；M2/M3/M4 dev 锁仍不存在，磁盘剩余约 45 GB。M2 merged model 进入评估保留集合，不得清理。下一动作只允许执行 M3 CPU-only prepare 并验证全文件 hash；M3/M4 prepare 未全部通过前，不启动 M2 dev。
+
+### 记录 020：M3 merged prepare 闭环
+
+- 状态：通过，dev 访问仍为 0。source `74fce2cbd1672efcec02246887e66f47dfd45c65`；prepare 目录 `m3_easyneg_dpo_eval_prepare_seed20260812` 的 `prepare_exit_code=0`、`COMPLETE` 存在且 `RUNNING` 已清除。export YAML SHA-256 为 `60b55ddd...85a9`，输入 M3 final adapter SHA-256 为 `0221e46b...4183cc`，与记录 013 一致。
+- merged 结果：目录 `/root/autodl-tmp/curious-vla-workspace/models/safe_preference/m3_easyneg_dpo_seed20260812_merged/` 大小约 7.1 GB；config、processor、tokenizer、两份 shard 与 index 共 10 个顶层文件逐项 hash 通过。关键 SHA-256 为 shard 1 `23b87c28...674d1`、shard 2 `896a59ae...4c121`、index `cd68e2ee...739ec`、processor `2ac992d7...b558a`、config `ef18b5d1...2fff`；index metadata 权重总大小为 7,508,152,320 bytes。
+- 资源与决策：prepare 为 CPU-only，结束后导出进程/GPU compute 为空，reward server/8901 未启动，三把 dev 锁仍不存在；磁盘剩余约 38 GB。M3 merged model 进入评估保留集合，不得清理。下一动作只允许执行 M4 CPU-only prepare；M4 prepare 通过并写回前，不启动 M2 dev。
