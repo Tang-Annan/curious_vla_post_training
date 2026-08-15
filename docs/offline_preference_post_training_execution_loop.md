@@ -762,3 +762,10 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - 无卡状态：服务器 source `168ab6146a7116e62991f155b6e2a35a7ce3f0e5` 且 clean；无卡模式下 `nvidia-smi` 被拒绝、Curious 环境 `torch.cuda.is_available=False`。Curious 推理环境为 Transformers `4.57.1` / vLLM `0.11.0` / Torch `2.8.0+cu128`，export 环境为 Transformers `5.8.0`；内存约 1 TiB，磁盘剩余约 31 GB。原三套 merged 各约 7.1 GB，M2 锁/失败目录存在，M3/M4 正式锁与 dev 目录不存在，无实验进程。
 - 最小修复：不重新训练、不重新 merge、不修改三套原 merged。runner 新增显式 `prepare-replay`/`replay` 模式；前者在 `models/safe_preference/replay/` 以硬链接复用原权重和 processor/tokenizer，只用 Stage-2 parent 的 Transformers 4.50 兼容 `config.json` 替换新视图中的 config，并在 Curious 环境检查 AutoConfig architecture、`tie_word_embeddings=True`、vLLM ModelConfig、全权重无 missing/unexpected/mismatched key 以及 input/output embedding 实际同址。后者写入 `experiments/safe_preference/replay/`，忽略正式锁但仍要求 M2→M3→M4 完成顺序，参数继续固定为 566×1、seed `20260812`、temperature `0.6`、top-p `0.95`、response 512。
 - 启动门禁：无卡阶段先完成 19 项测试、runner `bash -n`、三套 `prepare-replay`、全文件 hash 与至少 M2 的全权重兼容加载；启用 GPU 后先用 train-only 单 token 做完整 reward/vLLM/生成 canary，确认没有 architecture、随机 `lm_head`、OOM、parse 或清场问题，才允许启动 M2 replay。每个模型完成后立即验收并写回；长任务仍由 Luna 只读监视。
+
+### 记录 024：M2 exploratory compat prepare 闭环
+
+- 状态：无卡准备通过。source `ca193d5f051ae124e05d09240ed8ffa9023a8017` 且 clean；`m2_rsft_compat_prepare_seed20260812` 的 `prepare_exit_code=0`、`COMPLETE` 存在且 `RUNNING` 已清除，launcher/hash 进程退出，GPU/8901 均为空，磁盘仍剩余约 31 GB。
+- 兼容视图：`models/safe_preference/replay/m2_rsft_seed20260812_compat/` 的 shard、index、processor、tokenizer 等除 config 外 9 个文件与原 M2 merged 逐项 inode 相同，未复制 7.1 GB 权重；新 config 复制 Stage-2 parent，SHA-256 从原 export 的 `ef18b5d1...b22fff` 变为兼容的 `965940da...37fd`，其余文件 hash 保持记录 019 的 M2 merged 值。
+- 跨环境验收：Curious Transformers `4.57.1` 的 AutoConfig 与 vLLM `0.11.0` ModelConfig 均识别 `Qwen2_5_VLForConditionalGeneration`；`tie_word_embeddings=true`，全权重加载的 missing/unexpected/mismatched keys 均为空，input/output embedding 实际同址。原 M2 失败的 architecture 丢失和随机 `lm_head` 两个直接故障均在不改权重的情况下消失。
+- 决策：M2 compat 进入 exploratory replay 候选，不启动 GPU 或 dev。下一动作只允许以相同代码和 Stage-2 config 顺序执行 M3、M4 `prepare-replay`；两者均通过并写回前不启用 GPU。
