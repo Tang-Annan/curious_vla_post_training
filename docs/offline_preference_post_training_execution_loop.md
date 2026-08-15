@@ -9,7 +9,7 @@
 - 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，P1-S 执行 source `fe6eac6`，P1-M 容量门控 source `9b5fdc1`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
 - 路线结论：停止围绕 GRPO estimator、sampling cap、reward coefficient 或 std normalization 继续追分；已完成的 E0–E4、R1–R3 作为前半段证据冻结。
 - 新核心问题：在固定 rollout / reward-query 预算下，能否把已有 trajectory-level safety/quality reward 转成离线 preference supervision，并以更低在线成本获得比 RSFT、普通 DPO 和现有 FALS-GRPO 更稳定的策略。
-- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 M1 数据与 M2/M3/M4 正式训练均通过，但 M2 唯一 dev 在永久锁创建后因 export/inference Transformers schema 不兼容而于生成前技术失败。M2 不得重跑，M3/M4 被冻结顺序阻塞，M5 以效果证据不足关闭；当前只允许保存现场、台账和结论，不再启动本路线 dev、bootstrap 或第二 seed。
+- 当前唯一动作：记录 022 的一次性确认协议仍以“效果证据不足”冻结。用户随后明确授权在当前分支和本台账启动同一 566-dev 的 exploratory replay，不再把 M2 永久锁或一次性顺序作为 replay 阻塞条件；当前只允许先建立不修改原 merged/锁/失败目录的兼容模型视图并完成 train-only 技术门禁，随后再启用 GPU 按 M2→M3→M4 补跑。replay 结果只能说明路线可行性，不能覆盖记录 022 的确认性结论。
 - 冻结开发集：566 token；每个正式方法只允许一次最终 dev 评估，不用 dev 选择 pair 阈值或训练超参数。
 - 旧 565-token held-out 已访问 520 条并永久失去 unseen 资格；部分 rollout 已删除，`F1_HELDOUT_ACCESSED` 永久锁保留，禁止补跑剩余 45 条或把它用于最终确认。
 - P0 证明当前服务器资产无法建立合格的新 final set：旧 manifest 外 97,632 个 token 的 log 可用，但 CAM_F0 图像可用数为 0。P6 预注册为不执行 final-set 推理，除非用户未来明确扩展数据下载范围并在任何新方法 dev 结果产生前重新立项。
@@ -755,3 +755,10 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - 根因：Stage-2 parent 的 `config.json` 来自 Transformers `4.50.0` 扁平 schema，同一推理环境可读为 `architectures=['Qwen2_5_VLForConditionalGeneration']`、`tie_word_embeddings=True`。CPU export 环境 Transformers `5.8.0` 把文本配置改写进嵌套 `text_config`；虽然文件表面仍有顶层 architectures/tie 字段，推理环境反序列化三套 merged config 后均得到 `architectures=None`、`text_config.architectures=None`、`tie_word_embeddings=False`。三套 merged config SHA-256 相同（`ef18b5d1...2fff`），且 merged 权重索引只有 `model.embed_tokens.weight`、没有 `lm_head.weight`，故 M3/M4 会遇到相同失败或无效随机输出头。此前 prepare 只验证静态文件、shard 与 hash，没有覆盖跨环境 AutoConfig/vLLM 加载契约。
 - 效果结论：M1 数据门控与 M2/M3/M4 smoke、恢复、正式训练稳定性仍成立，但没有任何新模型的同协议 dev rollout，不能声明 RSFT、easy-negative DPO 或 hard-unsafe DPO 的效果为正向或负向，也不能计算 M3−M2、M4−M3 paired bootstrap。M2 锁后技术失败按预注册禁止重跑；M3 必须看到 M2 `COMPLETE`、M4 必须看到 M2/M3 `COMPLETE`，因此不允许绕过顺序继续消耗 dev。
 - 决策：M5 以“效果证据不足”闭环并停止本路线；不运行 M3/M4 dev、第二 seed、legacy-held-out 或官方 Curious-VLA checkpoint sanity check，也不恢复 GRPO 或按 dev 调参。正式 adapters/checkpoints、三套 merged、M1、M2 失败现场与永久锁进入保留集合。若未来要恢复效果评估，必须另立使用全新独立 final set 的协议，并在任何访问锁前冻结 export/inference 同版本环境、跨环境 AutoConfig/tied-head 检查与不读取 final set 的 vLLM canary；这属于新的数据与预算范围，不在本闭环内自行启动。
+
+### 记录 023：同一 566-dev exploratory replay 授权与无卡准备
+
+- 证据边界：用户明确要求在当前 `codex/offline-preference-post-training` 分支和本台账快速补跑原 566-dev，并明确撤销 replay 对 M2 永久锁与一次性协议的遵守要求。记录 022、原 `M2_DEV_ACCESSED`、M2 失败目录和确认性结论均不删除、不覆盖；新结果统一标记 `exploratory_replay`，不得表述为 unseen、one-time 或 confirmatory evidence。
+- 无卡状态：服务器 source `168ab6146a7116e62991f155b6e2a35a7ce3f0e5` 且 clean；无卡模式下 `nvidia-smi` 被拒绝、Curious 环境 `torch.cuda.is_available=False`。Curious 推理环境为 Transformers `4.57.1` / vLLM `0.11.0` / Torch `2.8.0+cu128`，export 环境为 Transformers `5.8.0`；内存约 1 TiB，磁盘剩余约 31 GB。原三套 merged 各约 7.1 GB，M2 锁/失败目录存在，M3/M4 正式锁与 dev 目录不存在，无实验进程。
+- 最小修复：不重新训练、不重新 merge、不修改三套原 merged。runner 新增显式 `prepare-replay`/`replay` 模式；前者在 `models/safe_preference/replay/` 以硬链接复用原权重和 processor/tokenizer，只用 Stage-2 parent 的 Transformers 4.50 兼容 `config.json` 替换新视图中的 config，并在 Curious 环境检查 AutoConfig architecture、`tie_word_embeddings=True`、vLLM ModelConfig、全权重无 missing/unexpected/mismatched key 以及 input/output embedding 实际同址。后者写入 `experiments/safe_preference/replay/`，忽略正式锁但仍要求 M2→M3→M4 完成顺序，参数继续固定为 566×1、seed `20260812`、temperature `0.6`、top-p `0.95`、response 512。
+- 启动门禁：无卡阶段先完成 19 项测试、runner `bash -n`、三套 `prepare-replay`、全文件 hash 与至少 M2 的全权重兼容加载；启用 GPU 后先用 train-only 单 token 做完整 reward/vLLM/生成 canary，确认没有 architecture、随机 `lm_head`、OOM、parse 或清场问题，才允许启动 M2 replay。每个模型完成后立即验收并写回；长任务仍由 Luna 只读监视。

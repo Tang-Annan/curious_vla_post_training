@@ -7,6 +7,7 @@ WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/autodl-tmp/curious-vla-workspace}"
 PROJECT_ROOT="$WORKSPACE_ROOT/src/curious_vla_post_training"
 EASYR1_ROOT="$PROJECT_ROOT/EasyR1"
 TRAIN_ENV="$WORKSPACE_ROOT/envs/llamafactory-gpu-py311"
+INFERENCE_ENV="$WORKSPACE_ROOT/envs/curious"
 DATA_PATH="$EASYR1_ROOT/data/QA_navtrain_poutine_style_full"
 TRAIN_MANIFEST="$WORKSPACE_ROOT/manifests/train_tokens.txt"
 DEV_MANIFEST="$WORKSPACE_ROOT/manifests/dev_tokens.txt"
@@ -38,24 +39,38 @@ case "$METHOD" in
         EXPORT_CONFIG="$PROJECT_ROOT/sft/preference/m4_hardneg_dpo_export.yaml"
         ;;
     *)
-        echo "Usage: $0 {m2|m3|m4} {prepare|verify|eval}" >&2
+        echo "Usage: $0 {m2|m3|m4} {prepare|verify|eval|prepare-replay|replay}" >&2
         exit 2
         ;;
 esac
 
-MERGED_DIR="$MODEL_ROOT/${NAME}_seed20260812_merged"
-PREP_RUN="$EXPERIMENT_ROOT/${NAME}_eval_prepare_seed20260812"
-EXP_NAME="${NAME}_dev_seed20260812"
-RUN_DIR="$EXPERIMENT_ROOT/$EXP_NAME"
+FORMAL_MERGED_DIR="$MODEL_ROOT/${NAME}_seed20260812_merged"
+FORMAL_PREP_RUN="$EXPERIMENT_ROOT/${NAME}_eval_prepare_seed20260812"
+REPLAY=false
+if [[ "$MODE" == prepare-replay || "$MODE" == replay ]]; then
+    REPLAY=true
+    MERGED_DIR="$MODEL_ROOT/replay/${NAME}_seed20260812_compat"
+    PREP_RUN="$EXPERIMENT_ROOT/replay/${NAME}_compat_prepare_seed20260812"
+    EXP_NAME="${NAME}_dev_replay_seed20260812"
+    RUN_DIR="$EXPERIMENT_ROOT/replay/$EXP_NAME"
+else
+    MERGED_DIR="$FORMAL_MERGED_DIR"
+    PREP_RUN="$FORMAL_PREP_RUN"
+    EXP_NAME="${NAME}_dev_seed20260812"
+    RUN_DIR="$EXPERIMENT_ROOT/$EXP_NAME"
+fi
 DEV_LOCK="$EXPERIMENT_ROOT/${METHOD^^}_DEV_ACCESSED"
 M2_RUN="$EXPERIMENT_ROOT/m2_rsft_dev_seed20260812"
 M3_RUN="$EXPERIMENT_ROOT/m3_easyneg_dpo_dev_seed20260812"
+M2_REPLAY_RUN="$EXPERIMENT_ROOT/replay/m2_rsft_dev_replay_seed20260812"
+M3_REPLAY_RUN="$EXPERIMENT_ROOT/replay/m3_easyneg_dpo_dev_replay_seed20260812"
 M2_LOCK="$EXPERIMENT_ROOT/M2_DEV_ACCESSED"
 M3_LOCK="$EXPERIMENT_ROOT/M3_DEV_ACCESSED"
 M4_LOCK="$EXPERIMENT_ROOT/M4_DEV_ACCESSED"
 
-[[ "$MODE" == prepare || "$MODE" == verify || "$MODE" == eval ]] || {
-    echo "Usage: $0 {m2|m3|m4} {prepare|verify|eval}" >&2
+[[ "$MODE" == prepare || "$MODE" == verify || "$MODE" == eval || \
+    "$MODE" == prepare-replay || "$MODE" == replay ]] || {
+    echo "Usage: $0 {m2|m3|m4} {prepare|verify|eval|prepare-replay|replay}" >&2
     exit 2
 }
 for path in "$TRAIN_RUN/adapter" "$TRAIN_RUN/train_exit_code" "$EXPORT_CONFIG" "$M1_DIR/dataset_sha256.txt"; do
@@ -67,7 +82,9 @@ cd "$PROJECT_ROOT"
 (cd "$M1_DIR" && sha256sum --check dataset_sha256.txt)
 
 verify_merged() {
-    "$TRAIN_ENV/bin/python" - "$MERGED_DIR" <<'PY'
+    verify_env="$TRAIN_ENV"
+    [[ "$REPLAY" == true ]] && verify_env="$INFERENCE_ENV"
+    "$verify_env/bin/python" - "$MERGED_DIR" <<'PY'
 import json
 import pathlib
 import sys
@@ -83,6 +100,86 @@ if not shards or any(not (root / shard).is_file() for shard in shards):
     raise SystemExit("Merged model shard index is incomplete.")
 PY
 }
+
+if [[ "$MODE" == prepare-replay ]]; then
+    [[ -f "$FORMAL_PREP_RUN/COMPLETE" && -d "$FORMAL_MERGED_DIR" ]] || {
+        echo "Formal merged model is incomplete: $FORMAL_MERGED_DIR" >&2
+        exit 1
+    }
+    [[ ! -e "$PREP_RUN" ]] || { echo "Refusing to overwrite replay prepare: $PREP_RUN" >&2; exit 1; }
+    [[ ! -e "$MERGED_DIR" ]] || { echo "Refusing to overwrite replay model: $MERGED_DIR" >&2; exit 1; }
+    mkdir -p "$PREP_RUN" "$(dirname "$MERGED_DIR")"
+    touch "$PREP_RUN/RUNNING"
+    cleanup_replay_prepare() {
+        status=$?
+        rm -f "$PREP_RUN/RUNNING"
+        printf '%s\n' "$status" > "$PREP_RUN/prepare_exit_code"
+    }
+    trap cleanup_replay_prepare EXIT
+    git rev-parse HEAD > "$PREP_RUN/source_commit.txt"
+    git status --short > "$PREP_RUN/source_status.txt"
+    cp -al "$FORMAL_MERGED_DIR" "$MERGED_DIR"
+    rm -f "$MERGED_DIR/config.json"
+    cp "$WORKSPACE_ROOT/models/sft_stage2/config.json" "$MERGED_DIR/config.json"
+    verify_merged
+    "$INFERENCE_ENV/bin/python" - "$MERGED_DIR" "$PREP_RUN/compatibility_report.json" <<'PY'
+import json
+import pathlib
+import sys
+
+from transformers import AutoConfig, Qwen2_5_VLForConditionalGeneration
+from vllm.engine.arg_utils import EngineArgs
+
+model_path = pathlib.Path(sys.argv[1])
+report_path = pathlib.Path(sys.argv[2])
+config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+expected_architecture = ["Qwen2_5_VLForConditionalGeneration"]
+if config.architectures != expected_architecture:
+    raise SystemExit(f"Unexpected architectures: {config.architectures}")
+if config.tie_word_embeddings is not True:
+    raise SystemExit("Replay config must keep tied input/output embeddings.")
+vllm_config = EngineArgs(model=str(model_path), trust_remote_code=True).create_model_config()
+if vllm_config.hf_config.architectures != expected_architecture:
+    raise SystemExit(f"vLLM lost model architectures: {vllm_config.hf_config.architectures}")
+model, loading = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    model_path,
+    dtype="auto",
+    low_cpu_mem_usage=True,
+    output_loading_info=True,
+)
+missing = loading.get("missing_keys", [])
+unexpected = loading.get("unexpected_keys", [])
+mismatched = loading.get("mismatched_keys", [])
+if missing or unexpected or mismatched:
+    raise SystemExit(
+        f"Replay weight load mismatch: missing={missing}, unexpected={unexpected}, mismatched={mismatched}"
+    )
+tied = model.get_input_embeddings().weight.data_ptr() == model.get_output_embeddings().weight.data_ptr()
+if not tied:
+    raise SystemExit("Replay model input/output embeddings are not tied.")
+report_path.write_text(
+    json.dumps(
+        {
+            "architectures": config.architectures,
+            "tie_word_embeddings": config.tie_word_embeddings,
+            "vllm_architectures": vllm_config.hf_config.architectures,
+            "missing_keys": missing,
+            "unexpected_keys": unexpected,
+            "mismatched_keys": mismatched,
+            "input_output_embeddings_tied": tied,
+        },
+        indent=2,
+        sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+PY
+    find "$MERGED_DIR" -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum > "$PREP_RUN/merged_sha256.txt"
+    sha256sum "$FORMAL_MERGED_DIR/config.json" "$MERGED_DIR/config.json" > "$PREP_RUN/config_transition.sha256"
+    touch "$PREP_RUN/COMPLETE"
+    exit 0
+fi
 
 if [[ "$MODE" == prepare ]]; then
     [[ ! -e "$PREP_RUN" ]] || { echo "Refusing to overwrite prepare directory: $PREP_RUN" >&2; exit 1; }
@@ -134,6 +231,9 @@ for path in "$PREP_RUN/COMPLETE" "$PREP_RUN/merged_sha256.txt" "$MERGED_DIR" "$D
     "$E0_RUN/COMPLETE" "$E0_RUN/dev_rollouts.jsonl"; do
     [[ -e "$path" ]] || { echo "Missing required path: $path" >&2; exit 1; }
 done
+if [[ "$REPLAY" == true ]]; then
+    [[ -s "$PREP_RUN/compatibility_report.json" ]] || { echo "Replay compatibility report is missing." >&2; exit 1; }
+fi
 [[ $(sha256sum "$DEV_MANIFEST" | cut -d ' ' -f1) == "$EXPECTED_DEV_SHA256" ]] || {
     echo "Frozen dev manifest hash changed." >&2
     exit 1
@@ -153,24 +253,35 @@ done
 }
 (cd / && sha256sum --check "$PREP_RUN/merged_sha256.txt")
 [[ ! -e "$RUN_DIR" ]] || { echo "Refusing to overwrite dev run: $RUN_DIR" >&2; exit 1; }
-[[ ! -e "$DEV_LOCK" ]] || { echo "Dev access is already locked: $DEV_LOCK" >&2; exit 1; }
-case "$METHOD" in
-    m2)
-        [[ ! -e "$M3_LOCK" && ! -e "$M4_LOCK" ]] || { echo "Dev evaluation order is invalid." >&2; exit 1; }
-        ;;
-    m3)
-        [[ -e "$M2_LOCK" && -e "$M2_RUN/COMPLETE" && ! -e "$M4_LOCK" ]] || {
-            echo "M3 dev requires completed M2 dev and no M4 access." >&2
+if [[ "$REPLAY" == true ]]; then
+    case "$METHOD" in
+        m2) ;;
+        m3) [[ -e "$M2_REPLAY_RUN/COMPLETE" ]] || { echo "M3 replay requires completed M2 replay." >&2; exit 1; } ;;
+        m4) [[ -e "$M2_REPLAY_RUN/COMPLETE" && -e "$M3_REPLAY_RUN/COMPLETE" ]] || {
+            echo "M4 replay requires completed M2 and M3 replay." >&2
             exit 1
-        }
-        ;;
-    m4)
-        [[ -e "$M2_LOCK" && -e "$M2_RUN/COMPLETE" && -e "$M3_LOCK" && -e "$M3_RUN/COMPLETE" ]] || {
-            echo "M4 dev requires completed M2 and M3 dev." >&2
-            exit 1
-        }
-        ;;
-esac
+        } ;;
+    esac
+else
+    [[ ! -e "$DEV_LOCK" ]] || { echo "Dev access is already locked: $DEV_LOCK" >&2; exit 1; }
+    case "$METHOD" in
+        m2)
+            [[ ! -e "$M3_LOCK" && ! -e "$M4_LOCK" ]] || { echo "Dev evaluation order is invalid." >&2; exit 1; }
+            ;;
+        m3)
+            [[ -e "$M2_LOCK" && -e "$M2_RUN/COMPLETE" && ! -e "$M4_LOCK" ]] || {
+                echo "M3 dev requires completed M2 dev and no M4 access." >&2
+                exit 1
+            }
+            ;;
+        m4)
+            [[ -e "$M2_LOCK" && -e "$M2_RUN/COMPLETE" && -e "$M3_LOCK" && -e "$M3_RUN/COMPLETE" ]] || {
+                echo "M4 dev requires completed M2 and M3 dev." >&2
+                exit 1
+            }
+            ;;
+    esac
+fi
 [[ ! -e "$EASYR1_ROOT/checkpoints/debug/$EXP_NAME" ]] || { echo "Debug output already exists." >&2; exit 1; }
 [[ ! -e "$EASYR1_ROOT/checkpoints/adas/$EXP_NAME" ]] || { echo "ADAS output already exists." >&2; exit 1; }
 [[ -z $(nvidia-smi --query-compute-apps=pid --format=csv,noheader | tr -d '[:space:]') ]] || {
@@ -197,8 +308,13 @@ git rev-parse HEAD > "$RUN_DIR/source_commit.txt"
 git status --short > "$RUN_DIR/source_status.txt"
 cp "$DEV_MANIFEST" "$RUN_DIR/dev_tokens.txt"
 cp "$PREP_RUN/merged_sha256.txt" "$RUN_DIR/merged_sha256.txt"
-printf 'method=%s\nexperiment=%s\nseed=%s\ndev_manifest=%s\nmerged_model=%s\nrollouts_per_token=1\ntemperature=0.6\ntop_p=0.95\nmax_response_length=512\none_time_dev_access=true\n' \
+printf 'method=%s\nexperiment=%s\nseed=%s\ndev_manifest=%s\nmerged_model=%s\nrollouts_per_token=1\ntemperature=0.6\ntop_p=0.95\nmax_response_length=512\n' \
     "$METHOD" "$EXP_NAME" "$SEED" "$DEV_MANIFEST" "$MERGED_DIR" > "$RUN_DIR/run.env"
+if [[ "$REPLAY" == true ]]; then
+    printf 'evidence_scope=exploratory_replay\n' >> "$RUN_DIR/run.env"
+else
+    printf 'one_time_dev_access=true\n' >> "$RUN_DIR/run.env"
+fi
 sha256sum "$RUN_DIR/dev_tokens.txt" > "$RUN_DIR/dev_manifest.sha256"
 exec > "$RUN_DIR/run.log" 2>&1
 
@@ -218,9 +334,11 @@ for _ in $(seq 1 60); do
     sleep 2
 done
 curl -fsS "http://127.0.0.1:$REWARD_SERVER_PORT/ping" >/dev/null
-set -o noclobber
-printf 'method=%s\nrun_dir=%s\n' "$METHOD" "$RUN_DIR" > "$DEV_LOCK"
-set +o noclobber
+if [[ "$REPLAY" == false ]]; then
+    set -o noclobber
+    printf 'method=%s\nrun_dir=%s\n' "$METHOD" "$RUN_DIR" > "$DEV_LOCK"
+    set +o noclobber
+fi
 
 export EXP_NAME NAVSIM_STAT_PATH="$PROJECT_ROOT/stats/trajectory_stats_train.json"
 export NAVSIM_TRAJ_PARSER_FUNC=verl.utils.reward_score.navsim.helper:parse_trajectory_string_after_tag

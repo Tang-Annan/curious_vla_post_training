@@ -481,6 +481,18 @@ def test_preference_eval_launcher_freezes_one_time_dev_protocol():
     assert 'tokens != [str(row["token"]) for row in baseline]' in source
 
 
+def test_preference_eval_replay_is_explicit_and_keeps_formal_evidence_immutable():
+    source = (ROOT / "scripts/run_safe_preference_eval.sh").read_text(encoding="utf-8")
+
+    assert '"$MODE" == prepare-replay || "$MODE" == replay' in source
+    assert 'cp -al "$FORMAL_MERGED_DIR" "$MERGED_DIR"' in source
+    assert 'cp "$WORKSPACE_ROOT/models/sft_stage2/config.json" "$MERGED_DIR/config.json"' in source
+    assert '"input_output_embeddings_tied": tied' in source
+    assert 'exploratory_replay' in source
+    assert 'M3 replay requires completed M2 replay.' in source
+    assert 'if [[ "$REPLAY" == false ]]; then' in source
+
+
 def test_preference_dataset_registration_matches_training_schema():
     info = json.loads((ROOT / "sft/preference/dataset_info.json").read_text(encoding="utf-8"))
 
