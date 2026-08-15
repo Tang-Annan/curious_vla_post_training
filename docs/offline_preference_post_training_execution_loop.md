@@ -9,7 +9,7 @@
 - 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，P1-S 执行 source `fe6eac6`，P1-M 容量门控 source `9b5fdc1`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
 - 路线结论：停止围绕 GRPO estimator、sampling cap、reward coefficient 或 std normalization 继续追分；已完成的 E0–E4、R1–R3 作为前半段证据冻结。
 - 新核心问题：在固定 rollout / reward-query 预算下，能否把已有 trajectory-level safety/quality reward 转成离线 preference supervision，并以更低在线成本获得比 RSFT、普通 DPO 和现有 FALS-GRPO 更稳定的策略。
-- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。M2/M3/M4 三个正式模型均已完成训练且尚未读取 dev；唯一 dev 入口已预注册，当前只允许按 M2→M3→M4 执行 CPU-only merged-model `prepare`，不启动 reward server 或 dev 推理。
+- 当前唯一动作：原 P0–P6 路线仍因 `N_B=0` 永久关闭；新 M 路线的 960 个同 token、同 chosen、不同 unsafe rejected 数据已通过 M1 全门控。M2/M3/M4 三个正式模型均已完成训练且尚未读取 dev；M2 merge 成功但首次静态 validator 因 processor 文件名契约失败，当前只允许校正契约并 `verify` 现有 M2 merged model，不重导、不启动 reward server 或 dev 推理。
 - 冻结开发集：566 token；每个正式方法只允许一次最终 dev 评估，不用 dev 选择 pair 阈值或训练超参数。
 - 旧 565-token held-out 已访问 520 条并永久失去 unseen 资格；部分 rollout 已删除，`F1_HELDOUT_ACCESSED` 永久锁保留，禁止补跑剩余 45 条或把它用于最终确认。
 - P0 证明当前服务器资产无法建立合格的新 final set：旧 manifest 外 97,632 个 token 的 log 可用，但 CAM_F0 图像可用数为 0。P6 预注册为不执行 final-set 推理，除非用户未来明确扩展数据下载范围并在任何新方法 dev 结果产生前重新立项。
@@ -721,3 +721,9 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - 唯一 dev 协议：`eval` 模式冻结 seed `20260812`、每 token 1 rollout、temperature `0.6`、top-p `0.95`、max response length `512`、Qwen2-VL template、同一 grouped NAVSIM reward/parser、同一 metric cache 与单 GPU vLLM 配置。dev manifest SHA-256 固定为 `49dd1fae...934cfd`，必须为 566 个唯一 token，且与 train/legacy-held-out overlap 为 0；输出必须恰好覆盖 566 token，token 序列与既有 Stage-2/E2 dev rollout 序列完全一致，并逐行包含 PDMS scaled/PDMS/Safe/Collision/DAC/Progress/TTC/Comfort、latency、parse、response length 与 poses。
 - 一次性与顺序门控：固定 M2→M3→M4；每个方法在 reward server 健康、merged hash、source/GPU/8901、run/debug/ADAS 目录均通过后，以 `noclobber` 创建永久 `${METHOD}_DEV_ACCESSED` 锁，再启动推理。任何锁存在即禁止同方法重跑；M3 必须看到 M2 `COMPLETE`，M4 必须看到 M2/M3 `COMPLETE`。性能、parse 或 clipping 数值只报告，不据此重跑或调参；技术失败若发生在锁后也不得再次生成该方法 dev。
 - 决策：先按 M2→M3→M4 执行三个 CPU-only `prepare` 并逐一验收、写回 merged hash/大小/环境与磁盘；此阶段 dev 访问次数保持 0。三者 prepare 全通过后才允许启动 M2 唯一 dev；不访问 legacy-held-out 内容，不执行官方 checkpoint sanity check，不删除 M1 或三套正式训练产物。
+
+### 记录 018：M2 merged prepare attempt 0 技术失败
+
+- 状态：技术失败，dev 访问仍为 0。source `4fcfa35d975564daa13d53936809b20787f9554d`；LLaMA-Factory CPU export 已成功生成约 7.1 GB 的两分片 merged model，shard index 与权重分片存在，但 prepare validator 随后以 `prepare_exit_code=1` 退出，没有生成 `merged_sha256.txt` 或 `COMPLETE`。
+- 根因：validator 沿用了 Stage-2 parent 的文件名并硬要求 `preprocessor_config.json`，而当前 pinned Transformers/LLaMA-Factory 的 merged export 正式输出为 `processor_config.json`。失败发生在静态文件验收阶段，不是 adapter merge、权重 shard、训练产物或磁盘问题；reward server、GPU 推理和 8901 均未启动，M2/M3/M4 三把 dev 访问锁均不存在。
+- 修复与决策：只把 merged processor 契约校正为实际的 `processor_config.json`，并增加 `verify` 模式复核现有 M2 merged 目录，不删除或重导约 7.1 GB 有效权重。retry1 必须保留 attempt 0 exit code，验证 config/processor/tokenizer/shard index 后生成全文件 hash 与 `COMPLETE`；M3/M4 后续 `prepare` 直接使用修正后的同一 validator。M2 verify、M3 prepare、M4 prepare 全部通过并写回前，不启动任何 dev 推理。

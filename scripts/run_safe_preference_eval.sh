@@ -38,7 +38,7 @@ case "$METHOD" in
         EXPORT_CONFIG="$PROJECT_ROOT/sft/preference/m4_hardneg_dpo_export.yaml"
         ;;
     *)
-        echo "Usage: $0 {m2|m3|m4} {prepare|eval}" >&2
+        echo "Usage: $0 {m2|m3|m4} {prepare|verify|eval}" >&2
         exit 2
         ;;
 esac
@@ -54,8 +54,8 @@ M2_LOCK="$EXPERIMENT_ROOT/M2_DEV_ACCESSED"
 M3_LOCK="$EXPERIMENT_ROOT/M3_DEV_ACCESSED"
 M4_LOCK="$EXPERIMENT_ROOT/M4_DEV_ACCESSED"
 
-[[ "$MODE" == prepare || "$MODE" == eval ]] || {
-    echo "Usage: $0 {m2|m3|m4} {prepare|eval}" >&2
+[[ "$MODE" == prepare || "$MODE" == verify || "$MODE" == eval ]] || {
+    echo "Usage: $0 {m2|m3|m4} {prepare|verify|eval}" >&2
     exit 2
 }
 for path in "$TRAIN_RUN/adapter" "$TRAIN_RUN/train_exit_code" "$EXPORT_CONFIG" "$M1_DIR/dataset_sha256.txt"; do
@@ -65,6 +65,24 @@ done
 cd "$PROJECT_ROOT"
 [[ -z $(git status --short) ]] || { echo "Source checkout is dirty." >&2; exit 1; }
 (cd "$M1_DIR" && sha256sum --check dataset_sha256.txt)
+
+verify_merged() {
+    "$TRAIN_ENV/bin/python" - "$MERGED_DIR" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+required = ("config.json", "processor_config.json", "tokenizer_config.json", "model.safetensors.index.json")
+missing = [name for name in required if not (root / name).is_file()]
+if missing:
+    raise SystemExit(f"Merged model is missing files: {missing}")
+index = json.loads((root / "model.safetensors.index.json").read_text(encoding="utf-8"))
+shards = set(index.get("weight_map", {}).values())
+if not shards or any(not (root / shard).is_file() for shard in shards):
+    raise SystemExit("Merged model shard index is incomplete.")
+PY
+}
 
 if [[ "$MODE" == prepare ]]; then
     [[ ! -e "$PREP_RUN" ]] || { echo "Refusing to overwrite prepare directory: $PREP_RUN" >&2; exit 1; }
@@ -82,21 +100,30 @@ if [[ "$MODE" == prepare ]]; then
     cp "$EXPORT_CONFIG" "$PREP_RUN/resolved_export.yaml"
     sha256sum "$EXPORT_CONFIG" "$TRAIN_RUN/adapter/adapter_model.safetensors" > "$PREP_RUN/export_inputs.sha256"
     "$TRAIN_ENV/bin/llamafactory-cli" export "$EXPORT_CONFIG" > "$PREP_RUN/export.log" 2>&1
-    "$TRAIN_ENV/bin/python" - "$MERGED_DIR" <<'PY'
-import json
-import pathlib
-import sys
+    verify_merged
+    find "$MERGED_DIR" -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum > "$PREP_RUN/merged_sha256.txt"
+    touch "$PREP_RUN/COMPLETE"
+    exit 0
+fi
 
-root = pathlib.Path(sys.argv[1])
-required = ("config.json", "preprocessor_config.json", "tokenizer_config.json", "model.safetensors.index.json")
-missing = [name for name in required if not (root / name).is_file()]
-if missing:
-    raise SystemExit(f"Merged model is missing files: {missing}")
-index = json.loads((root / "model.safetensors.index.json").read_text(encoding="utf-8"))
-shards = set(index.get("weight_map", {}).values())
-if not shards or any(not (root / shard).is_file() for shard in shards):
-    raise SystemExit("Merged model shard index is incomplete.")
-PY
+if [[ "$MODE" == verify ]]; then
+    [[ -d "$PREP_RUN" && -d "$MERGED_DIR" ]] || { echo "Failed prepare output is missing." >&2; exit 1; }
+    [[ $(cat "$PREP_RUN/prepare_exit_code") == 1 ]] || { echo "Verify requires prepare exit code 1." >&2; exit 1; }
+    [[ ! -e "$PREP_RUN/COMPLETE" && ! -e "$PREP_RUN/merged_sha256.txt" ]] || {
+        echo "Verify refuses an already completed prepare." >&2
+        exit 1
+    }
+    cp "$PREP_RUN/prepare_exit_code" "$PREP_RUN/prepare_attempt0_exit_code"
+    verify_cleanup() {
+        status=$?
+        printf '%s\n' "$status" > "$PREP_RUN/prepare_retry1_exit_code"
+        if [[ "$status" -eq 0 ]]; then
+            printf '0\n' > "$PREP_RUN/prepare_exit_code"
+        fi
+    }
+    trap verify_cleanup EXIT
+    git rev-parse HEAD > "$PREP_RUN/verification_source_commit.txt"
+    verify_merged > "$PREP_RUN/verification_retry1.log" 2>&1
     find "$MERGED_DIR" -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum > "$PREP_RUN/merged_sha256.txt"
     touch "$PREP_RUN/COMPLETE"
     exit 0

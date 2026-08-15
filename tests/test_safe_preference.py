@@ -474,6 +474,8 @@ def test_preference_eval_launcher_freezes_one_time_dev_protocol():
     assert 'worker.rollout.top_p=0.95' in source
     assert 'data.max_response_length=512' in source
     assert 'worker.actor.model.lora.rank=0' in source
+    assert '"processor_config.json"' in source
+    assert 'prepare_attempt0_exit_code' in source
     assert 'set -o noclobber' in source
     assert 'DEV_LOCK="$EXPERIMENT_ROOT/${METHOD^^}_DEV_ACCESSED"' in source
     assert 'tokens != [str(row["token"]) for row in baseline]' in source
