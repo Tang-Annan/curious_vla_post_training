@@ -739,3 +739,10 @@ M2、M3、M4 各只允许一次现有 566-token dev 评估，沿用 Stage-2/E2 �
 - 状态：通过，dev 访问仍为 0。source `74fce2cbd1672efcec02246887e66f47dfd45c65`；prepare 目录 `m3_easyneg_dpo_eval_prepare_seed20260812` 的 `prepare_exit_code=0`、`COMPLETE` 存在且 `RUNNING` 已清除。export YAML SHA-256 为 `60b55ddd...85a9`，输入 M3 final adapter SHA-256 为 `0221e46b...4183cc`，与记录 013 一致。
 - merged 结果：目录 `/root/autodl-tmp/curious-vla-workspace/models/safe_preference/m3_easyneg_dpo_seed20260812_merged/` 大小约 7.1 GB；config、processor、tokenizer、两份 shard 与 index 共 10 个顶层文件逐项 hash 通过。关键 SHA-256 为 shard 1 `23b87c28...674d1`、shard 2 `896a59ae...4c121`、index `cd68e2ee...739ec`、processor `2ac992d7...b558a`、config `ef18b5d1...2fff`；index metadata 权重总大小为 7,508,152,320 bytes。
 - 资源与决策：prepare 为 CPU-only，结束后导出进程/GPU compute 为空，reward server/8901 未启动，三把 dev 锁仍不存在；磁盘剩余约 38 GB。M3 merged model 进入评估保留集合，不得清理。下一动作只允许执行 M4 CPU-only prepare；M4 prepare 通过并写回前，不启动 M2 dev。
+
+### 记录 021：M4 merged prepare 闭环
+
+- 状态：通过，dev 访问仍为 0。source `64042ee0904c3262a863668d7b97799b3ec7b619` 且远端 status clean；prepare 目录 `m4_hardneg_dpo_eval_prepare_seed20260812` 的 `prepare_exit_code=0`、`COMPLETE` 存在且 `RUNNING` 已清除。export YAML SHA-256 为 `09e4ca83...edd5a5`，输入 M4 final adapter SHA-256 为 `3c600f76...7dc5e1`，与记录 016 一致；pinned LLaMA-Factory 仍为 `f28afaf6355af515454dfb16c97d728307c93897`。
+- merged 结果：目录 `/root/autodl-tmp/curious-vla-workspace/models/safe_preference/m4_hardneg_dpo_seed20260812_merged/` 大小约 7.1 GB；10 个顶层文件经 `merged_sha256.txt` 逐项复核全部通过。关键 SHA-256 为 shard 1 `02791421...8dde9`、shard 2 `b82d9bd2...a248d`、index `cd68e2ee...739ec`、processor `2ac992d7...b558a`、config `ef18b5d1...2fff`；index metadata 权重总大小为 7,508,152,320 bytes，两份实际 shard 文件合计 7,508,244,320 bytes。
+- 技术与资源：launcher/export 进程均退出，错误扫描为 0；GPU compute 为空，reward server/8901 无监听，M2/M3/M4 三把 dev 锁仍不存在；磁盘剩余约 31 GB。M4 merged model 进入评估保留集合，不得清理。
+- 决策：M2/M3/M4 三套 CPU-only prepare 与全文件 hash 门控全部通过，且尚未访问冻结 566-token dev。下一动作只允许做三套 prepare 的共同最终门禁；通过后按预注册顺序启动 M2 唯一一次 dev，锁后技术失败也不得重跑。仍不访问 legacy-held-out，不执行官方 Curious-VLA checkpoint sanity check，不恢复 GRPO，也不按 dev 结果调参。
