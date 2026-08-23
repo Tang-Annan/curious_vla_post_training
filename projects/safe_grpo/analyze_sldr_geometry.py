@@ -272,8 +272,12 @@ def analyze(args: argparse.Namespace) -> dict:
     expected_non_tie_magnitude = 1.0 / math.sqrt(2.0)
     for pair_index, (token, first, second) in enumerate(pair_metadata):
         offset = pair_index * 2
-        sdr_difference = pair_rewards_sdr[offset + 1] - pair_rewards_sdr[offset]
-        sldr_difference = pair_rewards_sldr[offset + 1] - pair_rewards_sldr[offset]
+        sdr_difference = float(
+            np.float32(pair_rewards_sdr[offset + 1]) - np.float32(pair_rewards_sdr[offset])
+        )
+        sldr_difference = float(
+            np.float32(pair_rewards_sldr[offset + 1]) - np.float32(pair_rewards_sldr[offset])
+        )
         sdr_tie = abs(sdr_difference) <= PAIR_TOLERANCE
         sldr_tie = abs(sldr_difference) <= PAIR_TOLERANCE
         pair_counts["total"] += 1
@@ -291,7 +295,7 @@ def analyze(args: argparse.Namespace) -> dict:
                     np.all(np.abs(advantages) <= 1e-7)
                 )
             else:
-                gap = abs(rewards[offset + 1] - rewards[offset])
+                gap = abs(float(np.float32(rewards[offset + 1]) - np.float32(rewards[offset])))
                 magnitude = float(np.mean(np.abs(advantages)))
                 expected_with_eps = 0.5 * gap / (gap / math.sqrt(2.0) + 1e-6)
                 pair_mode_counts[mode]["non_tie_pairs"] += 1
