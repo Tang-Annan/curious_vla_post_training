@@ -367,6 +367,7 @@ SDR 本身已经是 nonlinear focal reward。SLDR 失败后，不默认再叠加
 - 训练信号：parse success 与必需 reward 字段覆盖均为 100%，clipping 为 0；SDR exact-zero group `12.5%`、低非零 std group `5.0%`、平均 headroom `0.32864`。这些 40-group smoke 统计只作技术旁证，不作正式方法结论。
 - 探索性效果：不适用；未访问 dev。
 - 成本：160 次 train reward query；10 step 合计 `776.67` 秒、平均 `77.67` 秒/step；1 秒采样共 837 点，墙钟覆盖 918 秒，峰值显存 `21,222 MiB`、最低剩余 `2,860 MiB`、GPU utilization 峰值 100%；run 目录约 7.7 GB，结束后磁盘剩余约 23 GB。
+- 产物清理：S0 证据闭环且 R4 正式启动前，重新确认 GPU、训练进程和 8901 均为空后，只删除 throwaway checkpoint 的 `/root/autodl-tmp/curious-vla-workspace/experiments/safe_grpo/t0_g4_sdr_smoke10_seed20260812/checkpoints/global_step_10/actor/model_world_size_1_rank_0.pt`（`8,144,550,392` bytes，不可恢复），磁盘空余回升至约 31 GB；LoRA、config、tracker、训练日志、rollout、显存采样、报告与 `COMPLETE` 全部保留。
 - 分析边界：证明当前 24 GB GPU 支持冻结的 G4 数学批次和 checkpoint 保存；不证明 250-step 科学收益或长程稳定性。
 - 决策：T0 通过，允许进入 S0；不调整 G、scene groups、生成协议或 micro-batch。
 - 下一动作：只执行 D0 train-only S0 advantage-geometry 审计。
