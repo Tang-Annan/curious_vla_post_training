@@ -368,6 +368,8 @@ def test_s0_geometry_recovers_only_parse_failures_and_detects_partial_collision(
     assert report["safe_semantics"]["systematic_mislabel"] is True
     assert report["g2_pair_audit"]["total"] == 18
     assert report["g2_pair_audit"]["pairs_per_g4_group"] == 6
+    assert report["g2_pair_audit"]["modes"]["sdr"]["tie_pairs"] > 0
+    assert report["g2_pair_audit"]["modes"]["sdr"]["max_error_vs_production_formula"] < 1e-4
     assert report["unsafe_new_preference_bootstrap"]["bootstrap_samples"] == 100
     assert report["gates"]["safe_semantics_valid"] is False
     assert report["decision"] == "close_all_sldr_formal_training"
@@ -406,6 +408,7 @@ def test_s0_launcher_is_train_only_and_hash_frozen():
     assert "4a19947abd86d4265e055a6408fc8a6d579fcc083cb5bc4c207159d5c60d8168" in source
     assert "--bootstrap-samples 20000" in source
     assert "CUDA_VISIBLE_DEVICES=''" in source
+    assert "S0_RUN_NAME" in source
     assert "dev_tokens" not in source
     assert "heldout" not in source
 

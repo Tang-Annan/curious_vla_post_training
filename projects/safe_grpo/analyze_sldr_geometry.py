@@ -265,7 +265,9 @@ def analyze(args: argparse.Namespace) -> dict:
     pair_sldr_advantages = grpo_advantages(pair_rewards_sldr, pair_indices)
 
     pair_counts = Counter()
-    non_tie_errors = []
+    pair_mode_counts = {"sdr": Counter(), "sldr": Counter()}
+    pair_magnitudes = {"sdr": [], "sldr": []}
+    pair_formula_errors = {"sdr": [], "sldr": []}
     preference_differences: dict[str, list[dict]] = defaultdict(list)
     expected_non_tie_magnitude = 1.0 / math.sqrt(2.0)
     for pair_index, (token, first, second) in enumerate(pair_metadata):
@@ -275,17 +277,29 @@ def analyze(args: argparse.Namespace) -> dict:
         sdr_tie = abs(sdr_difference) <= PAIR_TOLERANCE
         sldr_tie = abs(sldr_difference) <= PAIR_TOLERANCE
         pair_counts["total"] += 1
-        pair_counts["sdr_ties" if sdr_tie else "sdr_non_ties"] += 1
-        pair_counts["sldr_ties" if sldr_tie else "sldr_non_ties"] += 1
         if sdr_tie and not sldr_tie:
             pair_counts["sdr_tie_sldr_breaks"] += 1
         if not sdr_tie and not sldr_tie and np.sign(sdr_difference) != np.sign(sldr_difference):
             pair_counts["preference_reversals"] += 1
-        for advantages, tied in ((pair_sdr_advantages[offset : offset + 2], sdr_tie), (pair_sldr_advantages[offset : offset + 2], sldr_tie)):
+        for mode, rewards, advantages, tied in (
+            ("sdr", pair_rewards_sdr, pair_sdr_advantages[offset : offset + 2], sdr_tie),
+            ("sldr", pair_rewards_sldr, pair_sldr_advantages[offset : offset + 2], sldr_tie),
+        ):
             if tied:
-                pair_counts["zero_advantage_pairs"] += int(np.all(np.abs(advantages) <= 1e-7))
+                pair_mode_counts[mode]["tie_pairs"] += 1
+                pair_mode_counts[mode]["tie_zero_advantage_pairs"] += int(
+                    np.all(np.abs(advantages) <= 1e-7)
+                )
             else:
-                non_tie_errors.extend(abs(abs(value) - expected_non_tie_magnitude) for value in advantages)
+                gap = abs(rewards[offset + 1] - rewards[offset])
+                magnitude = float(np.mean(np.abs(advantages)))
+                expected_with_eps = 0.5 * gap / (gap / math.sqrt(2.0) + 1e-6)
+                pair_mode_counts[mode]["non_tie_pairs"] += 1
+                pair_mode_counts[mode]["near_ideal_non_tie_pairs"] += int(
+                    abs(magnitude - expected_non_tie_magnitude) <= 1e-3
+                )
+                pair_magnitudes[mode].append(magnitude)
+                pair_formula_errors[mode].append(abs(magnitude - expected_with_eps))
 
         new_preference = not sldr_tie and (sdr_tie or np.sign(sdr_difference) != np.sign(sldr_difference))
         if new_preference:
@@ -400,10 +414,27 @@ def analyze(args: argparse.Namespace) -> dict:
             "material_groups_by_production_composition": dict(Counter(row["production_composition"] for row in material_groups)),
         },
         "g2_pair_audit": {
-            **pair_counts,
+            "total": pair_counts["total"],
+            "sdr_tie_sldr_breaks": pair_counts["sdr_tie_sldr_breaks"],
+            "preference_reversals": pair_counts["preference_reversals"],
+            "new_preference_unsafe_pairs": pair_counts["new_preference_unsafe_pairs"],
             "pairs_per_g4_group": 6,
-            "expected_non_tie_advantage_magnitude": expected_non_tie_magnitude,
-            "max_non_tie_magnitude_error": max(non_tie_errors) if non_tie_errors else None,
+            "ideal_non_tie_advantage_magnitude_as_gap_dominates_eps": expected_non_tie_magnitude,
+            "production_eps": 1e-6,
+            "production_formula": "|A| = (gap / 2) / (gap / sqrt(2) + eps); exact ties yield zero.",
+            "modes": {
+                mode: {
+                    "tie_pairs": pair_mode_counts[mode]["tie_pairs"],
+                    "tie_zero_advantage_pairs": pair_mode_counts[mode]["tie_zero_advantage_pairs"],
+                    "non_tie_pairs": pair_mode_counts[mode]["non_tie_pairs"],
+                    "near_ideal_non_tie_pairs": pair_mode_counts[mode]["near_ideal_non_tie_pairs"],
+                    "near_ideal_non_tie_ratio": pair_mode_counts[mode]["near_ideal_non_tie_pairs"]
+                    / pair_mode_counts[mode]["non_tie_pairs"],
+                    "non_tie_advantage_magnitude": distribution(pair_magnitudes[mode]),
+                    "max_error_vs_production_formula": max(pair_formula_errors[mode]),
+                }
+                for mode in ("sdr", "sldr")
+            },
         },
         "unsafe_new_preference_bootstrap": {
             "definition": "SLDR winner minus loser when SDR tied or preferred the other trajectory; winner must be strict-unsafe.",
