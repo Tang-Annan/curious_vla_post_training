@@ -1,10 +1,12 @@
 # Curious-VLA 资源受限离线偏好后训练执行台账
 
-> 生效日期：2026-08-15。本文档是路线转向后的唯一实时执行台账；
+> 状态更新（2026-08-24）：本文冻结为离线偏好路线历史证据；除非用户以后明确恢复，不再新增 P/M 阶段动作。新 `G=4` GRPO reward/selector 路线见 [`grpo_g4_experiment_ledger.md`](grpo_g4_experiment_ledger.md)。既有记录、访问锁与“exploratory replay”证据边界全部保留。
+>
+> 生效日期：2026-08-15。在离线偏好路线生效期间，本文档是当时唯一实时执行台账；
 > [`post_training_execution_loop.md`](post_training_execution_loop.md) 只保留为 GRPO 阶段历史证据，不再更新。
 > 服务器日志、配置、manifest、模型和指标仍是原始证据，本文档只记录可追溯事实、预注册门控与下一步。
 
-## 1. 当前决策快照
+## 1. 冻结时决策快照
 
 - 当前证据基线：`023139a`；开发分支为 `codex/offline-preference-post-training`，P0 执行 source `c36767a`，P1-S 执行 source `fe6eac6`，P1-M 容量门控 source `9b5fdc1`，原 `codex/post-training-analysis` 冻结为 GRPO 证据分支。
 - 路线结论：停止围绕 GRPO estimator、sampling cap、reward coefficient 或 std normalization 继续追分；已完成的 E0–E4、R1–R3 作为前半段证据冻结。

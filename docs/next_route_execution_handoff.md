@@ -1,15 +1,17 @@
 # Curious-VLA 下一技术路线执行交接
 
+> 状态更新（2026-08-24）：本文冻结为旧路线交接材料。用户随后明确重新开启有前置门控的 `G=4` GRPO 探索，因此本文关于“不得继续 GRPO”的规划性限制已被新指令替代；服务器安全、旧 held-out、访问锁和不可恢复产物边界继续有效。当前路线以 [`grpo_g4_experiment_ledger.md`](grpo_g4_experiment_ledger.md) 为准。
+>
 > 本文只交接执行方式和不可违反的状态边界，不为下一路线预选算法。解释默认使用简体中文；代码、技术术语和学术引用保持准确英文。
 
-## 1. 当前不可变状态
+## 1. 旧路线冻结时不可变状态
 
 - 本地工作区：`D:\Desktop\curious_vla`
 - 当前分支：`codex/post-training-analysis`
 - 可写远端：`post-training` → `Tang-Annan/curious_vla_post_training`
 - 服务器仓库：`/root/autodl-tmp/curious-vla-workspace/src/curious_vla_post_training`
 - 服务器实验根目录：`/root/autodl-tmp/curious-vla-workspace/experiments/safe_grpo`
-- GRPO、Dr.GRPO、Dynamic Sampling 和 Recovery 路线已终止；不得继续 R1/R2/R3、不得重启 F1。
+- 旧 GRPO、Dr.GRPO、Dynamic Sampling 和 Recovery 路线已终止；不得继续旧 R1/R2/R3、不得重启 F1。新 `G=4` 实验只能按新台账建立独立命名空间和门控。
 - F1 已在用户终止前生成 520/565 条 held-out 部分 rollout。部分结果和运行目录已删除，但 `F1_HELDOUT_ACCESSED` 永久锁保留；原 held-out 已被访问，下一路线不得把它表述为未见终测集，也不得补跑剩余 45 条。
 - 服务器只保留 E0、D0、R0 retry1、E2、F0、三个 split manifest、E2 step 50/250 和 F1 访问锁。E2 step 250 只是新路线的可复用基线或初始化点，不代表 GRPO 贡献已被确认。
 - 完整科学结论与清理事实见 `docs/post_training_execution_loop.md`；已删除原始产物不可恢复。

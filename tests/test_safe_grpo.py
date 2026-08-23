@@ -221,6 +221,79 @@ def test_rollout_analysis_uses_training_reward_and_sample_group_std(tmp_path):
     assert report["low_nonzero_std_ratio"] == pytest.approx(1.0)
 
 
+def test_g4_smoke_verifier_enforces_group_and_resolved_config(tmp_path):
+    verifier = load_module(ROOT / "projects/safe_grpo/verify_g4_smoke.py", "verify_g4_smoke")
+    manifest = tmp_path / "train.txt"
+    manifest.write_text("a\nb\nc\nd\n", encoding="utf-8")
+    rollouts = tmp_path / "rollouts.jsonl"
+    rows = []
+    for token in ("a", "b", "c", "d"):
+        rows.extend(
+            {
+                "token": token,
+                "parsed_ok": True,
+                "training_reward": 0.5,
+                "pdms": 0.5,
+                "pdms_scaled": 0.5,
+                "safe": 1.0,
+                "no_at_fault_collisions": 1.0,
+                "drivable_area_compliance": 1.0,
+                "ego_progress": 0.5,
+                "time_to_collision_within_bound": 0.5,
+                "history_comfort": 0.5,
+            }
+            for _ in range(4)
+        )
+    rollouts.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    training_log = tmp_path / "experiment_log.jsonl"
+    training_log.write_text('{"step": 1, "actor": {"loss": 0.1}}\n{"step": 2, "actor": {"loss": 0.2}}\n')
+    config = tmp_path / "experiment_config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "data": {"rollout_batch_size": 2},
+                "worker": {
+                    "rollout": {"n": 4},
+                    "actor": {
+                        "global_batch_size": 2,
+                        "micro_batch_size_per_device_for_update": 1,
+                        "micro_batch_size_per_device_for_experience": 1,
+                        "model": {"enable_gradient_checkpointing": True},
+                    },
+                },
+                "trainer": {"max_steps": 2, "skip_final_validation": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    gpu_memory = tmp_path / "gpu_memory.csv"
+    gpu_memory.write_text(
+        "timestamp,memory_used_mib,memory_free_mib,utilization_percent\n1,100,24400,50\n",
+        encoding="utf-8",
+    )
+
+    report = verifier.verify(rollouts, training_log, config, gpu_memory, manifest, 2, 2, 4)
+
+    assert report["passed"] is True
+    assert report["groups"] == 4
+    assert report["rollouts"] == 16
+    assert report["peak_memory_used_mib"] == 100
+
+
+def test_t0_launcher_freezes_full_g4_smoke_protocol():
+    source = (ROOT / "scripts/run_safe_grpo_experiment.sh").read_text(encoding="utf-8")
+    assert "t0_g4_sdr_smoke10_seed20260812" in source
+    assert "ROLLOUT_N=4" in source
+    assert 'MAX_STEPS=10' in source
+    assert 'SKIP_FINAL_VALIDATION=true' in source
+    assert 'SAVE_MODEL_ONLY=true' in source
+    assert 'worker.rollout.n="$ROLLOUT_N"' in source
+    assert '--expected-steps 10' in source
+    assert '--groups-per-step 4' in source
+    assert '--group-size 4' in source
+    assert 'gpu_memory.csv' in source
+
+
 def test_r0_difficulty_bias_analysis_and_gates(tmp_path):
     analysis = load_module(
         ROOT / "projects/safe_grpo/analyze_difficulty_bias.py", "analyze_difficulty_bias"
