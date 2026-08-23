@@ -7,8 +7,8 @@
 
 ## 1. 当前决策快照
 
-- 当前阶段：`T0`，先确认目标 RTX 4090 24 GB GPU 能否保持完整科学协议运行 `G=4`；在此之前不执行 S0 或其他路线动作。
-- 当前唯一动作：运行不访问 dev 的 10-step `G=4` throwaway smoke，保持每步 4 个 scene group、每组 4 条 trajectory。若显存无法承载该协议，整条 G4 路线立即终止。
+- 当前阶段：`S0`。T0 已证明目标 RTX 4090 24 GB GPU 能保持完整科学协议运行 `G=4`；现在复盘历史 SLDR 的真实训练作用。
+- 当前唯一动作：在冻结的 D0 train-only `4,525 × 4 = 18,100` 条 scored rollout 上，复算 SDR/SLDR 及标准 GRPO advantage，判断 SLDR 在 `G=4` 下是否产生足够且方向正确的新信号。
 - 当前最佳历史候选：`E2 = FALS-1k + SDR + GRPO, G=2`。它只是在单一训练 seed 的旧 dev 上优于其他已训练变体，不能声明稳定超过 Stage-2。
 - SLDR 当前状态：历史效果为负，不是默认必跑项；只有 `S0` 全部门控通过，才允许执行 `Random + SLDR + GRPO, G=4`。
 - SDR 当前状态：继续作为主 reward。若 SLDR 未通过，先完成 `G=4 + SDR` 的 Random/FALS/ADAS 单变量对照，再根据失败类型决定是否设计新的非线性映射或 tie-aware 方法。
@@ -17,8 +17,8 @@
 
 | 阶段 | 状态 | GPU | 回答的问题 | 下一动作 |
 | --- | --- | ---: | --- | --- |
-| T0 | 待执行 | smoke | 目标 RTX 4090 24 GB GPU 是否能保持科学协议运行 `G=4` | 当前唯一动作；无 dev smoke |
-| S0 | 被 T0 阻塞 | 0 | SLDR 在 `G=4` 下是否真的改变有效 advantage，而不只是改变 raw reward 数值 | 仅在 T0 通过后做 D0 train-only 离线审计 |
+| T0 | 技术通过 | smoke | 目标 RTX 4090 24 GB GPU 是否能保持科学协议运行 `G=4` | 峰值 21,222 MiB，进入 S0 |
+| S0 | 待执行 | 0 | SLDR 在 `G=4` 下是否真的改变有效 advantage，而不只是改变 raw reward 数值 | 当前唯一动作；D0 train-only 离线审计 |
 | R4-SDR | 被 S0 阻塞 | full | Random 场景下 `G=4` 的系统收益与额外查询成本 | 与 E1 对照 |
 | F4-SDR | 被 R4-SDR 阻塞 | full | FALS 在 `G=4` 下是否仍优于 Random | 与 R4-SDR、E2 对照 |
 | A2/A4-SDR | 待建立 ADAS-1k | full ×2 | 同一 ADAS 场景集下 `G=2→4` 的变化 | 先冻结标准化 ADAS manifest |
@@ -212,8 +212,8 @@ T0 是本轮第一门控。在目标 RTX 4090 24 GB GPU 上先运行不访问 de
 
 | 顺序 | ID | Selector | Reward | G | 唯一问题 | 直接对照 | 启动条件 |
 | ---: | --- | --- | --- | ---: | --- | --- | --- |
-| 0 | T0 | Random smoke | SDR | 4 | RTX 4090 24 GB GPU 是否满足原协议 | 无 dev | 当前唯一动作 |
-| 1 | S0 | D0 train-only | SDR vs SLDR offline | 2/4 replay | SLDR 是否值得一次 G4 训练 | 无 GPU | T0 通过 |
+| 0 | T0 | Random smoke | SDR | 4 | RTX 4090 24 GB GPU 是否满足原协议 | 无 dev | 已通过 |
+| 1 | S0 | D0 train-only | SDR vs SLDR offline | 2/4 replay | SLDR 是否值得一次 G4 训练 | 无 GPU | 当前唯一动作；T0 已通过 |
 | 2 | R4-SDR | Random-1k | SDR + GRPO | 4 | Random 下 G4 系统效果 | E1 | S0 已写回 |
 | 3 | F4-SDR | FALS-1k | SDR + GRPO | 4 | FALS 在 G4 下的贡献 | R4-SDR；E2 仅作 G2 参考 | R4-SDR 完成 |
 | 4 | A2-SDR | ADAS-1k | SDR + GRPO | 2 | 建立同协议 ADAS-G2 | E1/E2 | ADAS pool/manifest 冻结 |
@@ -316,8 +316,8 @@ SDR 本身已经是 nonlinear focal reward。SLDR 失败后，不默认再叠加
 
 | ID | 配置 | 状态 | Step125 PDMS scaled / Safe | Step250 PDMS scaled / Safe | Train signal | 成本 | 决策 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| T0 | Random + SDR G4 smoke | 待执行 | 不访问 dev | 不访问 dev | 待填 | 待填 | 待填 |
-| S0 | D0 SDR/SLDR geometry audit | 被 T0 阻塞 | 不适用 | 不适用 | 待填 | 0 GPU | 待填 |
+| T0 | Random + SDR G4 smoke | 技术通过 | 不访问 dev | 不访问 dev | 40 groups × 4；parse 100%；zero group 12.5% | 160 queries；918 秒；峰值 21,222 MiB | 24 GB 支持完整 G4 协议 |
+| S0 | D0 SDR/SLDR geometry audit | 待执行 | 不适用 | 不适用 | 待填 | 0 GPU | 待填 |
 | R4-SDR | Random + SDR + GRPO | 被阻塞 | 待填 | 待填 | 待填 | 待填 | 待填 |
 | F4-SDR | FALS + SDR + GRPO | 被阻塞 | 待填 | 待填 | 待填 | 待填 | 待填 |
 | A2-SDR | ADAS + SDR + GRPO | 待建 manifest | 不适用 | 待填 | 待填 | 待填 | 待填 |
@@ -356,6 +356,21 @@ SDR 本身已经是 nonlinear focal reward。SLDR 失败后，不默认再叠加
 - 下一动作：<唯一动作>
 ```
 
+### 记录 G4-001：T0 RTX 4090 24 GB 显存门控完成
+
+- 状态：技术通过。
+- 假设与直接对照：只回答 RTX 4090 24 GB 是否能在不缩减科学协议的条件下运行 `G=4`；不访问 dev，不判断模型效果。
+- 预注册门控：10 optimizer steps、4 scene groups/step、4 trajectories/group；OOM 或必须降低 G/group 数则整条路线终止。
+- 代码与配置：source `b8d16d82fb04ce7415cde4bc4efd98ff09241cac`，source status 为空；Stage-2、SDR、标准 GRPO、seed `20260812`、micro-batch 1、gradient checkpointing、`skip_final_validation=true`、`save_model_only=true`。
+- 数据：冻结 Random-1k manifest SHA-256 `3ae99bb940fad6fab3b488bc4ea7d01e8755a3677161f0c29dffb5e476721fa8`；1,000 个唯一 train token，与 dev/旧 held-out 重叠均为 0；实际覆盖 40 个唯一 group、160 条 rollout，每组严格 4 条。
+- 技术结果：`COMPLETE`、`exit_code=0`、10/10 step；step-10 actor checkpoint 可保存且完整，约 7.7 GB；全部训练数值 finite，无 OOM、NaN、traceback、CUDA error、no-space 或 killed；GPU、Ray、Gunicorn/8901 和训练进程全部回收。
+- 训练信号：parse success 与必需 reward 字段覆盖均为 100%，clipping 为 0；SDR exact-zero group `12.5%`、低非零 std group `5.0%`、平均 headroom `0.32864`。这些 40-group smoke 统计只作技术旁证，不作正式方法结论。
+- 探索性效果：不适用；未访问 dev。
+- 成本：160 次 train reward query；10 step 合计 `776.67` 秒、平均 `77.67` 秒/step；1 秒采样共 837 点，墙钟覆盖 918 秒，峰值显存 `21,222 MiB`、最低剩余 `2,860 MiB`、GPU utilization 峰值 100%；run 目录约 7.7 GB，结束后磁盘剩余约 23 GB。
+- 分析边界：证明当前 24 GB GPU 支持冻结的 G4 数学批次和 checkpoint 保存；不证明 250-step 科学收益或长程稳定性。
+- 决策：T0 通过，允许进入 S0；不调整 G、scene groups、生成协议或 micro-batch。
+- 下一动作：只执行 D0 train-only S0 advantage-geometry 审计。
+
 ## 11. 当前下一动作
 
-只执行 T0：在目标 RTX 4090 24 GB GPU 上完成不访问 dev 的 10-step `G=4` throwaway smoke，并写回显存、覆盖、checkpoint 和资源回收结果。T0 通过后才执行 S0；若显存不支持完整 G4 协议，立即终止整条路线。
+只执行 S0：确认冻结 D0 证据可读，建立不访问 dev 的 SDR/SLDR advantage-geometry 分析并写回门控结果。在 S0 完成前，不启动任何 `G=4` 正式训练、ADAS 重筛或 Hybrid 实验。
