@@ -294,6 +294,122 @@ def test_t0_launcher_freezes_full_g4_smoke_protocol():
     assert 'gpu_memory.csv' in source
 
 
+def test_s0_geometry_recovers_only_parse_failures_and_detects_partial_collision(tmp_path):
+    pytest.importorskip("torch")
+    analysis = load_module(
+        ROOT / "projects/safe_grpo/analyze_sldr_geometry.py", "analyze_sldr_geometry"
+    )
+    manifest = tmp_path / "train.txt"
+    rollouts = tmp_path / "d0.jsonl"
+    output = tmp_path / "s0"
+    tokens = ("safe", "unsafe", "partial")
+    manifest.write_text("\n".join(tokens) + "\n", encoding="utf-8")
+    rows = []
+    rows.extend(
+        {
+            "token": "safe",
+            "parsed_ok": True,
+            "safe": 1.0,
+            "training_reward": value,
+            **metrics(pdms_scaled=value, ego_progress=value),
+        }
+        for value in (0.4, 0.5, 0.6, 0.7)
+    )
+    rows.extend(
+        {
+            "token": "unsafe",
+            "parsed_ok": True,
+            "safe": 0.0,
+            "training_reward": 0.0,
+            **metrics(
+                drivable_area_compliance=0.0,
+                pdms=0.0,
+                pdms_scaled=0.0,
+                time_to_collision_within_bound=value,
+            ),
+        }
+        for value in (0.0, 0.25, 0.5, 1.0)
+    )
+    rows.extend(
+        {
+            "token": "partial",
+            "parsed_ok": True,
+            "safe": 1.0,
+            "training_reward": 0.5,
+            **metrics(no_at_fault_collisions=0.5, pdms_scaled=0.5),
+        }
+        for _ in range(3)
+    )
+    rows.append(
+        {
+            "token": "partial",
+            "parsed_ok": False,
+            "safe": 0.0,
+            "training_reward": 0.0,
+            "pdms": 0.0,
+            "pdms_scaled": 0.0,
+        }
+    )
+    rollouts.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    report = analysis.analyze(
+        Namespace(
+            d0_rollouts=rollouts,
+            train_manifest=manifest,
+            output_dir=output,
+            bootstrap_samples=100,
+            seed=7,
+        )
+    )
+
+    assert report["field_coverage_and_recovery"]["recovered_parse_failure_rows"] == 1
+    assert report["field_coverage_and_recovery"]["recovered_zero_fields"]["ego_progress"] == 1
+    assert report["safe_semantics"]["partial_collision_rows"] == 3
+    assert report["safe_semantics"]["systematic_mislabel"] is True
+    assert report["g2_pair_audit"]["total"] == 18
+    assert report["g2_pair_audit"]["pairs_per_g4_group"] == 6
+    assert report["unsafe_new_preference_bootstrap"]["bootstrap_samples"] == 100
+    assert report["gates"]["safe_semantics_valid"] is False
+    assert report["decision"] == "close_all_sldr_formal_training"
+    assert (output / "s0_report.json").stat().st_size > 0
+    assert (output / "group_geometry.csv").stat().st_size > 0
+
+
+def test_s0_geometry_rejects_missing_metric_on_parsed_rollout(tmp_path):
+    pytest.importorskip("torch")
+    analysis = load_module(
+        ROOT / "projects/safe_grpo/analyze_sldr_geometry.py", "analyze_sldr_geometry_missing"
+    )
+    manifest = tmp_path / "train.txt"
+    rollouts = tmp_path / "d0.jsonl"
+    manifest.write_text("a\n", encoding="utf-8")
+    row = {"token": "a", "parsed_ok": True, **metrics()}
+    del row["ego_progress"]
+    rollouts.write_text("".join(json.dumps(row) + "\n" for _ in range(4)), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Parsed rollout.*missing"):
+        analysis.analyze(
+            Namespace(
+                d0_rollouts=rollouts,
+                train_manifest=manifest,
+                output_dir=tmp_path / "out",
+                bootstrap_samples=10,
+                seed=1,
+            )
+        )
+
+
+def test_s0_launcher_is_train_only_and_hash_frozen():
+    source = (ROOT / "scripts/run_s0_sldr_geometry.sh").read_text(encoding="utf-8")
+    assert "d0_stage2_train_n4_seed20260812" in source
+    assert "2ededee1d08d754c251a1f1777d2df4e44e52f4a859e884afeed95521e6ef9d6" in source
+    assert "4a19947abd86d4265e055a6408fc8a6d579fcc083cb5bc4c207159d5c60d8168" in source
+    assert "--bootstrap-samples 20000" in source
+    assert "CUDA_VISIBLE_DEVICES=''" in source
+    assert "dev_tokens" not in source
+    assert "heldout" not in source
+
+
 def test_r0_difficulty_bias_analysis_and_gates(tmp_path):
     analysis = load_module(
         ROOT / "projects/safe_grpo/analyze_difficulty_bias.py", "analyze_difficulty_bias"
