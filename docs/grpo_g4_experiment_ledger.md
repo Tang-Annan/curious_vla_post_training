@@ -7,10 +7,10 @@
 
 ## 1. 当前决策快照
 
-- 当前阶段：`S0`。T0 已证明目标 RTX 4090 24 GB GPU 能保持完整科学协议运行 `G=4`；现在复盘历史 SLDR 的真实训练作用。
-- 当前唯一动作：在冻结的 D0 train-only `4,525 × 4 = 18,100` 条 scored rollout 上，复算 SDR/SLDR 及标准 GRPO advantage，判断 SLDR 在 `G=4` 下是否产生足够且方向正确的新信号。
+- 当前阶段：`R4-SDR`。S0 已完成并触发多项科学失败门控，全部 SLDR 正式训练关闭；现在只运行 Random-1k + SDR + GRPO, `G=4`。
+- 当前唯一动作：从同一 Stage-2 checkpoint 独立训练 `R4-SDR`，在预注册 step 125/250 上与 E1 的 `G=2` Random-SDR 结果比较，同时报告 rollout/query 翻倍的成本边界。
 - 当前最佳历史候选：`E2 = FALS-1k + SDR + GRPO, G=2`。它只是在单一训练 seed 的旧 dev 上优于其他已训练变体，不能声明稳定超过 Stage-2。
-- SLDR 当前状态：历史效果为负，不是默认必跑项；只有 `S0` 全部门控通过，才允许执行 `Random + SLDR + GRPO, G=4`。
+- SLDR 当前状态：S0 科学负向，永久关闭本轮 `R4-SLDR` 与 `AF4-SLDR`；不调 `0.5/0.1/0.6` 系数，不做 dev sweep。
 - SDR 当前状态：继续作为主 reward。若 SLDR 未通过，先完成 `G=4 + SDR` 的 Random/FALS/ADAS 单变量对照，再根据失败类型决定是否设计新的非线性映射或 tie-aware 方法。
 - ADAS 当前状态：历史发布配置不是当前 `1k scenes / G=2 / 250 steps` 的同协议基线，必须重新建立标准化 ADAS-1k 的 `G=2/G=4` 配对实验。
 - `ADAS + FALS` 当前状态：视为一个待定义的新 Hybrid selector，而不是两个可直接叠加的独立模块。最小定义固定为 `ADAS gate → FALS ranking → Top-1,000`。
@@ -18,13 +18,13 @@
 | 阶段 | 状态 | GPU | 回答的问题 | 下一动作 |
 | --- | --- | ---: | --- | --- |
 | T0 | 技术通过 | smoke | 目标 RTX 4090 24 GB GPU 是否能保持科学协议运行 `G=4` | 峰值 21,222 MiB，进入 S0 |
-| S0 | 待执行 | 0 | SLDR 在 `G=4` 下是否真的改变有效 advantage，而不只是改变 raw reward 数值 | 当前唯一动作；D0 train-only 离线审计 |
-| R4-SDR | 被 S0 阻塞 | full | Random 场景下 `G=4` 的系统收益与额外查询成本 | 与 E1 对照 |
+| S0 | 科学负向 | 0 | SLDR 在 `G=4` 下是否真的改变有效 advantage，而不只是改变 raw reward 数值 | 多项门控失败；关闭 SLDR |
+| R4-SDR | 待执行 | full | Random 场景下 `G=4` 的系统收益与额外查询成本 | 当前唯一动作；与 E1 对照 |
 | F4-SDR | 被 R4-SDR 阻塞 | full | FALS 在 `G=4` 下是否仍优于 Random | 与 R4-SDR、E2 对照 |
 | A2/A4-SDR | 待建立 ADAS-1k | full ×2 | 同一 ADAS 场景集下 `G=2→4` 的变化 | 先冻结标准化 ADAS manifest |
-| R4-SLDR | 被 S0 阻塞 | full | SLDR 在 `G=4` 下是否优于同协议 SDR | 仅在 S0 通过后运行 |
+| R4-SLDR | 按门控跳过 | 0 | SLDR 在 `G=4` 下是否优于同协议 SDR | S0 失败，禁止运行 |
 | AF4-SDR | 被 F4/A4 阻塞 | full | ADAS gate 后再用 FALS 排序是否有独立贡献 | 先完成 Hybrid train-only 审计 |
-| AF4-SLDR | 被 S0、R4-SLDR、AF4-SDR 阻塞 | full | 同一 Hybrid selector 下 SLDR 是否优于 SDR | 不允许单独运行 |
+| AF4-SLDR | 按门控跳过 | 0 | 同一 Hybrid selector 下 SLDR 是否优于 SDR | S0 失败，禁止运行 |
 | C0 | 未开放 | paired seeds | 胜出差值是否跨训练 seed 稳定 | 只确认一个胜出对照 |
 
 ## 2. 名词与比较口径
@@ -213,8 +213,8 @@ T0 是本轮第一门控。在目标 RTX 4090 24 GB GPU 上先运行不访问 de
 | 顺序 | ID | Selector | Reward | G | 唯一问题 | 直接对照 | 启动条件 |
 | ---: | --- | --- | --- | ---: | --- | --- | --- |
 | 0 | T0 | Random smoke | SDR | 4 | RTX 4090 24 GB GPU 是否满足原协议 | 无 dev | 已通过 |
-| 1 | S0 | D0 train-only | SDR vs SLDR offline | 2/4 replay | SLDR 是否值得一次 G4 训练 | 无 GPU | 当前唯一动作；T0 已通过 |
-| 2 | R4-SDR | Random-1k | SDR + GRPO | 4 | Random 下 G4 系统效果 | E1 | S0 已写回 |
+| 1 | S0 | D0 train-only | SDR vs SLDR offline | 2/4 replay | SLDR 是否值得一次 G4 训练 | 无 GPU | 已完成；科学负向 |
+| 2 | R4-SDR | Random-1k | SDR + GRPO | 4 | Random 下 G4 系统效果 | E1 | 当前唯一动作；S0 已写回 |
 | 3 | F4-SDR | FALS-1k | SDR + GRPO | 4 | FALS 在 G4 下的贡献 | R4-SDR；E2 仅作 G2 参考 | R4-SDR 完成 |
 | 4 | A2-SDR | ADAS-1k | SDR + GRPO | 2 | 建立同协议 ADAS-G2 | E1/E2 | ADAS pool/manifest 冻结 |
 | 5 | A4-SDR | 同一 ADAS-1k | SDR + GRPO | 4 | ADAS 内部的 G2→4 变化 | A2-SDR | A2 完成、T0 通过 |
@@ -317,14 +317,14 @@ SDR 本身已经是 nonlinear focal reward。SLDR 失败后，不默认再叠加
 | ID | 配置 | 状态 | Step125 PDMS scaled / Safe | Step250 PDMS scaled / Safe | Train signal | 成本 | 决策 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | T0 | Random + SDR G4 smoke | 技术通过 | 不访问 dev | 不访问 dev | 40 groups × 4；parse 100%；zero group 12.5% | 160 queries；918 秒；峰值 21,222 MiB | 24 GB 支持完整 G4 协议 |
-| S0 | D0 SDR/SLDR geometry audit | 待执行 | 不适用 | 不适用 | 待填 | 0 GPU | 待填 |
-| R4-SDR | Random + SDR + GRPO | 被阻塞 | 待填 | 待填 | 待填 | 待填 | 待填 |
+| S0 | D0 SDR/SLDR geometry audit | 科学负向 | 不适用 | 不适用 | `ΔA≥0.10` 2.59%；zero 仅降 0.575 pp；30 条 safe 错标；DAC CI 全负 | 0 GPU；6.27 秒 | 关闭全部 SLDR 正式训练 |
+| R4-SDR | Random + SDR + GRPO | 待执行 | 待填 | 待填 | 待填 | 待填 | 当前唯一动作 |
 | F4-SDR | FALS + SDR + GRPO | 被阻塞 | 待填 | 待填 | 待填 | 待填 | 待填 |
 | A2-SDR | ADAS + SDR + GRPO | 待建 manifest | 不适用 | 待填 | 待填 | 待填 | 待填 |
 | A4-SDR | ADAS + SDR + GRPO | 被阻塞 | 待填 | 待填 | 待填 | 待填 | 待填 |
-| R4-SLDR | Random + SLDR + GRPO | 被 S0 阻塞 | 待填 | 待填 | 待填 | 待填 | 待填 |
+| R4-SLDR | Random + SLDR + GRPO | 按门控跳过 | 不适用 | 不适用 | S0 科学门控失败 | 0 | 禁止运行 |
 | AF4-SDR | ADAS+FALS + SDR + GRPO | 被阻塞 | 待填 | 待填 | 待填 | 待填 | 待填 |
-| AF4-SLDR | ADAS+FALS + SLDR + GRPO | 被阻塞 | 待填 | 待填 | 待填 | 待填 | 待填 |
+| AF4-SLDR | ADAS+FALS + SLDR + GRPO | 按门控跳过 | 不适用 | 不适用 | S0 科学门控失败 | 0 | 禁止运行 |
 
 ## 9. 证据与数据边界
 
@@ -371,6 +371,24 @@ SDR 本身已经是 nonlinear focal reward。SLDR 失败后，不默认再叠加
 - 决策：T0 通过，允许进入 S0；不调整 G、scene groups、生成协议或 micro-batch。
 - 下一动作：只执行 D0 train-only S0 advantage-geometry 审计。
 
+### 记录 G4-002：S0 SLDR train-only advantage-geometry 审计完成
+
+- 状态：科学负向。
+- 假设与直接对照：只使用冻结 D0 的 `4,525 × 4` train rollout，对生产 SDR 与 SLDR 的 `G=4` reward/advantage geometry 做离线比较；不访问 dev 或旧 held-out。
+- 预注册门控：数据和 safe 语义完整；`ΔA ≥ 0.10` group 至少 10%；material group 中 strict mixed-safety 至少 50%；exact-zero 至少下降 5 pp；SLDR 新偏好的 unsafe trajectory 在 Collision、DAC、Progress 上不得出现 20,000 次 group-bootstrap CI 全负。
+- 代码与配置：source `e4dfd64ee64be55a43708868b6dd082339c223a7`，source status 为空；生产 `compute_sldr`、真实 `compute_grpo_outcome_advantage`、float32 与 `eps=1e-6`；seed `20260812`，CPU-only。最终证据目录为 `s0_sldr_geometry_seed20260812_retry2`；此前输出只因补齐 G2 极小 gap 的 production-eps/float32 解释而被替代，科学数值和门控结论未改变。
+- 数据：D0 SHA-256 `2ededee1d08d754c251a1f1777d2df4e44e52f4a859e884afeed95521e6ef9d6`，train manifest SHA-256 `4a19947abd86d4265e055a6408fc8a6d579fcc083cb5bc4c207159d5c60d8168`；4,525 token、18,100 rollout、每组严格 4 条，dev/held-out 访问为 false。18,088 条 parsed row 必需分项字段完整；12 条 parse-failure 日志缺少 5 个 component 字段，只按生产 `_zero_result` 的确定性零 score 恢复 60 个值，正常 parsed row 未填充。
+- 技术结果：`COMPLETE`、`exit_code=0`；远端 35 tests passed，报告、4,525 行 group geometry 与 unsafe-preference group 差值文件完整；无 GPU compute process。
+- 训练信号：严格 safety composition 为 all-safe/mixed/all-unsafe `1,401 / 2,833 / 291`。SDR exact-zero 为 `821/4,525 = 18.1436%`，SLDR 为 `795/4,525 = 17.5691%`，只下降 `0.5746 pp`；`ΔA` 均值 `0.01233`，仅 `117/4,525 = 2.5856%` group 达到 `0.10`，其中 strict mixed-safety `91/117 = 77.78%`。material group 的 mixed 占比通过，但信号覆盖与解 tie 幅度均未达门槛。
+- G2 机制复核：枚举全部 `4,525 × 6 = 27,150` pair；SDR/SLDR exact tie 分别为 `10,051 / 9,789`，全部产生零 advantage；非 tie 中 `98.44% / 96.98%` 在 `eps` 误差内接近理想 `±0.707`。SLDR 只新增 262 个 tie-break pair，未反转任何原本不相等的 SDR pair。
+- 安全语义：原日志 `safe` 与生产 `>0` 判定完全一致，但 NAVSIM 将 `no_at_fault_collisions=0.5` 明确定义为与非 agent 物体的 at-fault collision。D0 有 189 条该分值，其中 30 条、15 个 token 因 DAC 也为正而被生产规则系统性标为 safe；因此 safe 语义门控失败。
+- unsafe 新偏好：262 个 pair、139 个独立 group；winner-minus-loser 的 group-bootstrap 95% CI 为 Collision `[+0.2050,+0.3435]`、DAC `[-0.1559,-0.0372]`、Progress `[+0.0058,+0.0736]`、TTC `[+1,+1]`、Comfort `[+0.0144,+0.0791]`。SLDR 的 TTC tie-break 伴随一致性 DAC 退化，DAC 门控失败。
+- 探索性效果：不适用；未访问 dev。
+- 成本：0 GPU、0 新 reward query、20,000 次 train-only group bootstrap；最终分析墙钟 `6.27` 秒，产物不足 1 MB。
+- 分析边界：能够否定当前 SLDR 映射进入 G4 正式训练的资格；不能把 D0 机制代理解释为新的模型效果实验。
+- 决策：S0 未通过 safe 语义、material group 覆盖、exact-zero 降幅和 DAC bootstrap 四项门控。关闭本轮全部 SLDR 正式训练，不运行 `R4-SLDR` 或 `AF4-SLDR`，不调系数追逐 dev。
+- 下一动作：只执行 `R4-SDR`，比较 Random selector 下 `G=4` 的系统效果与两倍 rollout/query 成本。
+
 ## 11. 当前下一动作
 
-只执行 S0：确认冻结 D0 证据可读，建立不访问 dev 的 SDR/SLDR advantage-geometry 分析并写回门控结果。在 S0 完成前，不启动任何 `G=4` 正式训练、ADAS 重筛或 Hybrid 实验。
+只执行 `R4-SDR`：先在正式启动前确认 RTX 4090 24 GB 的空闲显存、无残留训练进程、source clean、Random-1k manifest/checkpoint/hash 完整和目标目录不存在；随后从 Stage-2 独立运行 250-step `Random + SDR + GRPO, G=4`，保存预注册 step 125/250 并由 Luna 只读监控。`R4-SDR` 完成前不启动 F4、ADAS、Hybrid 或任何 SLDR 实验。

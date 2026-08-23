@@ -294,6 +294,23 @@ def test_t0_launcher_freezes_full_g4_smoke_protocol():
     assert 'gpu_memory.csv' in source
 
 
+def test_r4_launcher_freezes_formal_g4_protocol_and_checkpoint_evaluations():
+    source = (ROOT / "scripts/run_safe_grpo_experiment.sh").read_text(encoding="utf-8")
+    assert 'r4)\n        EXP_NAME=r4_sdr_random_lora_1k_g4_seed20260812' in source
+    assert 'ROLLOUT_N=4' in source
+    assert 'SAVE_FREQ=125' in source
+    assert 'SAVE_LIMIT=2' in source
+    assert 'TRAIN_COVERAGE_ARGS=(--expected-train-rollouts 4)' in source
+    assert 'TRAIN_DIAGNOSIS_ARGS=(--expected-rollouts 4)' in source
+    assert 'STEP125_CHECKPOINT="$RUN_DIR/checkpoints/global_step_125"' in source
+    assert 'STEP250_CHECKPOINT="$RUN_DIR/checkpoints/global_step_250"' in source
+    assert 'trainer.load_checkpoint_path="$STEP125_CHECKPOINT"' in source
+    assert '--baseline "$E0_RUN/dev_rollouts.jsonl"' in source
+    assert 'step125_vs_e0_paired.json' in source
+    assert 'step250_vs_e0_paired.json' in source
+    assert 'step250_vs_step125_paired.json' in source
+
+
 def test_s0_geometry_recovers_only_parse_failures_and_detects_partial_collision(tmp_path):
     pytest.importorskip("torch")
     analysis = load_module(
