@@ -332,6 +332,7 @@ def test_r4_raw_launcher_freezes_sdr_ablation_and_training_evidence():
 
 def test_raw_pdms_reward_is_the_training_scalar_and_raw_response_is_logged(tmp_path, monkeypatch):
     pytest.importorskip("codetiming")
+    monkeypatch.setenv("NAVSIM_STAT_PATH", str(ROOT / "stats/trajectory_stats_train.json"))
     monkeypatch.chdir(tmp_path)
     reward = load_module(
         ROOT / "EasyR1/verl/utils/reward_score/navsim/navsim_reward_grouped.py", "raw_pdms_reward"
