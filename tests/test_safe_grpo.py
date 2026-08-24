@@ -315,6 +315,23 @@ def test_r4_and_f4_launchers_freeze_formal_g4_protocol_and_checkpoint_evaluation
     assert 'step250_vs_e2_paired.json' in source
 
 
+def test_c0_launcher_freezes_matched_second_seed_g2_g4_protocol():
+    source = (ROOT / "scripts/run_safe_grpo_experiment.sh").read_text(encoding="utf-8")
+    assert 'c0g2)\n        EXP_NAME=c0_sdr_random_lora_1k_g2_seed20260813' in source
+    assert 'c0g4)\n        EXP_NAME=c0_sdr_random_lora_1k_g4_seed20260813' in source
+    assert source.count('SEED=20260813') == 2
+    assert 'if [[ "$STAGE" =~ ^(r4|f4|c0g4)$ ]]; then' in source
+    assert 'C0_G2_RUN="$EXPERIMENT_ROOT/c0_sdr_random_lora_1k_g2_seed20260813"' in source
+    assert 'Missing required C0-G2 reference' in source
+    assert 'C0-G2 and C0-G4 must use the same source commit.' in source
+    assert 'sha256sum -c "$C0_G2_RUN/model_sha256.txt"' in source
+    assert '3ae99bb940fad6fab3b488bc4ea7d01e8755a3677161f0c29dffb5e476721fa8  $ITERATION_MANIFEST' in source
+    assert 'REFERENCE_STEP125_ROLLOUTS="$C0_G2_RUN/step125_dev_rollouts.jsonl"' in source
+    assert 'REFERENCE_STEP250_ROLLOUTS="$C0_G2_RUN/dev_rollouts.jsonl"' in source
+    assert 'step125_vs_${REFERENCE_LABEL}_paired.json' in source
+    assert 'step250_vs_${REFERENCE_LABEL}_paired.json' in source
+
+
 def test_s0_geometry_recovers_only_parse_failures_and_detects_partial_collision(tmp_path):
     pytest.importorskip("torch")
     analysis = load_module(
