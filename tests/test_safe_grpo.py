@@ -315,21 +315,124 @@ def test_r4_and_f4_launchers_freeze_formal_g4_protocol_and_checkpoint_evaluation
     assert 'step250_vs_e2_paired.json' in source
 
 
-def test_c0_launcher_freezes_matched_second_seed_g2_g4_protocol():
+def test_r4_raw_launcher_freezes_sdr_ablation_and_training_evidence():
     source = (ROOT / "scripts/run_safe_grpo_experiment.sh").read_text(encoding="utf-8")
-    assert 'c0g2)\n        EXP_NAME=c0_sdr_random_lora_1k_g2_seed20260813' in source
-    assert 'c0g4)\n        EXP_NAME=c0_sdr_random_lora_1k_g4_seed20260813' in source
-    assert source.count('SEED=20260813') == 2
-    assert 'if [[ "$STAGE" =~ ^(r4|f4|c0g4)$ ]]; then' in source
-    assert 'C0_G2_RUN="$EXPERIMENT_ROOT/c0_sdr_random_lora_1k_g2_seed20260813"' in source
-    assert 'Missing required C0-G2 reference' in source
-    assert 'C0-G2 and C0-G4 must use the same source commit.' in source
-    assert 'sha256sum -c "$C0_G2_RUN/model_sha256.txt"' in source
+    assert 'r4raw)\n        EXP_NAME=r4_raw_pdms_random_lora_1k_g4_seed20260812' in source
+    assert "compute_score_group_raw_pdms" in source
+    assert "Missing required R4-SDR reference" in source
     assert '3ae99bb940fad6fab3b488bc4ea7d01e8755a3677161f0c29dffb5e476721fa8  $ITERATION_MANIFEST' in source
-    assert 'REFERENCE_STEP125_ROLLOUTS="$C0_G2_RUN/step125_dev_rollouts.jsonl"' in source
-    assert 'REFERENCE_STEP250_ROLLOUTS="$C0_G2_RUN/dev_rollouts.jsonl"' in source
+    assert 'sha256sum -c "$R4_RUN/model_sha256.txt"' in source
+    assert "REFERENCE_LABEL=r4_sdr" in source
+    assert 'REFERENCE_STEP125_ROLLOUTS="$R4_RUN/step125_dev_rollouts.jsonl"' in source
+    assert 'REFERENCE_STEP250_ROLLOUTS="$R4_RUN/dev_rollouts.jsonl"' in source
     assert 'step125_vs_${REFERENCE_LABEL}_paired.json' in source
     assert 'step250_vs_${REFERENCE_LABEL}_paired.json' in source
+    assert "export_training_evidence.py" in source
+
+
+def test_raw_pdms_reward_is_the_training_scalar_and_raw_response_is_logged(tmp_path, monkeypatch):
+    pytest.importorskip("codetiming")
+    monkeypatch.chdir(tmp_path)
+    reward = load_module(
+        ROOT / "EasyR1/verl/utils/reward_score/navsim/navsim_reward_grouped.py", "raw_pdms_reward"
+    )
+    monkeypatch.setattr(reward, "get_trajectory_parser", lambda: lambda response: [[0.0, 0.0, 0.0]] * 8)
+    monkeypatch.setattr(reward, "denormalize", lambda poses: poses)
+    reward._log_path = str(tmp_path / "rollouts.jsonl")
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [{**metrics(pdms=0.25, pdms_scaled=0.75)}]
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def post(self, *args, **kwargs):
+            return Response()
+
+    monkeypatch.setattr(reward.httpx, "Client", Client)
+    result = reward.compute_score_group_raw_pdms(
+        [{"ground_truth": {"token": "scene"}, "response": "raw trajectory text", "response_length": 3}]
+    )
+
+    assert result[0]["overall"] == pytest.approx(0.25)
+    assert result[0]["accuracy"] == pytest.approx(0.75)
+    logged = json.loads((tmp_path / "rollouts.jsonl").read_text(encoding="utf-8"))
+    assert logged["training_reward"] == pytest.approx(0.25)
+    assert logged["response"] == "raw trajectory text"
+
+    monkeypatch.setattr(reward, "get_trajectory_parser", lambda: lambda response: [])
+    zero_result = reward.compute_score_group_raw_pdms(
+        [{"ground_truth": {"token": "bad"}, "response": "unparsed", "response_length": 1}]
+    )
+    assert zero_result[0]["overall"] == 0.0
+    zero_logged = json.loads((tmp_path / "rollouts.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert zero_logged["no_at_fault_collisions"] == 0.0
+    assert zero_logged["drivable_area_compliance"] == 0.0
+
+
+def test_training_evidence_export_keeps_curves_resources_and_samples(tmp_path):
+    exporter = load_module(ROOT / "projects/safe_grpo/export_training_evidence.py", "training_evidence")
+    experiment_log = tmp_path / "experiment_log.jsonl"
+    rows = []
+    for step in (1, 2):
+        rows.append(
+            {
+                "step": step,
+                "reward": {"pdms_scaled": 0.4 + step / 10, "safe": 0.5, "parsed_ok": 1.0},
+                "actor": {
+                    "pg_loss": -0.01 * step,
+                    "entropy_loss": 0.2 - step / 100,
+                    "kl_loss": 0.001 * step,
+                    "ppo_kl": 0.0,
+                    "pg_clipfrac_higher": 0.0,
+                    "pg_clipfrac_lower": 0.0,
+                    "grad_norm": 0.02,
+                    "lr": 1e-6,
+                },
+                "critic": {"advantages": {"mean": 0.0, "min": -1.0, "max": 1.0}},
+                "response_length": {"mean": 360.0, "max": 380.0, "clip_ratio": 0.0},
+                "timing_s": {"step": 40.0, "gen": 24.0, "reward": 0.01, "ref": 3.0, "update_actor": 9.0},
+                "perf": {"throughput": 300.0},
+            }
+        )
+    rows.append({"step": 2, "validation": {"pdms_scaled": 0.7}})
+    experiment_log.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    gpu = tmp_path / "gpu.csv"
+    gpu.write_text(
+        "timestamp,memory_used_mib,memory_free_mib,utilization_percent\n1,100,200,50\n2,150,150,90\n",
+        encoding="utf-8",
+    )
+    rollouts = tmp_path / "rollouts.jsonl"
+    rollout_rows = [
+        {"token": token, "training_reward": reward, "parsed_ok": True, "response_length": 10, "response": token}
+        for token, reward in (("a", 0.1), ("a", 0.9), ("b", 0.5), ("b", 0.5))
+    ]
+    rollouts.write_text("".join(json.dumps(row) + "\n" for row in rollout_rows), encoding="utf-8")
+
+    report = exporter.export(experiment_log, gpu, rollouts, tmp_path / "evidence")
+
+    assert report["steps"] == 2
+    assert report["gpu"]["peak_memory_used_mib"] == pytest.approx(150)
+    assert report["representative_samples"]["raw_response_available"] is True
+    for name in (
+        "training_history.csv",
+        "training_curves.svg",
+        "training_curve_summary.json",
+        "representative_train_samples.jsonl",
+        "training_evidence_manifest.json",
+    ):
+        assert (tmp_path / "evidence" / name).stat().st_size > 0
 
 
 def test_s0_geometry_recovers_only_parse_failures_and_detects_partial_collision(tmp_path):

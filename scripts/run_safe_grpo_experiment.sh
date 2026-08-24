@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-STAGE="${1:?Usage: run_safe_grpo_experiment.sh <t0|e0|d0|e1|e2|e3|e4|r1|r2p|r2g|r4|f4|c0g2|c0g4>}"
+STAGE="${1:?Usage: run_safe_grpo_experiment.sh <t0|e0|d0|e1|e2|e3|e4|r1|r2p|r2g|r4|f4|r4raw>}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/autodl-tmp/curious-vla-workspace}"
 PROJECT_ROOT="${PROJECT_ROOT:-$WORKSPACE_ROOT/src/curious_vla_post_training}"
 EASYR1_ROOT="$PROJECT_ROOT/EasyR1"
@@ -17,7 +17,6 @@ EXPERIMENT_ROOT="$WORKSPACE_ROOT/experiments/safe_grpo"
 E0_RUN="$EXPERIMENT_ROOT/e0_stage2_dev_seed20260812"
 E2_RUN="$EXPERIMENT_ROOT/e2_fals_lora_1k_seed20260812"
 R4_RUN="$EXPERIMENT_ROOT/r4_sdr_random_lora_1k_g4_seed20260812"
-C0_G2_RUN="$EXPERIMENT_ROOT/c0_sdr_random_lora_1k_g2_seed20260813"
 E3_DIAGNOSIS="${E3_DIAGNOSIS:-$EXPERIMENT_ROOT/e3_sldr_lora_1k_seed20260812/train_diagnosis.json}"
 R0_REPORT="${R0_REPORT:-$EXPERIMENT_ROOT/r0_difficulty_bias_seed20260812_retry1/results/r0_report.json}"
 R2_PILOT_REPORT="${R2_PILOT_REPORT:-$EXPERIMENT_ROOT/r2p_e2_dynamic_lora_20_seed20260812/pilot_report.json}"
@@ -128,14 +127,10 @@ PY
         [[ -n "$FALS_MANIFEST" ]] || { echo "FALS_MANIFEST is required for F4." >&2; exit 1; }
         ITERATION_MANIFEST="$FALS_MANIFEST"
         ;;
-    c0g2)
-        EXP_NAME=c0_sdr_random_lora_1k_g2_seed20260813
-        SEED=20260813
-        ;;
-    c0g4)
-        EXP_NAME=c0_sdr_random_lora_1k_g4_seed20260813
-        SEED=20260813
+    r4raw)
+        EXP_NAME=r4_raw_pdms_random_lora_1k_g4_seed20260812
         ROLLOUT_N=4
+        REWARD_FUNCTION=./verl/utils/reward_score/navsim/navsim_reward_grouped.py:compute_score_group_raw_pdms
         ;;
     *)
         echo "Unknown stage: $STAGE" >&2
@@ -163,11 +158,11 @@ if [[ "$STAGE" == t0 ]]; then
     SAVE_MODEL_ONLY=true
     TRAIN_COVERAGE_ARGS=(--expected-train-rollouts 4)
 fi
-if [[ "$STAGE" =~ ^(r4|f4|c0g2|c0g4)$ ]]; then
+if [[ "$STAGE" =~ ^(r4|f4|r4raw)$ ]]; then
     SAVE_FREQ=125
     SAVE_LIMIT=2
 fi
-if [[ "$STAGE" =~ ^(r4|f4|c0g4)$ ]]; then
+if [[ "$STAGE" =~ ^(r4|f4|r4raw)$ ]]; then
     TRAIN_COVERAGE_ARGS=(--expected-train-rollouts 4)
     TRAIN_DIAGNOSIS_ARGS=(--expected-rollouts 4)
 fi
@@ -206,7 +201,7 @@ fi
 for path in "$MODEL_PATH" "$DATA_PATH" "$TRAIN_MANIFEST" "$DEV_MANIFEST" "$HELDOUT_MANIFEST" "$CACHE_PATH/metadata"; do
     [[ -e "$path" ]] || { echo "Missing required path: $path" >&2; exit 1; }
 done
-if [[ "$STAGE" =~ ^(t0|e[1-4]|r1|r2p|r2g|r4|f4|c0g2|c0g4)$ ]]; then
+if [[ "$STAGE" =~ ^(t0|e[1-4]|r1|r2p|r2g|r4|f4|r4raw)$ ]]; then
     [[ -e "$ITERATION_MANIFEST" ]] || { echo "Missing required path: $ITERATION_MANIFEST" >&2; exit 1; }
     [[ $(grep -cve '^[[:space:]]*$' "$ITERATION_MANIFEST") -eq 1000 ]] || {
         echo "Training manifest must contain exactly 1000 non-empty tokens." >&2
@@ -240,18 +235,12 @@ if [[ "$STAGE" == f4 ]]; then
         [[ -e "$path" ]] || { echo "Missing required F4 reference: $path" >&2; exit 1; }
     done
 fi
-if [[ "$STAGE" == c0g4 ]]; then
-    for path in "$C0_G2_RUN/COMPLETE" "$C0_G2_RUN/step125_dev_rollouts.jsonl" "$C0_G2_RUN/dev_rollouts.jsonl"; do
-        [[ -e "$path" ]] || { echo "Missing required C0-G2 reference: $path" >&2; exit 1; }
+if [[ "$STAGE" == r4raw ]]; then
+    for path in "$R4_RUN/COMPLETE" "$R4_RUN/step125_dev_rollouts.jsonl" "$R4_RUN/dev_rollouts.jsonl"; do
+        [[ -e "$path" ]] || { echo "Missing required R4-SDR reference: $path" >&2; exit 1; }
     done
-    [[ $(git -C "$PROJECT_ROOT" rev-parse HEAD) == $(cat "$C0_G2_RUN/source_commit.txt") ]] || {
-        echo "C0-G2 and C0-G4 must use the same source commit." >&2
-        exit 1
-    }
-    sha256sum -c "$C0_G2_RUN/model_sha256.txt"
-fi
-if [[ "$STAGE" =~ ^c0g[24]$ ]]; then
     echo "3ae99bb940fad6fab3b488bc4ea7d01e8755a3677161f0c29dffb5e476721fa8  $ITERATION_MANIFEST" | sha256sum -c -
+    sha256sum -c "$R4_RUN/model_sha256.txt"
 fi
 if [[ "$STAGE" =~ ^r2(p|g)$ ]]; then
     PARENT_RUN_DIR="$EXPERIMENT_ROOT/$PARENT_EXP_NAME"
@@ -278,7 +267,7 @@ git -C "$PROJECT_ROOT" status --porcelain > "$RUN_DIR/source_status.txt"
 cp "$DEV_MANIFEST" "$RUN_DIR/dev_tokens.txt"
 if [[ "$STAGE" == d0 ]]; then
     cp "$TRAIN_MANIFEST" "$RUN_DIR/train_tokens.txt"
-elif [[ "$STAGE" =~ ^(t0|e[1-4]|r1|r2p|r2g|r4|f4|c0g2|c0g4)$ ]]; then
+elif [[ "$STAGE" =~ ^(t0|e[1-4]|r1|r2p|r2g|r4|f4|r4raw)$ ]]; then
     cp "$ITERATION_MANIFEST" "$RUN_DIR/train_tokens.txt"
 fi
 printf 'stage=%s\nexperiment=%s\nseed=%s\ntrain_manifest=%s\nreward_function=%s\nadv_estimator=%s\nrollout_n=%s\nrollout_batch_size=4\nmax_steps=%s\nsave_freq=%s\nsave_limit=%s\nskip_final_validation=%s\nonline_filtering=%s\nfilter_mode=%s\nmax_try_make_batch=%s\nparent_experiment=%s\n' \
@@ -288,7 +277,7 @@ printf 'stage=%s\nexperiment=%s\nseed=%s\ntrain_manifest=%s\nreward_function=%s\
     > "$RUN_DIR/run.env"
 if [[ "$STAGE" == t0 ]]; then
     sha256sum "$ACTIVE_MANIFEST" > "$RUN_DIR/input_sha256.txt"
-elif [[ "$STAGE" =~ ^(r4|f4|c0g2|c0g4)$ ]]; then
+elif [[ "$STAGE" =~ ^(r4|f4|r4raw)$ ]]; then
     sha256sum "$ACTIVE_MANIFEST" "$DEV_MANIFEST" "$HELDOUT_MANIFEST" > "$RUN_DIR/input_sha256.txt"
     sha256sum "$MODEL_PATH"/model-*.safetensors "$MODEL_PATH/config.json" \
         "$MODEL_PATH/model.safetensors.index.json" > "$RUN_DIR/model_sha256.txt"
@@ -310,7 +299,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ "$STAGE" =~ ^(t0|r4|f4|c0g2|c0g4)$ ]]; then
+if [[ "$STAGE" =~ ^(t0|r4|f4|r4raw)$ ]]; then
     printf 'timestamp,memory_used_mib,memory_free_mib,utilization_percent\n' > "$RUN_DIR/gpu_memory.csv"
     (
         while [[ -e "$RUN_DIR/RUNNING" ]]; do
@@ -515,7 +504,7 @@ PY
         --expected-rollouts 1 \
         > "$RUN_DIR/final_dev_metrics.json"
 
-    if [[ "$STAGE" =~ ^(r4|f4|c0g2|c0g4)$ ]]; then
+    if [[ "$STAGE" =~ ^(r4|f4|r4raw)$ ]]; then
         STEP125_CHECKPOINT="$RUN_DIR/checkpoints/global_step_125"
         STEP250_CHECKPOINT="$RUN_DIR/checkpoints/global_step_250"
         STEP125_EXP_NAME="${EXP_NAME}_step125_dev"
@@ -527,12 +516,10 @@ PY
             REFERENCE_LABEL=r4
             REFERENCE_STEP125_ROLLOUTS="$R4_RUN/step125_dev_rollouts.jsonl"
             REFERENCE_STEP250_ROLLOUTS="$R4_RUN/dev_rollouts.jsonl"
-        elif [[ "$STAGE" == c0g4 ]]; then
-            REFERENCE_LABEL=c0g2
-            REFERENCE_STEP125_ROLLOUTS="$C0_G2_RUN/step125_dev_rollouts.jsonl"
-            REFERENCE_STEP250_ROLLOUTS="$C0_G2_RUN/dev_rollouts.jsonl"
         else
-            REFERENCE_LABEL=
+            REFERENCE_LABEL=r4_sdr
+            REFERENCE_STEP125_ROLLOUTS="$R4_RUN/step125_dev_rollouts.jsonl"
+            REFERENCE_STEP250_ROLLOUTS="$R4_RUN/dev_rollouts.jsonl"
         fi
         for path in "$STEP125_CHECKPOINT/actor" "$STEP250_CHECKPOINT/actor"; do
             [[ -d "$path" ]] || { echo "Missing preregistered $STAGE checkpoint: $path" >&2; exit 1; }
@@ -581,20 +568,18 @@ PY
             --manifest "$DEV_MANIFEST" \
             --expected-rollouts 1 \
             > "$RUN_DIR/step125_dev_metrics.json"
-        if [[ -n "$REFERENCE_LABEL" ]]; then
-            "$WORKSPACE_ROOT/envs/curious/bin/python" "$PROJECT_ROOT/projects/safe_grpo/compare_paired_rollouts.py" \
-                --baseline "$REFERENCE_STEP125_ROLLOUTS" \
-                --candidate "$RUN_DIR/step125_dev_rollouts.jsonl" \
-                --manifest "$DEV_MANIFEST" \
-                --output "$RUN_DIR/step125_vs_${REFERENCE_LABEL}_paired.json" \
-                --seed "$SEED" > "$RUN_DIR/step125_vs_${REFERENCE_LABEL}_paired.stdout.json"
-            "$WORKSPACE_ROOT/envs/curious/bin/python" "$PROJECT_ROOT/projects/safe_grpo/compare_paired_rollouts.py" \
-                --baseline "$REFERENCE_STEP250_ROLLOUTS" \
-                --candidate "$RUN_DIR/dev_rollouts.jsonl" \
-                --manifest "$DEV_MANIFEST" \
-                --output "$RUN_DIR/step250_vs_${REFERENCE_LABEL}_paired.json" \
-                --seed "$SEED" > "$RUN_DIR/step250_vs_${REFERENCE_LABEL}_paired.stdout.json"
-        fi
+        "$WORKSPACE_ROOT/envs/curious/bin/python" "$PROJECT_ROOT/projects/safe_grpo/compare_paired_rollouts.py" \
+            --baseline "$REFERENCE_STEP125_ROLLOUTS" \
+            --candidate "$RUN_DIR/step125_dev_rollouts.jsonl" \
+            --manifest "$DEV_MANIFEST" \
+            --output "$RUN_DIR/step125_vs_${REFERENCE_LABEL}_paired.json" \
+            --seed "$SEED" > "$RUN_DIR/step125_vs_${REFERENCE_LABEL}_paired.stdout.json"
+        "$WORKSPACE_ROOT/envs/curious/bin/python" "$PROJECT_ROOT/projects/safe_grpo/compare_paired_rollouts.py" \
+            --baseline "$REFERENCE_STEP250_ROLLOUTS" \
+            --candidate "$RUN_DIR/dev_rollouts.jsonl" \
+            --manifest "$DEV_MANIFEST" \
+            --output "$RUN_DIR/step250_vs_${REFERENCE_LABEL}_paired.json" \
+            --seed "$SEED" > "$RUN_DIR/step250_vs_${REFERENCE_LABEL}_paired.stdout.json"
         "$WORKSPACE_ROOT/envs/curious/bin/python" "$PROJECT_ROOT/projects/safe_grpo/compare_paired_rollouts.py" \
             --baseline "$RUN_DIR/step125_dev_rollouts.jsonl" \
             --candidate "$RUN_DIR/dev_rollouts.jsonl" \
@@ -609,6 +594,17 @@ PY
                 --output "$RUN_DIR/step250_vs_e2_paired.json" \
                 --seed "$SEED" > "$RUN_DIR/step250_vs_e2_paired.stdout.json"
         fi
+    fi
+    if [[ "$STAGE" =~ ^(r4|f4|r4raw)$ ]]; then
+        kill "$GPU_MONITOR_PID" 2>/dev/null || true
+        wait "$GPU_MONITOR_PID" 2>/dev/null || true
+        unset GPU_MONITOR_PID
+        "$WORKSPACE_ROOT/envs/curious/bin/python" "$PROJECT_ROOT/projects/safe_grpo/export_training_evidence.py" \
+            --experiment-log "$RUN_DIR/checkpoints/experiment_log.jsonl" \
+            --gpu-memory "$RUN_DIR/gpu_memory.csv" \
+            --train-rollouts "$RUN_DIR/train_rollouts.jsonl" \
+            --output-dir "$RUN_DIR/training_evidence" \
+            > "$RUN_DIR/training_evidence.stdout.json"
     fi
 fi
 

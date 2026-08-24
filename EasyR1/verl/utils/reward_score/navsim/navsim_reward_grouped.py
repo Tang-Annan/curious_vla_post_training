@@ -25,9 +25,12 @@ _log_path = os.path.join(_log_dir, f"generations_{datetime.now():%m%d%H%M}.jsonl
 _log_lock = threading.Lock()
 
 
-def _zero_result(token: str, response_length: int, poses: list[list[float]]) -> tuple[dict[str, float], dict[str, Any]]:
+def _zero_result(
+    token: str, response: str, response_length: int, poses: list[list[float]]
+) -> tuple[dict[str, float], dict[str, Any]]:
     log_row = {
         "token": token,
+        "response": response,
         "response_length": response_length,
         "parsed_ok": False,
         "poses": poses,
@@ -35,6 +38,11 @@ def _zero_result(token: str, response_length: int, poses: list[list[float]]) -> 
         "training_reward": 0.0,
         "pdms": 0.0,
         "pdms_scaled": 0.0,
+        "no_at_fault_collisions": 0.0,
+        "drivable_area_compliance": 0.0,
+        "ego_progress": 0.0,
+        "time_to_collision_within_bound": 0.0,
+        "history_comfort": 0.0,
         "reward_latency_ms": 0.0,
     }
     score = {
@@ -55,28 +63,29 @@ def _zero_result(token: str, response_length: int, poses: list[list[float]]) -> 
 
 
 def _score_groups(reward_inputs: list[dict[str, Any]], reward_mode: str) -> list[dict[str, float]]:
-    if reward_mode not in {"scaled_pdms", "sldr"}:
+    if reward_mode not in {"raw_pdms", "scaled_pdms", "sldr"}:
         raise ValueError(f"Unknown reward_mode: {reward_mode}")
 
     parse_fn = get_trajectory_parser()
     scores: list[dict[str, float] | None] = [None] * len(reward_inputs)
     log_rows: list[dict[str, Any] | None] = [None] * len(reward_inputs)
-    groups: dict[str, list[tuple[int, int, list[list[float]]]]] = defaultdict(list)
+    groups: dict[str, list[tuple[int, int, list[list[float]], str]]] = defaultdict(list)
     for index, item in enumerate(reward_inputs):
         token = item["ground_truth"]["token"]
+        raw_response = item["response"]
         response_length = int(item.get("response_length", 0))
-        poses = parse_fn(item["response"])
+        poses = parse_fn(raw_response)
         if not poses or len(poses) != 8:
-            scores[index], log_rows[index] = _zero_result(token, response_length, poses or [])
+            scores[index], log_rows[index] = _zero_result(token, raw_response, response_length, poses or [])
             continue
-        groups[token].append((index, response_length, denormalize(poses)))
+        groups[token].append((index, response_length, denormalize(poses), raw_response))
 
     with httpx.Client(trust_env=False, timeout=_timeout) as client:
         for token, items in groups.items():
             started = time.perf_counter()
             response = client.post(
                 f"{_server_url}/score_group",
-                json={"token": token, "poses": [poses for _, _, poses in items], "verbose": False},
+                json={"token": token, "poses": [poses for _, _, poses, _ in items], "verbose": False},
             )
             response.raise_for_status()
             metrics_list = response.json()
@@ -84,13 +93,16 @@ def _score_groups(reward_inputs: list[dict[str, Any]], reward_mode: str) -> list
                 raise RuntimeError(f"score_group returned {len(metrics_list)} results for {len(items)} poses")
             latency_ms = (time.perf_counter() - started) * 1000.0
 
-            for (index, response_length, poses), metrics in zip(items, metrics_list):
+            for (index, response_length, poses, raw_response), metrics in zip(items, metrics_list):
                 missing = [key for key in REQUIRED_METRICS if key not in metrics]
                 if missing:
                     raise KeyError(f"Missing NAVSIM metrics: {', '.join(missing)}")
-                training_reward = (
-                    float(metrics["pdms_scaled"]) if reward_mode == "scaled_pdms" else compute_sldr(metrics)
-                )
+                if reward_mode == "raw_pdms":
+                    training_reward = float(metrics["pdms"])
+                elif reward_mode == "scaled_pdms":
+                    training_reward = float(metrics["pdms_scaled"])
+                else:
+                    training_reward = compute_sldr(metrics)
                 safe = float(
                     float(metrics["no_at_fault_collisions"]) > 0.0
                     and float(metrics["drivable_area_compliance"]) > 0.0
@@ -111,6 +123,7 @@ def _score_groups(reward_inputs: list[dict[str, Any]], reward_mode: str) -> list
                 }
                 log_rows[index] = {
                     "token": token,
+                    "response": raw_response,
                     "response_length": response_length,
                     "parsed_ok": True,
                     "poses": poses,
@@ -138,6 +151,10 @@ def _score_groups(reward_inputs: list[dict[str, Any]], reward_mode: str) -> list
 
 def compute_score_group_fast(reward_inputs: list[dict[str, Any]]) -> list[dict[str, float]]:
     return _score_groups(reward_inputs, reward_mode="scaled_pdms")
+
+
+def compute_score_group_raw_pdms(reward_inputs: list[dict[str, Any]]) -> list[dict[str, float]]:
+    return _score_groups(reward_inputs, reward_mode="raw_pdms")
 
 
 def compute_score_sldr(reward_inputs: list[dict[str, Any]]) -> list[dict[str, float]]:
