@@ -601,6 +601,96 @@ def test_a0_launcher_is_cpu_only_and_does_not_write_a_manifest():
     assert "--heldout-manifest" in source
 
 
+def test_p0_g4_adas_audit_selects_the_first_valid_preregistered_candidate(tmp_path):
+    pytest.importorskip("pandas")
+    audit = load_module(
+        ROOT / "projects/safe_grpo/audit_adas_g4_parameters.py", "audit_adas_g4_parameters"
+    )
+    train_tokens = [f"t{index:04d}" for index in range(1400)]
+    variable = set(train_tokens[:1000])
+    train = tmp_path / "train.txt"
+    dev = tmp_path / "dev.txt"
+    heldout = tmp_path / "heldout.txt"
+    random_manifest = tmp_path / "random.txt"
+    scores = tmp_path / "scores.csv"
+    output = tmp_path / "p0"
+    train.write_text("\n".join(train_tokens) + "\n", encoding="utf-8")
+    dev.write_text("dev\n", encoding="utf-8")
+    heldout.write_text("heldout\n", encoding="utf-8")
+    random_tokens = train_tokens[1000:] + train_tokens[:600]
+    random_manifest.write_text("\n".join(random_tokens) + "\n", encoding="utf-8")
+    rows = ["token,pdms,pdms_scaled"]
+    for token in train_tokens:
+        values = (0.0, 0.0, 1.0, 1.0) if token in variable else (0.0, 0.0, 0.0, 0.0)
+        rows.extend(f"{token},{value},{value}" for value in values)
+    scores.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    report = audit.audit(
+        Namespace(
+            adas_scores=scores,
+            train_manifest=train,
+            dev_manifest=dev,
+            heldout_manifest=heldout,
+            random_manifest=random_manifest,
+            output_dir=output,
+            seed=20260812,
+        )
+    )
+
+    assert report["decision"] == "freeze_adas_g4_manifest_for_a4_sdr"
+    assert report["chosen_parameters"]["epsilon_diversity"] == pytest.approx(0.20)
+    assert report["candidates"][0]["eligible_tokens"] == 1000
+    assert report["candidates"][0]["gates"]["passed"] is True
+    assert len(audit.load_tokens(output / "adas_g4_train_seed20260812_1000.txt")) == 1000
+
+
+def test_p0_g4_adas_audit_writes_no_manifest_when_all_groups_are_constant(tmp_path):
+    pytest.importorskip("pandas")
+    audit = load_module(
+        ROOT / "projects/safe_grpo/audit_adas_g4_parameters.py", "audit_adas_g4_parameters_empty"
+    )
+    tokens = [f"t{index:04d}" for index in range(1000)]
+    paths = {name: tmp_path / f"{name}.txt" for name in ("train", "dev", "heldout", "random")}
+    paths["train"].write_text("\n".join(tokens) + "\n", encoding="utf-8")
+    paths["dev"].write_text("dev\n", encoding="utf-8")
+    paths["heldout"].write_text("heldout\n", encoding="utf-8")
+    paths["random"].write_text("\n".join(tokens) + "\n", encoding="utf-8")
+    scores = tmp_path / "scores.csv"
+    rows = ["token,pdms,pdms_scaled"]
+    for token in tokens:
+        rows.extend(f"{token},0.0,0.0" for _ in range(4))
+    scores.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    output = tmp_path / "p0"
+
+    report = audit.audit(
+        Namespace(
+            adas_scores=scores,
+            train_manifest=paths["train"],
+            dev_manifest=paths["dev"],
+            heldout_manifest=paths["heldout"],
+            random_manifest=paths["random"],
+            output_dir=output,
+            seed=20260812,
+        )
+    )
+
+    assert report["decision"] == "close_adas_route_no_valid_g4_parameters"
+    assert report["manifest_written"] is False
+    assert not (output / "adas_g4_train_seed20260812_1000.txt").exists()
+
+
+def test_p0_launcher_is_cpu_only_and_freezes_the_g4_candidate_order():
+    source = (ROOT / "scripts/run_p0_adas_g4_parameter_audit.sh").read_text(encoding="utf-8")
+    assert "CUDA_VISIBLE_DEVICES=''" in source
+    assert "n_rollout=4" in source
+    assert "group_size=4" in source
+    assert "epsilon_candidates=0.20,0.35" in source
+    assert "maximum_pool_ratio=0.80" in source
+    assert "4ade4d7fac38eaec1685249058b1ffe51a402b12d92d606f91cd0eed50930785" in source
+    assert "P0 report and manifest presence disagree." in source
+    assert "P0 manifest contains tokens outside train." in source
+
+
 def test_r0_difficulty_bias_analysis_and_gates(tmp_path):
     analysis = load_module(
         ROOT / "projects/safe_grpo/analyze_difficulty_bias.py", "analyze_difficulty_bias"

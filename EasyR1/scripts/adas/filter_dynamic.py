@@ -20,6 +20,45 @@ import numpy as np
 import pandas as pd
 
 
+def filter_groups(
+    df: pd.DataFrame,
+    p: float,
+    n_rollout: int,
+    group_size: int,
+    std_threshold: float,
+    conf: float,
+) -> pd.DataFrame:
+    """Apply the production ADAS gates to precomputed group statistics."""
+    df_filtered = df[df["pdms_std"] > std_threshold].copy()
+    print(f"  Stage 1 (std > {std_threshold}): {len(df_filtered)} remaining")
+
+    df_filtered = df_filtered[df_filtered["pdms_range"] > 1e-6].copy()
+    df_filtered["p_est"] = df_filtered["pdms_mean"] / df_filtered["pdms_range"]
+    df_filtered["diversity_metric"] = (
+        df_filtered["p_est"] ** n_rollout + (1 - df_filtered["p_est"]) ** n_rollout
+    )
+    df_filtered = df_filtered[df_filtered["diversity_metric"] < p].copy()
+    print(f"  Stage 2 (diversity < {p}): {len(df_filtered)} remaining")
+
+    if df_filtered.empty:
+        df_filtered["predicted_std"] = np.nan
+        df_filtered["confidence_error"] = np.nan
+        return df_filtered
+
+    n = pd.Series(group_size, index=df_filtered.index, dtype=int)
+    n_safe = n.where(n > 1, other=np.nan)
+    k_est = (df_filtered["p_est"] * n_safe).round()
+    df_filtered["predicted_std"] = (
+        np.sqrt(k_est * (n_safe - k_est) / (n_safe * (n_safe - 1))) * df_filtered["pdms_range"]
+    )
+    df_filtered["confidence_error"] = (
+        np.abs(df_filtered["predicted_std"] - df_filtered["pdms_std"]) / df_filtered["pdms_std"]
+    )
+    final_df = df_filtered[df_filtered["confidence_error"] < conf].copy()
+    print(f"  Stage 3 (confidence < {conf}): {len(final_df)} remaining")
+    return final_df
+
+
 def main(
     csv_path: str,
     output_csv: str | None = None,
@@ -41,37 +80,7 @@ def main(
     df = pd.read_csv(csv_path)
     print(f"Input rows: {len(df)}")
 
-    df_filtered = df.copy()
-
-    # Stage 1: std filter
-    df_filtered = df_filtered[df_filtered["pdms_std"] > std_threshold].copy()
-    print(f"  Stage 1 (std > {std_threshold}): {len(df_filtered)} remaining")
-
-    # Stage 2: diversity filter
-    df_filtered = df_filtered[df_filtered["pdms_range"] > 1e-6].copy()
-    df_filtered["p_est"] = df_filtered["pdms_mean"] / df_filtered["pdms_range"]
-
-    diversity_metric = df_filtered["p_est"] ** n_rollout + (1 - df_filtered["p_est"]) ** n_rollout
-    df_filtered["diversity_metric"] = diversity_metric
-    df_filtered = df_filtered[df_filtered["diversity_metric"] < p].copy()
-    print(f"  Stage 2 (diversity < {p}): {len(df_filtered)} remaining")
-
-    # Stage 3: confidence check
-    if not df_filtered.empty:
-        n = pd.Series(group_size, index=df_filtered.index, dtype=int)
-        n_safe = n.where(n > 1, other=np.nan)
-
-        k_est = (df_filtered["p_est"] * n_safe).round()
-        predicted_std = np.sqrt(k_est * (n_safe - k_est) / (n_safe * (n_safe - 1))) * df_filtered["pdms_range"]
-        df_filtered["predicted_std"] = predicted_std
-
-        confidence_error = np.abs(predicted_std - df_filtered["pdms_std"]) / df_filtered["pdms_std"]
-        df_filtered["confidence_error"] = confidence_error
-
-        final_df = df_filtered[df_filtered["confidence_error"] < conf].copy()
-        print(f"  Stage 3 (confidence < {conf}): {len(final_df)} remaining")
-    else:
-        final_df = df_filtered
+    final_df = filter_groups(df, p, n_rollout, group_size, std_threshold, conf)
 
     # Write filtered CSV
     output_columns = df.columns.tolist()
