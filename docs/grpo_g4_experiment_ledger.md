@@ -7,8 +7,8 @@
 
 ## 1. 当前决策快照
 
-- 当前阶段：`F4-SDR`。R4-SDR 相对同 selector 的历史 E1 G2 通过点估计晋级线，但未超过 Stage-2 E0；现在只检验 FALS 在 G4 下相对 Random-G4 的独立贡献。
-- 当前唯一动作：从同一 Stage-2 checkpoint 独立训练 `F4-SDR`，使用冻结 FALS-1k、SDR 和 `G=4`，在预注册 step 125/250 上直接与 R4-SDR 比较，并把 E2 仅作为 FALS-G2 参考。
+- 当前阶段：`A0`。F4-SDR 未达到相对 R4-SDR 的 `+0.010` 晋级线；现在先做零 GPU 的 ADAS eligible-pool 定义审计，禁止在 selector 未定义时启动 A2/A4。
+- 当前唯一动作：核对发布 ADAS token file 与冻结 train/dev/held-out 的覆盖和来源边界；只有它在 train 内形成至少 1,000 个且真正有选择性的 eligible pool，才允许冻结 ADAS-1k manifest。
 - 当前最佳历史候选：`E2 = FALS-1k + SDR + GRPO, G=2`。它只是在单一训练 seed 的旧 dev 上优于其他已训练变体，不能声明稳定超过 Stage-2。
 - SLDR 当前状态：S0 科学负向，永久关闭本轮 `R4-SLDR` 与 `AF4-SLDR`；不调 `0.5/0.1/0.6` 系数，不做 dev sweep。
 - SDR 当前状态：继续作为主 reward。若 SLDR 未通过，先完成 `G=4 + SDR` 的 Random/FALS/ADAS 单变量对照，再根据失败类型决定是否设计新的非线性映射或 tie-aware 方法。
@@ -20,8 +20,9 @@
 | T0 | 技术通过 | smoke | 目标 RTX 4090 24 GB GPU 是否能保持科学协议运行 `G=4` | 峰值 21,222 MiB，进入 S0 |
 | S0 | 科学负向 | 0 | SLDR 在 `G=4` 下是否真的改变有效 advantage，而不只是改变 raw reward 数值 | 多项门控失败；关闭 SLDR |
 | R4-SDR | 系统级正向、未超 E0 | full | Random 场景下 `G=4` 的系统收益与额外查询成本 | 相对 E1 晋级；相对 E0 持平偏负 |
-| F4-SDR | 待执行 | full | FALS 在 `G=4` 下是否仍优于 Random | 当前唯一动作；与 R4-SDR、E2 对照 |
-| A2/A4-SDR | 待建立 ADAS-1k | full ×2 | 同一 ADAS 场景集下 `G=2→4` 的变化 | 先冻结标准化 ADAS manifest |
+| F4-SDR | 科学未晋级 | full | FALS 在 `G=4` 下是否仍优于 Random | 相对 R4 仅 +0.00576；关闭 FALS-G4 扩展 |
+| A0 | 待执行 | 0 | 发布 ADAS gate 在冻结 train 内是否形成有选择性的 eligible pool | 当前唯一动作；定义门控 |
+| A2/A4-SDR | 被 A0 阻塞 | full ×2 | 同一 ADAS 场景集下 `G=2→4` 的变化 | 仅在 A0 可冻结 ADAS-1k 后运行 |
 | R4-SLDR | 按门控跳过 | 0 | SLDR 在 `G=4` 下是否优于同协议 SDR | S0 失败，禁止运行 |
 | AF4-SDR | 被 F4/A4 阻塞 | full | ADAS gate 后再用 FALS 排序是否有独立贡献 | 先完成 Hybrid train-only 审计 |
 | AF4-SLDR | 按门控跳过 | 0 | 同一 Hybrid selector 下 SLDR 是否优于 SDR | S0 失败，禁止运行 |
@@ -215,7 +216,7 @@ T0 是本轮第一门控。在目标 RTX 4090 24 GB GPU 上先运行不访问 de
 | 0 | T0 | Random smoke | SDR | 4 | RTX 4090 24 GB GPU 是否满足原协议 | 无 dev | 已通过 |
 | 1 | S0 | D0 train-only | SDR vs SLDR offline | 2/4 replay | SLDR 是否值得一次 G4 训练 | 无 GPU | 已完成；科学负向 |
 | 2 | R4-SDR | Random-1k | SDR + GRPO | 4 | Random 下 G4 系统效果 | E1 | 已完成；相对 E1 晋级 |
-| 3 | F4-SDR | FALS-1k | SDR + GRPO | 4 | FALS 在 G4 下的贡献 | R4-SDR；E2 仅作 G2 参考 | 当前唯一动作；R4-SDR 已完成 |
+| 3 | F4-SDR | FALS-1k | SDR + GRPO | 4 | FALS 在 G4 下的贡献 | R4-SDR；E2 仅作 G2 参考 | 已完成；未晋级 |
 | 4 | A2-SDR | ADAS-1k | SDR + GRPO | 2 | 建立同协议 ADAS-G2 | E1/E2 | ADAS pool/manifest 冻结 |
 | 5 | A4-SDR | 同一 ADAS-1k | SDR + GRPO | 4 | ADAS 内部的 G2→4 变化 | A2-SDR | A2 完成、T0 通过 |
 | 6 | R4-SLDR | Random-1k | SLDR + GRPO | 4 | SLDR 在 G4 下的独立贡献 | R4-SDR | S0 全通过、R4-SDR 完成 |
@@ -319,8 +320,9 @@ SDR 本身已经是 nonlinear focal reward。SLDR 失败后，不默认再叠加
 | T0 | Random + SDR G4 smoke | 技术通过 | 不访问 dev | 不访问 dev | 40 groups × 4；parse 100%；zero group 12.5% | 160 queries；918 秒；峰值 21,222 MiB | 24 GB 支持完整 G4 协议 |
 | S0 | D0 SDR/SLDR geometry audit | 科学负向 | 不适用 | 不适用 | `ΔA≥0.10` 2.59%；zero 仅降 0.575 pp；30 条 safe 错标；DAC CI 全负 | 0 GPU；6.27 秒 | 关闭全部 SLDR 正式训练 |
 | R4-SDR | Random + SDR + GRPO | 技术通过、系统级正向 | `0.65750 / 0.72085` | `0.65889 / 0.72438` | zero 22.1%；parse 99.9%；headroom 0.28310 | 4,000 train queries；峰值 21,294 MiB | 相对 E1 晋级但未超 E0；进入 F4 |
-| F4-SDR | FALS + SDR + GRPO | 待执行 | 待填 | 待填 | 待填 | 待填 | 当前唯一动作 |
-| A2-SDR | ADAS + SDR + GRPO | 待建 manifest | 不适用 | 待填 | 待填 | 待填 | 待填 |
+| F4-SDR | FALS + SDR + GRPO | 技术通过、科学未晋级 | `0.65653 / 0.72085` | `0.66465 / 0.72968` | zero 7.5%；parse 99.95%；headroom 0.49786 | 4,000 train queries；峰值 21,266 MiB | 相对 R4 +0.00576，未达线 |
+| A0 | 发布 ADAS pool 定义审计 | 待执行 | 不适用 | 不适用 | 待填 | 0 GPU | 当前唯一动作 |
+| A2-SDR | ADAS + SDR + GRPO | 被 A0 阻塞 | 不适用 | 待填 | 待填 | 待填 | 待填 |
 | A4-SDR | ADAS + SDR + GRPO | 被阻塞 | 待填 | 待填 | 待填 | 待填 | 待填 |
 | R4-SLDR | Random + SLDR + GRPO | 按门控跳过 | 不适用 | 不适用 | S0 科学门控失败 | 0 | 禁止运行 |
 | AF4-SDR | ADAS+FALS + SDR + GRPO | 被阻塞 | 待填 | 待填 | 待填 | 待填 | 待填 |
@@ -406,6 +408,22 @@ SDR 本身已经是 nonlinear focal reward。SLDR 失败后，不默认再叠加
 - 决策：R4-SDR 相对预注册直接对照 E1 通过发现门控并列入后续 paired second-seed 候选；由于仍未超过 E0，不能宣称 Random-G4 带来净模型提升。按矩阵先执行 F4-SDR，检验 FALS 在相同 G4 协议下是否优于 Random。
 - 下一动作：只执行 `F4-SDR`；在启动前保留 R4 step250 与全部评估证据，只清理已完成评估的 step125 大体积 full-state 文件以满足磁盘预算。
 
+### 记录 G4-004：F4-SDR FALS-G4 正式实验完成
+
+- 状态：技术通过，科学未晋级。
+- 假设与直接对照：在同一 Stage-2、SDR、G4、1,000 scene、250 update 协议下，只把 Random-1k 改为冻结 FALS-1k；直接对照 R4-SDR，E2 只作 FALS-G2 参考。
+- 预注册门控：相对 R4-SDR，PDMS scaled 至少 `+0.01000`，Safe/Collision/DAC 均不下降，parse 至少 99.5%，无 clipping/NaN/覆盖缺口。
+- 代码与配置：source `75e767aed4a9a00d2a7ec84878c5e3ef368eccf4`，source status 为空；FALS-1k SHA-256 `fd62a6f204806beff51fa7e1fb0f853027655b4b47f00f9633c787b04e0ffed0`，1,000 个唯一 train token，dev/held-out 重叠 0；其余配置与 R4 字节级同类，step125/250 均保存并评估。
+- 数据与技术结果：`COMPLETE`、`exit_code=0`；1,000 group、4,000 train rollout，每组严格 4 条；step125/250 dev 各 566 条。train parse `99.95%`（2 条 parse-failure），两套 dev 100%，clipping 0，全部指标 finite；无 OOM、NaN、traceback、CUDA、no-space 或 killed。step125/250 LoRA SHA-256 为 `27531d6b...9d35`、`3b84e01c...9de4`；GPU、Ray、Gunicorn/8901 与训练进程全部回收。
+- 训练信号：exact-zero group `7.5%`、`0<std<0.05` group `0.4%`、平均 headroom `0.49786`；train PDMS scaled `0.36090`、Safe `0.39450`。FALS 确实把预算集中到更难且更有组内差异的场景，但该信号变化未转化为足够的 dev 增益。
+- 探索性效果：step125 PDMS scaled/PDMS/Safe 为 `0.65653 / 0.68065 / 0.72085`，step250 为 `0.66465 / 0.68945 / 0.72968`。step250 相对 R4 的 PDMS scaled/PDMS/Safe/Collision/DAC 为 `+0.00576 / +0.00621 / +0.00530 / +0.00265 / +0.00530`；主要安全点估计不降，但 PDMS scaled 未达到 `+0.01000`。
+- 不确定性：step250−R4 的 PDMS scaled 95% paired bootstrap CI 为 `[-0.01617,+0.02747]`；step125−R4 为 `-0.00097`（`[-0.02458,+0.02336]`）。step250 相对 E2-G2 的 PDMS scaled/Safe 为 `-0.00765 / -0.01060`，CI 均跨 0；没有证据表明 FALS 从 G2 扩到 G4 获益。
+- 成本：4,000 train reward query，另有 566×2 次 dev query；250 step 合计 `13,331.19` 秒（均值 `53.32` 秒/step），launcher 墙钟约 4 小时 16 分；13,894 个 1 秒 GPU 样本，峰值 `21,266 MiB`、最低剩余 `2,816 MiB`、utilization 峰值 100%；完成时磁盘剩余约 6.1 GB。
+- 产物清理：全部评估、paired report 与 LoRA hash 固化且进程回收后，删除 F4 step125/250 和 R4 step250 的三个 `model_world_size_1_rank_0.pt`（各 `8,144,550,392` bytes，不可恢复）；保留所有 LoRA/optimizer/config/rollout/report，磁盘空余回升至约 29 GB。C0 若执行将按协议从 Stage-2 独立重训，不依赖这些 full-state。
+- 分析边界：F4 说明在当前单 seed 已访问 dev 上，FALS-G4 相对 Random-G4 的点增益不足预注册阈值；不能据此否定历史 E2-G2，也不能用更好的 train variance 替代效果门控。
+- 决策：F4-SDR 未晋级，关闭 FALS 的 G4 扩展，不把 F4 纳入 second-seed 候选；继续前置审计 ADAS 定义。
+- 下一动作：只执行零 GPU `A0`，判断能否冻结一个真实有选择性的 train-only ADAS-1k manifest。
+
 ## 11. 当前下一动作
 
-只执行 `F4-SDR`：先确认 RTX 4090 24 GB 空闲、无残留进程、source clean、冻结 FALS-1k/Stage-2/R4 对照证据完整和目标目录不存在；随后从 Stage-2 独立运行 250-step `FALS + SDR + GRPO, G=4`，保存预注册 step125/250 并由 Luna 只读监控。F4 完成前不启动 ADAS、Hybrid、second-seed 或任何 SLDR 实验。
+只执行零 GPU `A0`：审计发布 ADAS filter 与冻结 split 的覆盖、selectivity 和 G4 Bernoulli 边界；若无法形成至少 1,000 个且真正有选择性的 train-only eligible pool，则 A2/A4 与所有 ADAS-Hybrid 路线按定义门控关闭，不得把全 train 均匀抽样伪装成 ADAS。

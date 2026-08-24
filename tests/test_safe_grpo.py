@@ -434,6 +434,52 @@ def test_s0_launcher_is_train_only_and_hash_frozen():
     assert "heldout" not in source
 
 
+def test_a0_audit_blocks_released_filter_that_admits_all_train_tokens(tmp_path):
+    audit = load_module(ROOT / "projects/safe_grpo/audit_adas_pool.py", "audit_adas_pool")
+    released = tmp_path / "released.txt"
+    train = tmp_path / "train.txt"
+    dev = tmp_path / "dev.txt"
+    heldout = tmp_path / "heldout.txt"
+    random = tmp_path / "random.txt"
+    output = tmp_path / "report.json"
+    train_tokens = [f"t{index}" for index in range(1000)]
+    train.write_text("\n".join(train_tokens) + "\n", encoding="utf-8")
+    dev.write_text("dev\n", encoding="utf-8")
+    heldout.write_text("heldout\n", encoding="utf-8")
+    random.write_text("\n".join(train_tokens) + "\n", encoding="utf-8")
+    released.write_text("\n".join(train_tokens + ["dev", "heldout"]) + "\n", encoding="utf-8")
+
+    report = audit.audit(
+        Namespace(
+            released_filter=released,
+            train_manifest=train,
+            dev_manifest=dev,
+            heldout_manifest=heldout,
+            random_manifest=random,
+            output=output,
+        )
+    )
+
+    assert report["coverage"]["eligible_train_ratio"] == pytest.approx(1.0)
+    assert report["coverage"]["train_tokens_excluded_by_released_gate"] == 0
+    assert report["gates"]["eligible_pool_at_least_1000"] is True
+    assert report["gates"]["released_gate_is_selective_within_train"] is False
+    assert report["g4_bernoulli_boundary"]["minimum_p_to_n_plus_one_minus_p_to_n"] == pytest.approx(0.125)
+    assert report["decision"] == "freeze_adas_and_hybrid_routes_as_undefined"
+    assert report["manifest_written"] is False
+    assert output.stat().st_size > 0
+
+
+def test_a0_launcher_is_cpu_only_and_does_not_write_a_manifest():
+    source = (ROOT / "scripts/run_a0_adas_pool_audit.sh").read_text(encoding="utf-8")
+    assert "curious_vla_qwen2_5_vl_3b_sft_stage2_adas1x_6k.txt" in source
+    assert "CUDA_VISIBLE_DEVICES=''" in source
+    assert "manifest_write=false" in source
+    assert "--train-manifest" in source
+    assert "--dev-manifest" in source
+    assert "--heldout-manifest" in source
+
+
 def test_r0_difficulty_bias_analysis_and_gates(tmp_path):
     analysis = load_module(
         ROOT / "projects/safe_grpo/analyze_difficulty_bias.py", "analyze_difficulty_bias"
