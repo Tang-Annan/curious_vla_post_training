@@ -13,6 +13,7 @@ from projects.dataset_v2.build_dataset_v2 import (
     v2_image_path,
 )
 from projects.dataset_v2.freeze_dataset_v2 import load_cache_manifest, validate_assets
+from projects.dataset_v2.experiment_pipeline import adas_eligible, fals_score, spearman
 
 
 def test_intent_normalization_and_image_namespace() -> None:
@@ -82,3 +83,21 @@ def test_dataset_v2_launcher_has_no_legacy_fallbacks() -> None:
     assert "566" not in launcher
     for required in ("--train-parquet", "--dev-parquet", "--cache-manifest", "--cache-dir", "--experiment-root"):
         assert required in launcher
+    assert '^(d0|rollout|train)$' in launcher
+    assert 'TENSORBOARD_DIR="$RUN_DIR/tensorboard"' in launcher
+
+
+def test_selector_formulas_match_preregistered_g4_rules() -> None:
+    eligible = {
+        "pdms_mean": 0.5,
+        "pdms_std": 1 / 3**0.5,
+        "pdms_min": 0.0,
+        "pdms_max": 1.0,
+        "scaled_mean": 0.4,
+        "scaled_std": 0.2,
+        "scaled_max": 0.8,
+    }
+    assert adas_eligible(eligible)
+    assert fals_score(eligible) == (1.0 - 0.4) * (0.8 - 0.4)
+    assert not adas_eligible({**eligible, "pdms_std": 0.0})
+    assert spearman({"a": 1.0, "b": 2.0, "c": 3.0}, {"a": 2.0, "b": 4.0, "c": 6.0}) == 1.0
