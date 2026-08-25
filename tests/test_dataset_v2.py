@@ -1,0 +1,84 @@
+import csv
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from projects.dataset_v2.build_dataset_v2 import (
+    HORIZON_4,
+    HORIZON_5,
+    largest_remainder,
+    log_from_image,
+    normalize_intent,
+    v2_image_path,
+)
+from projects.dataset_v2.freeze_dataset_v2 import load_cache_manifest, validate_assets
+
+
+def test_intent_normalization_and_image_namespace() -> None:
+    prompt = "Current high-level intent (string): turn left\n"
+    assert normalize_intent(prompt) == "left"
+    source = "navsim/trainval_sensor_blobs/trainval/log-a/CAM_F0/frame.jpg"
+    assert log_from_image(source) == "log-a"
+    assert v2_image_path(source, "dataset_v2_20260825") == "dataset_v2_20260825/sensor_blobs/trainval/log-a/CAM_F0/frame.jpg"
+
+
+def test_largest_remainder_is_exact() -> None:
+    quota = largest_remainder({"straight": 65, "left": 26, "right": 9}, 1000)
+    assert quota == {"straight": 650, "left": 260, "right": 90}
+    assert sum(quota.values()) == 1000
+
+
+def test_parquet_schema_roundtrip(tmp_path: Path) -> None:
+    path = tmp_path / "source.parquet"
+    table = pa.table(
+        {
+            "images": [["navsim/trainval_sensor_blobs/trainval/log-a/CAM_F0/frame.jpg"]],
+            "problem": [f"Current high-level intent (string): go straight\n{HORIZON_5}"],
+            "answer": [{"gt": [], "token": "token-a"}],
+        }
+    )
+    pq.write_table(table, path)
+    result = pq.read_table(path).to_pylist()[0]
+    assert result["answer"]["token"] == "token-a"
+    assert HORIZON_4 not in result["problem"]
+
+
+def test_validate_completed_assets(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    cache_dir = tmp_path / "cache"
+    manifest = tmp_path / "cache.csv"
+    final_manifest = tmp_path / "final.txt"
+    rows = []
+    for token in ("active-a", "active-b"):
+        image_path = Path("dataset_v2") / "sensor_blobs" / token / "CAM_F0" / "frame.jpg"
+        image = data_root / image_path
+        image.parent.mkdir(parents=True)
+        image.write_bytes(b"image")
+        cache = cache_dir / token / "metric_cache.pkl"
+        cache.parent.mkdir(parents=True)
+        cache.write_bytes(b"cache")
+        rows.append({"token": token, "log_name": token, "split": "candidate", "image_path": image_path.as_posix()})
+    with manifest.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["token", "log_name", "split", "image_path"])
+        writer.writeheader()
+        writer.writerows(rows)
+    final_manifest.write_text("final-a\n", encoding="utf-8")
+
+    assert len(load_cache_manifest(manifest)) == 2
+    report = validate_assets(data_root, manifest, cache_dir, final_manifest, 2, 1)
+    assert report == {
+        "active_tokens": 2,
+        "readable_images": 2,
+        "metric_caches": 2,
+        "final_reserve_tokens": 1,
+        "final_reserve_state": "manifest_only",
+    }
+
+
+def test_dataset_v2_launcher_has_no_legacy_fallbacks() -> None:
+    launcher = (Path(__file__).parents[1] / "scripts" / "run_dataset_v2_experiment.sh").read_text(encoding="utf-8")
+    assert "metric_cache_released_5656" not in launcher
+    assert "566" not in launcher
+    for required in ("--train-parquet", "--dev-parquet", "--cache-manifest", "--cache-dir", "--experiment-root"):
+        assert required in launcher

@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import gc
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -22,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--maps", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--batch-logs", type=int, default=16)
     return parser.parse_args()
 
 
@@ -42,13 +44,17 @@ def write_metadata(output: Path, paths: dict[str, Path]) -> None:
     save_cache_metadata(entries, output, 0)
 
 
-def cache_log(log_name: str, tokens: list[str], logs: Path, maps: Path, output: Path) -> dict[str, Path]:
+def cache_batch(
+    pending: list[tuple[str, list[str]]], logs: Path, maps: Path, output: Path
+) -> dict[str, Path]:
+    log_names = [log_name for log_name, _ in pending]
+    tokens = [token for _, log_tokens in pending for token in log_tokens]
     scene_filter = SceneFilter(
         num_history_frames=4,
         num_future_frames=10,
         frame_interval=1,
         has_route=True,
-        log_names=[log_name],
+        log_names=log_names,
         tokens=tokens,
     )
     loader = SceneLoader(
@@ -59,14 +65,14 @@ def cache_log(log_name: str, tokens: list[str], logs: Path, maps: Path, output: 
     )
     found = set(loader.tokens)
     if found != set(tokens):
-        raise RuntimeError(f"{log_name}: missing manifest tokens {sorted(set(tokens) - found)}")
+        raise RuntimeError(f"missing manifest tokens {sorted(set(tokens) - found)}")
 
     processor = MetricCacheProcessor(
         cache_path=str(output),
         force_feature_computation=True,
         proposal_sampling=TrajectorySampling(num_poses=40, interval_length=0.1),
     )
-    paths = {}
+    paths: dict[str, Path] = {}
     for token in tokens:
         scene = loader.get_scene_from_token(token)
         scenario = NavSimScenario(scene, map_root=str(maps), map_version="nuplan-maps-v1.0")
@@ -74,12 +80,16 @@ def cache_log(log_name: str, tokens: list[str], logs: Path, maps: Path, output: 
         if entry is None:
             raise RuntimeError(f"Failed to cache token {token}")
         paths[token] = Path(entry.file_name)
+    del loader, processor
+    gc.collect()
     return paths
 
 
 def main() -> None:
     args = parse_args()
     tokens_by_log = load_manifest(args.manifest)
+    if args.workers < 1 or args.batch_logs < 1:
+        raise ValueError("workers and batch-logs must be positive")
     expected = {token for tokens in tokens_by_log.values() for token in tokens}
     cached = existing_caches(args.output)
     unexpected = set(cached) - expected
@@ -91,15 +101,16 @@ def main() -> None:
         for log_name, tokens in tokens_by_log.items()
         if any(token not in cached for token in tokens)
     ]
+    batches = [pending[index : index + args.batch_logs] for index in range(0, len(pending), args.batch_logs)]
     with ProcessPoolExecutor(max_workers=args.workers) as executor:
         futures = {
-            executor.submit(cache_log, log_name, tokens, args.logs, args.maps, args.output): log_name
-            for log_name, tokens in pending
+            executor.submit(cache_batch, batch, args.logs, args.maps, args.output): index
+            for index, batch in enumerate(batches, start=1)
         }
         for index, future in enumerate(as_completed(futures), start=1):
             cached.update(future.result())
             write_metadata(args.output, cached)
-            print(f"logs={index}/{len(pending)} tokens={len(cached)}/{len(expected)}", flush=True)
+            print(f"batches={index}/{len(batches)} tokens={len(cached)}/{len(expected)}", flush=True)
 
     write_metadata(args.output, cached)
     if set(cached) != expected:
