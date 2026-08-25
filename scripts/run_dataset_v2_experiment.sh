@@ -141,13 +141,14 @@ cleanup() {
         kill "$REWARD_SERVER_PID" 2>/dev/null || true
         wait "$REWARD_SERVER_PID" 2>/dev/null || true
     fi
-    if [[ "$STAGE" != d0 ]] && command -v ray >/dev/null 2>&1; then
-        ray stop --force >/dev/null 2>&1 || true
+    if [[ "$STAGE" != d0 ]] && [[ -x "$WORKSPACE_ROOT/envs/curious/bin/ray" ]]; then
+        "$WORKSPACE_ROOT/envs/curious/bin/ray" stop --force >/dev/null 2>&1 || true
     fi
     rm -f "$RUN_DIR/RUNNING"
     printf '%s\n' "$status" > "$RUN_DIR/exit_code"
 }
 trap cleanup EXIT
+exec > "$RUN_DIR/run.log" 2>&1
 
 if [[ "$STAGE" == d0 ]]; then
     "$PYTHON" "$PROJECT_ROOT/projects/dataset_v2/freeze_dataset_v2.py" \
