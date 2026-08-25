@@ -8,6 +8,7 @@ import csv
 import hashlib
 import json
 import math
+import sys
 from collections import Counter, defaultdict
 from itertools import combinations
 from pathlib import Path
@@ -15,6 +16,10 @@ from pathlib import Path
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from projects.dataset_v2.build_dataset_v2 import Row, largest_remainder, select_rows, stable_key
 

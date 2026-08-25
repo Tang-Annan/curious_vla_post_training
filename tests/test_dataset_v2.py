@@ -1,4 +1,6 @@
 import csv
+import subprocess
+import sys
 from pathlib import Path
 
 import pyarrow as pa
@@ -101,3 +103,15 @@ def test_selector_formulas_match_preregistered_g4_rules() -> None:
     assert fals_score(eligible) == (1.0 - 0.4) * (0.8 - 0.4)
     assert not adas_eligible({**eligible, "pdms_std": 0.0})
     assert spearman({"a": 1.0, "b": 2.0, "c": 3.0}, {"a": 2.0, "b": 4.0, "c": 6.0}) == 1.0
+
+
+def test_pipeline_cli_runs_outside_repository_cwd(tmp_path: Path) -> None:
+    script = Path(__file__).parents[1] / "projects" / "dataset_v2" / "experiment_pipeline.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr

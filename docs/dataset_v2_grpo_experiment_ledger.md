@@ -13,14 +13,15 @@
 3. 固定 SDR 和 `G=4`，FALS-1K 相对 Random-1K 是否提高训练效果；
 4. 固定 SDR 和 `G=4`，当前可执行的 ADAS-G4 selector 相对 Random-1K 是否提高训练效果。
 
-截至 2026-08-25 的状态：
+截至 2026-08-25 23:04（Asia/Shanghai）的状态：
 
 - Dataset V2 的 8,000 candidate、2,000 dev、10,000 张 CAM_F0 和 10,000 份 metric cache 已存在；
 - `random_1k.txt` 已冻结，并且 1,000 个 token 全部属于 Phase-1 6K candidate；
 - ADAS/FALS manifest 尚未生成；
 - Dataset V2 尚未产生正式 selector rollout、GRPO checkpoint 或 dev 结果；
-- 数据资产已完成，但形式化冻结尚未完成：`dataset_card.json` 和 `acceptance_report.json` 仍把 image/cache 标成 `deferred`，两个 PID 文件已经失效但仍残留，远端数据构建代码尚未提交且 source worktree 非 clean；
-- 当前唯一下一动作是 `V2-D0`，不得跳过它启动 GPU 实验。
+- `V2-D0 retry1` 完成 asset freeze 后，`V2-I0` 输入准备在零 GPU import 阶段暴露非仓库 cwd 下的 CLI entrypoint 缺口；没有生成输入或访问模型，当前按 dev 前最小修复执行 `V2-D0 retry2`；
+- 第一次 pre-freeze asset check 虽通过数据校验，但 launcher 仅支持 D0，已保留为 `PREFREEZE_ONLY`，没有发生 GPU inference，也不作为正式 source freeze；
+- 当前唯一下一动作是 `V2-D0 retry2`；正式 marker 重新绑定修复后的 source 后才允许重启 `V2-I0`。
 
 本轮结论边界：
 
@@ -409,6 +410,20 @@ Final 判定沿用对应方法的 effect-size 与安全门控。通过时只能�
 
 每完成一个阶段，在本节追加记录，不改写预注册门槛。
 
+### 记录 V2-001：V2-D0 retry1 asset freeze 与 entrypoint 技术失败
+
+- ID / 状态：`V2-D0 retry1 / TECH_FAILED_ENTRYPOINT`；
+- 假设与唯一变量：仅冻结 Dataset V2 数据、代码和执行入口，不做 GPU inference；
+- source/model/data/manifest hash：source `b32e26f67231c611ed3dda81ab8a4224b305e81e`；Stage-2 两个权重分片 SHA-256 为 `870666c2...b10f0f`、`4f264c53...8744`；train/dev parquet、cache manifest、final manifest 分别为 `8b4a0590...66996639`、`e65f135d...bb75c6`、`063ed7b1...226772`、`fa779ec1...8b7db`；
+- frozen config 与 seed：Dataset `dataset_v2_20260825`，seed `20260825`；新 launcher 显式接收 train/dev parquet、active/final manifest、V2 cache、model、experiment root 和 TensorBoard 目录，不存在旧 5,656 cache 或 566-token dev fallback；
+- coverage：active token/image/cache 均为 `10,000`，image 全部可读，cache token 与 `cache_10000.csv` 完全一致；final reserve `1,000` 条，保持 manifest-only；
+- 代码与测试：本地 `41 passed, 9 skipped`；远端 `50 passed`，`bash -n`、compile、`git diff --check` 通过；source worktree clean；
+- 资源：RTX 4090 24,564 MiB 空闲、8901 空闲、无 Ray/Gunicorn/trainer 残留；冻结后 `/root/autodl-tmp` 可用 `67 GB`；
+- 产物与清理：正式报告位于 `experiments/dataset_v2_20260825/v2_d0_data_freeze_retry1/`；两个 V2 stale PID `2523/1518` 已移动到显式 archive；pre-freeze marker 和说明保留在 `v2_d0_data_freeze/`，未删除数据或科学证据；
+- 科学边界：D0 只证明数据和入口完整，不产生模型效果结论；
+- 门控结论：数据七项检查通过，但 `V2-I0` 准备器从非仓库 cwd 启动时出现 `ModuleNotFoundError: projects`；发生在模型加载前，GPU/query/dev access 均为 0，因此不接受 retry1 为最终 source freeze；
+- 唯一下一动作：只修复该 CLI import boundary，远端回归后执行 `V2-D0 retry2`。
+
 ### 记录模板
 
 - ID / 状态：`PENDING | RUNNING | TECH_FAILED | SKIPPED_BY_GATE | COMPLETE`；
@@ -475,4 +490,4 @@ Final 判定沿用对应方法的 effect-size 与安全门控。通过时只能�
 11. 只对确认方法访问 final reserve；
 12. 填写最终结论并停止，不追加未预注册组合。
 
-当前唯一允许执行的动作：`V2-D0`。
+当前唯一允许执行的动作：`V2-D0 retry2`。
