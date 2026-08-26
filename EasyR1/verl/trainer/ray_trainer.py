@@ -260,7 +260,8 @@ class RayPPOTrainer:
                 )
 
         if (
-            config.algorithm.adv_estimator
+            not config.trainer.val_only
+            and config.algorithm.adv_estimator
             in (AdvantageEstimator.GRPO, AdvantageEstimator.STD_FLOOR_GRPO, AdvantageEstimator.RLOO)
             and config.worker.rollout.n == 1
         ):

@@ -100,6 +100,7 @@ def test_validation_creates_exclusive_dev_access_lock() -> None:
     assert "dev_access_lock_path: Optional[str] = None" in config
     assert 'with open(lock_path, "x", encoding="utf-8") as handle:' in trainer
     assert trainer.index('with open(lock_path, "x"') < trainer.index('print("Start validation...")')
+    assert "not config.trainer.val_only" in trainer
 
 
 def test_selector_formulas_match_preregistered_g4_rules() -> None:
