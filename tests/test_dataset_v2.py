@@ -17,7 +17,7 @@ from projects.dataset_v2.build_dataset_v2 import (
     v2_image_path,
 )
 from projects.dataset_v2.freeze_dataset_v2 import load_cache_manifest, validate_assets
-from projects.dataset_v2.experiment_pipeline import adas_eligible, analyze_s0, fals_score, spearman
+from projects.dataset_v2.experiment_pipeline import adas_eligible, analyze_s0, build_manifests, fals_score, spearman
 
 
 def test_intent_normalization_and_image_namespace() -> None:
@@ -125,6 +125,50 @@ def test_s0_analyzes_four_shared_g4_blocks(tmp_path: Path) -> None:
     assert report["blocks"] == 4
     assert report["gates"]["adas_passed"]
     assert report["gates"]["fals_passed"]
+
+
+def test_m0_skips_adas_closed_by_s0(tmp_path: Path) -> None:
+    intents = ["straight"] * 634 + ["left"] * 251 + ["right"] * 115
+    tokens = [f"token-{index:04d}" for index in range(1000)]
+    candidate = tmp_path / "candidate.txt"
+    random_manifest = tmp_path / "random.txt"
+    candidate.write_text("\n".join(tokens) + "\n", encoding="utf-8")
+    random_manifest.write_text("\n".join(tokens) + "\n", encoding="utf-8")
+    master = tmp_path / "master.csv"
+    with master.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["token", "intent", "log_name"])
+        writer.writeheader()
+        writer.writerows(
+            {"token": token, "intent": intent, "log_name": f"log-{index:04d}"}
+            for index, (token, intent) in enumerate(zip(tokens, intents))
+        )
+    rollouts = tmp_path / "rollouts.jsonl"
+    rollouts.write_text(
+        "".join(
+            json.dumps({"token": token, "pdms": value, "pdms_scaled": value}) + "\n"
+            for token in tokens
+            for value in (0.2, 0.4, 0.6, 0.8)
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "manifests"
+    report = build_manifests(
+        Namespace(
+            master_index=master,
+            candidate_manifest=candidate,
+            rollouts=rollouts,
+            random_manifest=random_manifest,
+            output_dir=output_dir,
+            report=tmp_path / "report.json",
+            seed=20260825,
+            skip_adas=True,
+        )
+    )
+    assert report["decision"] == "freeze_manifests"
+    assert not report["extension_required"]
+    assert report["adas_status"] == "skipped_by_s0"
+    assert not (output_dir / "adas_1k.txt").exists()
+    assert (output_dir / "fals_1k.txt").is_file()
 
 
 def test_pipeline_cli_runs_outside_repository_cwd(tmp_path: Path) -> None:

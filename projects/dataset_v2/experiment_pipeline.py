@@ -388,11 +388,11 @@ def build_manifests(args: argparse.Namespace) -> dict:
     candidates = load_tokens(args.candidate_manifest)
     groups = load_groups(args.rollouts, set(candidates), 4)
     stats = {token: group_stats(groups[token]) for token in candidates}
-    eligible = [token for token in candidates if adas_eligible(stats[token])]
+    eligible = [] if args.skip_adas else [token for token in candidates if adas_eligible(stats[token])]
     fals_scores = {token: fals_score(stats[token]) for token in candidates}
-    adas, adas_counts = constrained_ranked_select(eligible, master, None, args.seed, "adas-g4-current")
+    adas, adas_counts = (None, {}) if args.skip_adas else constrained_ranked_select(eligible, master, None, args.seed, "adas-g4-current")
     fals, fals_counts = constrained_ranked_select(candidates, master, fals_scores, args.seed, "fals-g4")
-    extension_required = adas is None or fals is None
+    extension_required = fals is None or (not args.skip_adas and adas is None)
     report = {
         "id": "V2-M0",
         "candidate_tokens": len(candidates),
@@ -400,7 +400,8 @@ def build_manifests(args: argparse.Namespace) -> dict:
         "adas_selected_counts": adas_counts,
         "fals_selected_counts": fals_counts,
         "extension_required": extension_required and len(candidates) == 6000,
-        "gates": {"adas_feasible": adas is not None, "fals_feasible": fals is not None},
+        "gates": {"adas_feasible": None if args.skip_adas else adas is not None, "fals_feasible": fals is not None},
+        "adas_status": "skipped_by_s0" if args.skip_adas else "active",
     }
     if extension_required:
         report["decision"] = "enable_common_extension" if len(candidates) == 6000 else "selector_infeasible_close_failed_branches"
@@ -412,7 +413,9 @@ def build_manifests(args: argparse.Namespace) -> dict:
             random_tokens, _ = constrained_ranked_select(candidates, master, None, args.seed, "random-8k")
             if random_tokens is None:
                 raise ValueError("Random-8K manifest is infeasible")
-        manifests = {"random": random_tokens, "adas": adas, "fals": fals}
+        manifests = {"random": random_tokens, "fals": fals}
+        if not args.skip_adas:
+            manifests["adas"] = adas
         for name, values in manifests.items():
             write_tokens(args.output_dir / f"{name}_1k.txt", values)
         overlap = {}
@@ -573,6 +576,7 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--output-dir", type=Path, required=True)
     command.add_argument("--report", type=Path, required=True)
     command.add_argument("--seed", type=int, default=20260825)
+    command.add_argument("--skip-adas", action="store_true")
     command.set_defaults(function=build_manifests)
 
     command = subparsers.add_parser("compare")
