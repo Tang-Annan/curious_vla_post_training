@@ -87,8 +87,19 @@ def test_dataset_v2_launcher_has_no_legacy_fallbacks() -> None:
     assert "566" not in launcher
     for required in ("--train-parquet", "--dev-parquet", "--cache-manifest", "--cache-dir", "--experiment-root"):
         assert required in launcher
-    assert '^(d0|rollout|train)$' in launcher
+    assert '^(d0|rollout|eval|train)$' in launcher
     assert 'TENSORBOARD_DIR="$RUN_DIR/tensorboard"' in launcher
+    assert 'trainer.dev_access_lock_path="$DEV_ACCESS_LOCK"' in launcher
+    assert "trainer.val_only=true" in launcher
+
+
+def test_validation_creates_exclusive_dev_access_lock() -> None:
+    root = Path(__file__).parents[1]
+    config = (root / "EasyR1/verl/trainer/config.py").read_text(encoding="utf-8")
+    trainer = (root / "EasyR1/verl/trainer/ray_trainer.py").read_text(encoding="utf-8")
+    assert "dev_access_lock_path: Optional[str] = None" in config
+    assert 'with open(lock_path, "x", encoding="utf-8") as handle:' in trainer
+    assert trainer.index('with open(lock_path, "x"') < trainer.index('print("Start validation...")')
 
 
 def test_selector_formulas_match_preregistered_g4_rules() -> None:

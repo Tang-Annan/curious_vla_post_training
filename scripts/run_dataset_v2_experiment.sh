@@ -30,6 +30,7 @@ SAVE_FREQ=""
 SAVE_LIMIT=""
 SAVE_MODEL_ONLY="false"
 SKIP_FINAL_VALIDATION="false"
+DEV_ACCESS_LOCK=""
 REWARD_SERVER_PORT=8901
 
 while [[ $# -gt 0 ]]; do
@@ -63,6 +64,7 @@ while [[ $# -gt 0 ]]; do
         --save-limit) SAVE_LIMIT="$2"; shift 2 ;;
         --save-model-only) SAVE_MODEL_ONLY="$2"; shift 2 ;;
         --skip-final-validation) SKIP_FINAL_VALIDATION="$2"; shift 2 ;;
+        --dev-access-lock) DEV_ACCESS_LOCK="$2"; shift 2 ;;
         --reward-server-port) REWARD_SERVER_PORT="$2"; shift 2 ;;
         *) echo "Unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -72,7 +74,7 @@ for value in STAGE RUN_ID PYTHON WORKSPACE_ROOT PROJECT_ROOT DATA_ROOT DATASET_D
     MANIFEST_DIR CACHE_MANIFEST CACHE_DIR FINAL_MANIFEST STAGE2_MODEL EXPERIMENT_ROOT; do
     [[ -n "${!value}" ]] || { echo "Missing required argument for $value" >&2; exit 2; }
 done
-[[ "$STAGE" =~ ^(d0|rollout|train)$ ]] || { echo "Unsupported Dataset V2 stage: $STAGE" >&2; exit 2; }
+[[ "$STAGE" =~ ^(d0|rollout|eval|train)$ ]] || { echo "Unsupported Dataset V2 stage: $STAGE" >&2; exit 2; }
 
 for path in "$PYTHON" "$WORKSPACE_ROOT" "$PROJECT_ROOT" "$DATA_ROOT" "$DATASET_DIR" "$TRAIN_PARQUET" \
     "$DEV_PARQUET" "$MANIFEST_DIR" "$CACHE_MANIFEST" "$CACHE_DIR" "$CACHE_DIR/metadata" \
@@ -99,6 +101,10 @@ else
     done
     if [[ -n "$LOAD_CHECKPOINT" ]]; then
         [[ -d "$LOAD_CHECKPOINT/actor" ]] || { echo "Invalid load checkpoint: $LOAD_CHECKPOINT" >&2; exit 1; }
+    fi
+    if [[ "$STAGE" == eval || ( "$STAGE" == train && "$SKIP_FINAL_VALIDATION" != true ) ]]; then
+        [[ -n "$DEV_ACCESS_LOCK" ]] || { echo "Formal dev access requires --dev-access-lock" >&2; exit 2; }
+        [[ ! -e "$DEV_ACCESS_LOCK" ]] || { echo "Dev access is already locked: $DEV_ACCESS_LOCK" >&2; exit 1; }
     fi
     "$PYTHON" - "$DATASET_DIR/V2_DATA_FROZEN" "$SOURCE_COMMIT" <<'PY'
 import json
@@ -130,6 +136,7 @@ printf 'stage=%s\nrun_id=%s\nsource_commit=%s\ntrain_parquet=%s\ndev_parquet=%s\
     "$ACTIVE_MANIFEST" "$CACHE_MANIFEST" "$CACHE_DIR" "$MODEL_PATH" "$REWARD_FUNCTION" "$ROLLOUT_N" \
     "$SEED" "$TEMPERATURE" "$TOP_P" "$MAX_STEPS" "$EXPERIMENT_ROOT" > "$RUN_DIR/run.env"
 printf 'load_checkpoint=%s\n' "$LOAD_CHECKPOINT" >> "$RUN_DIR/run.env"
+printf 'dev_access_lock=%s\n' "$DEV_ACCESS_LOCK" >> "$RUN_DIR/run.env"
 
 cleanup() {
     status=$?
@@ -249,6 +256,27 @@ if [[ "$STAGE" == rollout ]]; then
     "$PYTHON" "$PROJECT_ROOT/projects/safe_grpo/analyze_rollouts.py" \
         "$RUN_DIR/rollouts.jsonl" --manifest "$ACTIVE_MANIFEST" --expected-rollouts "$ROLLOUT_N" \
         > "$RUN_DIR/diagnosis.json"
+elif [[ "$STAGE" == eval ]]; then
+    [[ "$ROLLOUT_N" -eq 1 ]] || { echo "Dataset V2 evaluation requires one rollout per token" >&2; exit 1; }
+    "$PYTHON" -m verl.trainer.main \
+        "${COMMON_ARGS[@]}" \
+        "${LOAD_ARGS[@]}" \
+        data.train_files="$ACTIVE_PARQUET@train" \
+        data.val_files="$ACTIVE_PARQUET@train" \
+        data.token_filter_file="$ACTIVE_MANIFEST" \
+        data.val_token_filter_file="$ACTIVE_MANIFEST" \
+        trainer.val_before_train=true \
+        trainer.val_only=true \
+        trainer.skip_final_validation=true \
+        trainer.dev_access_lock_path="$DEV_ACCESS_LOCK" \
+        trainer.save_checkpoint_path="$RUN_DIR/checkpoints"
+    [[ -e "$DEV_ACCESS_LOCK" ]] || { echo "Dev access lock was not created" >&2; exit 1; }
+    mapfile -t rollout_files < <(find "checkpoints/debug/$RUN_ID" -maxdepth 1 -name 'generations_*.jsonl' -type f)
+    [[ ${#rollout_files[@]} -eq 1 ]] || { echo "Expected one evaluation rollout file, found ${#rollout_files[@]}" >&2; exit 1; }
+    cp "${rollout_files[0]}" "$RUN_DIR/dev_rollouts.jsonl"
+    "$PYTHON" "$PROJECT_ROOT/projects/safe_grpo/analyze_rollouts.py" \
+        "$RUN_DIR/dev_rollouts.jsonl" --manifest "$ACTIVE_MANIFEST" --expected-rollouts 1 \
+        > "$RUN_DIR/final_dev_metrics.json"
 else
     for value in MAX_STEPS SAVE_FREQ SAVE_LIMIT; do
         [[ -n "${!value}" ]] || { echo "Missing required train argument for $value" >&2; exit 2; }
@@ -266,6 +294,7 @@ else
         trainer.val_before_train=false \
         trainer.val_freq=-1 \
         trainer.skip_final_validation="$SKIP_FINAL_VALIDATION" \
+        trainer.dev_access_lock_path="$DEV_ACCESS_LOCK" \
         trainer.save_freq="$SAVE_FREQ" \
         trainer.save_limit="$SAVE_LIMIT" \
         trainer.save_model_only="$SAVE_MODEL_ONLY" \

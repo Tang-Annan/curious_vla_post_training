@@ -421,6 +421,18 @@ class RayPPOTrainer:
         self.logger.log_generation(samples, self.global_step)
 
     def _validate(self) -> dict[str, Any]:
+        lock_path = self.config.trainer.dev_access_lock_path
+        if lock_path and not getattr(self, "_dev_access_locked", False):
+            with open(lock_path, "x", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "experiment_name": self.config.trainer.experiment_name,
+                        "global_step": self.global_step,
+                    },
+                    handle,
+                )
+                handle.write("\n")
+            self._dev_access_locked = True
         reward_tensor_lst = []
         # Lists to collect samples for the table
         sample_inputs, sample_outputs, sample_labels, sample_scores = [], [], [], []

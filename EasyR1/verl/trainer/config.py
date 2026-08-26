@@ -136,6 +136,8 @@ class TrainerConfig:
     """validate only, skip training"""
     skip_final_validation: bool = False
     """skip validation after training; intended for short integration smoke runs"""
+    dev_access_lock_path: Optional[str] = None
+    """exclusive marker created when validation first starts"""
     val_generations_to_log: int = 0
     """number of generations to log for validation"""
     save_freq: int = -1
