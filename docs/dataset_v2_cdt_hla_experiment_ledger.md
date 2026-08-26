@@ -16,7 +16,7 @@
 - `V2-E0` 已完成，Stage-2 dev anchor 为 PDMS `0.947464`、PDMS scaled `0.908727`、旧 Safe `0.997000`；
 - 旧 `SLDR-current` 已由 `V2-R0` 关闭，不恢复、不调 `0.5/0.1/0.6`；
 - 原队列中的 `V2-R4-SDR/RAW/FALS/ADAS` 暂停，不作为本轮前置条件；本轮 baseline 必须是同一 SafetyMix manifest 上的 `SM4-SDR`；
-- 当前唯一动作是 `V2-H0`：实现最小 CDT/HLA 数据通路，复用现有 rollout 完成 CPU replay、selector 稳定性复算和 SafetyMix manifest 冻结。
+- `V2-H0` 已完成，全部技术门控通过，但两个 material-change 科学门控失败；依照冻结规则，本轮已关闭 HLA 正式训练，`V2-HT0-HLA`、`V2-SM4-SDR/HLA`、matched seeds 与 final 均未启动。
 
 本轮结论边界：
 
@@ -69,10 +69,10 @@
 | 顺序 | ID | Selector | Reward/记录 | Advantage | 状态 |
 | ---: | --- | --- | --- | --- | --- |
 | 0 | `V2-E0` | 无训练 | production SDR | — | `COMPLETE` |
-| 1 | `V2-H0` | Phase-1 6K replay | SDR/CDTR diagnostics | SDR/CDTR/HLA replay | `PENDING` |
-| 2 | `V2-HT0-HLA` | SafetyMix mixed-tier 40 | production SDR | CDT-HLA + scale-only normalization | `BLOCKED_BY_H0` |
-| 3 | `V2-SM4-SDR` | SafetyMix-1K | production SDR | standard GRPO | `BLOCKED_BY_HT0` |
-| 4 | `V2-SM4-HLA` | 同一 SafetyMix-1K | production SDR | CDT-HLA + scale-only normalization | `BLOCKED_BY_SM4_SDR` |
+| 1 | `V2-H0` | Phase-1 6K replay | SDR/CDTR diagnostics | SDR/CDTR/HLA replay | `COMPLETE_CLOSE_HLA` |
+| 2 | `V2-HT0-HLA` | SafetyMix mixed-tier 40 | production SDR | CDT-HLA + scale-only normalization | `SKIPPED_BY_H0_SCIENTIFIC_GATE` |
+| 3 | `V2-SM4-SDR` | SafetyMix-1K | production SDR | standard GRPO | `SKIPPED_NO_ACTIVE_HLA_CONTRAST` |
+| 4 | `V2-SM4-HLA` | 同一 SafetyMix-1K | production SDR | CDT-HLA + scale-only normalization | `SKIPPED_BY_H0_SCIENTIFIC_GATE` |
 | 5 | `V2-SM4-CDTR` | 同一 SafetyMix-1K | CDT interval reward | standard GRPO | `OPTIONAL_NOT_IN_FIRST_ROUND` |
 
 首个单 seed 方法结果只需要一次 CPU replay、一次 HLA smoke 和两个正式 run。`SM4-CDTR` 不延迟主 contrast；只有后续明确需要区分“tier 进入 reward”与“tier 进入 advantage”时才单独预注册。
@@ -342,6 +342,20 @@ SDR,&L\in\{L2,L3\}\\
 
 任一技术门控失败：只修已定位问题并用 `retryN` 重跑 H0。任一科学门控失败：关闭 HLA 正式训练，不调 tier、lambda、quota、cap 或 material threshold。
 
+### 9.5 实际结果与终止决定
+
+`V2-H0` 在 source `d30ba3b4e42d6e1bc2059854645cb714db49832f` 上完成，`exit_code=0`，证据目录为 `experiments/dataset_v2_20260825/v2_h0_cdt_hla_seed20260825/`。
+
+- source rebind 完成，Dataset V2 的 10K image/cache、6K/dev/final manifests、Stage-2 model hashes 均未变化；server focused tests 为 `58 passed`，compile、launcher syntax 与 diff check 通过；
+- S0 四块 mixed-tier ratio 为 `0.106/0.096/0.094/0.094`，CV `0.058919`；六个 pairwise Jaccard 的中位数为 `0.703704`；
+- 6K bank 的 tier rollout counts 为 `L3=23087, L2=163, L1=587, L0=153, invalid=10`，`mapping_error=0`，`C=0.5` 进入 L2/L3 的数量为 0；
+- SafetyMix 恰好 1,000 groups，其中 mixed-tier 540；intent 为 `634/251/115`，494 个 logs，per-log max 5，dev/final overlap 均为 0；membership/order SHA256 分别为 `0102c164db07537393b54dc8b4ee84cc23befc12bfa23885bfd2a2a664004808` 与 `acd72e792b48999c9bcc99b13e762173d7bfb1b5c11d10658b28698812c7a77a`；
+- HLA cross-tier inversion 为 0，修正 SDR inversion/tie pair 27 个，最小 raw margin `0.666667`；same-L3/L2 identity max diff 与 invalid advantage max abs 均为 0；
+- SafetyMix 的 EffectiveGroupRate 为 `0.847`，zero groups 为 152 个 all-L3 SDR tie 和 1 个 all-L2 SDR tie；`StrictClear_E0=0.995`，`Headroom_E0=0.005`；
+- 科学门控中，稳定性、Jaccard、tier order、raw margin 均通过；但 SafetyMix 全组 material-change ratio 仅 `0.042 < 0.10`，mixed-tier material-change ratio 仅 `0.077778 < 0.80`，两项失败。
+
+终止决定：`close_hla`。HLA 的层级排序实现正确，但在冻结的真实 rollout geometry 上只对 4.2% 的 SafetyMix groups、7.78% 的 mixed-tier groups 产生达到阈值的训练 advantage 改写，信号覆盖远低于预注册要求。依照本节冻结规则，不调 tier、`lambda`、quota、cap 或 material threshold，不启动 smoke、正式训练、matched seeds 或 final；`SM4-CDTR` 也不在本轮追加执行。
+
 ## 10. `V2-HT0-HLA`：唯一新增 smoke
 
 H0 通过后，从 SafetyMix 中确定性选择 40 个 mixed-tier token：
@@ -456,64 +470,51 @@ NetTierGain=P_{up}-P_{down}
 
 ### 记录 HLA-001：V2-H0 CPU replay 与 SafetyMix 冻结
 
-- ID / 状态：`PENDING`；
-- source/model/data hash：
-- CDT mapping 与 tier counts：
-- S0 mixed ratio / CV / Jaccard：
-- SafetyMix mixed 数、intent/log、overlap、membership/order hash：
-- SDR/CDTR/HLA geometry：
-- same-L3/L2 identity、invalid exclusion、`A_raw/A_train` scale、SDR inversion/tie、HLA correction、material/EffectiveGroupRate/zero diagnostics：
-- `StrictClear_E0 / Headroom_E0`：
-- focused tests 与 source rebind：
-- 门控结论：
-- 唯一下一动作：
+- ID / 状态：`V2-H0-CDT-HLA / COMPLETE_CLOSE_HLA`；
+- source/model/data hash：source `d30ba3b4e42d6e1bc2059854645cb714db49832f`；Stage-2 两个 shard 分别为 `870666c2...f10f0f`、`4f264c53...98744`；S1 rollout 为 `a4f1f9ae...9f4d7`，完整输入 hash 见 `input_sha256.json`；
+- CDT mapping 与 tier counts：`L3=23087, L2=163, L1=587, L0=153, invalid=10`；`mapping_error=0`；
+- S0 mixed ratio / CV / Jaccard：`0.106/0.096/0.094/0.094 / 0.058919 / 0.703704`；
+- SafetyMix mixed 数、intent/log、overlap、membership/order hash：`540 / 634-251-115 / 494 / 0-0 / 0102c164...004808 / acd72e79...c7a77a`；
+- SDR/CDTR/HLA geometry：HLA inversion `0`，SDR inversion/tie rate `0.015067`，HLA correction `27`，minimum raw margin `0.666667`；
+- same-L3/L2 identity、invalid exclusion、material/EffectiveGroupRate/zero diagnostics：identity diff `0`，invalid advantage `0`；all/mixed material `0.042/0.077778`，EGR `0.847`，zero groups `152 all-L3 SDR tie + 1 all-L2 SDR tie`；
+- `StrictClear_E0 / Headroom_E0`：`0.995 / 0.005`；
+- focused tests 与 source rebind：server `58 passed`；source rebind、compile、launcher syntax、diff check 全部通过；
+- 门控结论：技术门控全部通过；科学门控中的 all-group 与 mixed-group material-change 两项失败，决策 `close_hla`；
+- 唯一下一动作：无；闭环停止并保留证据。
 
 ### 记录 HLA-002：V2-HT0-HLA smoke
 
-- ID / 状态：`BLOCKED_BY_H0`；
-- source/config/input：
-- coverage 与 HLA tensor：
-- loss/KL/clip/grad/TensorBoard：
-- GPU/wall-time/disk/cleanup：
-- 门控结论：
-- 唯一下一动作：
+- ID / 状态：`V2-HT0-HLA / SKIPPED_BY_H0_SCIENTIFIC_GATE`；
+- 门控结论：H0 material-change 科学门控失败，按冻结规则不启动 smoke；
+- 唯一下一动作：无。
 
 ### 记录 HLA-003：V2-SM4-SDR baseline
 
-- ID / 状态：`BLOCKED_BY_HT0`；
-- source/config/input：
-- train/dev coverage：
-- PDMS / StrictClear / tier / NAVSIM 分项：
-- train signal 与成本：
-- 门控结论：只冻结 baseline，不单独宣称 SafetyMix 有效；
-- 唯一下一动作：`V2-SM4-HLA`。
+- ID / 状态：`V2-SM4-SDR / SKIPPED_NO_ACTIVE_HLA_CONTRAST`；
+- 门控结论：HLA 已在 H0 关闭，matched baseline 不再具有本轮主 contrast 用途，因此未启动；
+- 唯一下一动作：无。
 
 ### 记录 HLA-004：V2-SM4-HLA main contrast
 
-- ID / 状态：`BLOCKED_BY_SM4_SDR`；
-- source/config/input：
-- train/dev coverage：
-- same-L3/L2 identity、invalid exclusion、`A_raw/A_train` tensor、scale 与 tier geometry：
-- `HLA-SDR` paired metrics / cluster CI / transition：
-- GPU/query/wall-time/disk：
-- 科学边界：
-- 门控结论：
-- 唯一下一动作：
+- ID / 状态：`V2-SM4-HLA / SKIPPED_BY_H0_SCIENTIFIC_GATE`；
+- 科学边界：H0 只证明当前冻结定义的 HLA 信号覆盖不足，不否定安全层级建模这一研究动机；
+- 门控结论：未进入正式训练，因而不存在模型效果、paired CI 或 tier transition 结论；
+- 唯一下一动作：无。
 
 ### 主结果表
 
 | ID | 状态 | PDMS | StrictClear | L0 | L1 | Collision | DAC | TTC | 直接差值 / CI | 决策 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| V2-E0 | COMPLETE | 0.947464 | 待从既有 rollout 复算 | — | — | 0.999500 | 0.997500 | 0.997500 | — | Stage-2 anchor |
-| V2-SM4-SDR | BLOCKED | — | — | — | — | — | — | — | vs E0 仅作参考 | — |
-| V2-SM4-HLA | BLOCKED | — | — | — | — | — | — | — | HLA−SDR | — |
+| V2-E0 | COMPLETE | 0.947464 | 0.995000 | — | — | 0.999500 | 0.997500 | 0.997500 | — | Stage-2 anchor |
+| V2-SM4-SDR | SKIPPED | — | — | — | — | — | — | — | 未形成 contrast | H0 后关闭 |
+| V2-SM4-HLA | SKIPPED | — | — | — | — | — | — | — | 未训练 | H0 科学门控失败 |
 | V2-SM4-CDTR | OPTIONAL | — | — | — | — | — | — | — | CDTR−SDR | 首轮不运行 |
 
 ## 16. 证据、空间与执行队列
 
 证据和大文件清理直接沿用原 Dataset V2 台账：保留 run.env、source/input/model hash、raw rollout、LoRA、config、TensorBoard/曲线、paired report、代表样本、COMPLETE/exit code；只有这些全部固化且进程回收后，才允许精确删除 full actor state。不得删除旧 V2/SLDR/SDR/RAW 证据。
 
-严格顺序：
+冻结的条件执行顺序：
 
 1. `V2-H0`：最小实现、focused tests、S0/S1 CPU replay、SafetyMix 与 geometry freeze；
 2. `V2-HT0-HLA`：唯一新增 10-step smoke；
@@ -524,4 +525,4 @@ NetTierGain=P_{up}-P_{down}
 7. 仅在三 seed 确认后访问 final；
 8. 写入最终结论并停止，不追加 reward/selector/estimator sweep。
 
-当前唯一允许执行的动作：`V2-H0`。
+实际执行在第 1 步结束：`V2-H0` 已完成并返回 `close_hla`；第 2–7 步均按门控跳过，final reserve 未访问。当前没有待执行实验动作。
