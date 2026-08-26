@@ -512,6 +512,8 @@ def test_s0_geometry_recovers_only_parse_failures_and_detects_partial_collision(
     assert report["g2_pair_audit"]["pairs_per_g4_group"] == 6
     assert report["g2_pair_audit"]["modes"]["sdr"]["tie_pairs"] > 0
     assert report["g2_pair_audit"]["modes"]["sdr"]["max_error_vs_production_formula"] < 1e-4
+    assert report["reward_and_advantage_geometry"]["raw"]["groups"] == 3
+    assert report["reward_recompute"]["raw_definition"].endswith("NAVSIM pdms.")
     assert report["unsafe_new_preference_bootstrap"]["bootstrap_samples"] == 100
     assert report["gates"]["safe_semantics_valid"] is False
     assert report["decision"] == "close_all_sldr_formal_training"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit SDR versus SLDR reward and GRPO advantage geometry on D0 train rollouts."""
+"""Audit raw-PDMS, SDR, and SLDR reward and GRPO advantage geometry."""
 
 import argparse
 import csv
@@ -201,9 +201,11 @@ def analyze(args: argparse.Namespace) -> dict:
     groups, field_coverage = load_and_recover_rows(args.d0_rollouts, manifest)
 
     flat_rows = [row for token in manifest for row in groups[token]]
+    raw_rewards = [float(row["pdms"]) for row in flat_rows]
     sdr_rewards = [float(row["pdms_scaled"]) for row in flat_rows]
     sldr_rewards = [float(compute_sldr(row)) for row in flat_rows]
     group_indices = [token for token in manifest for _ in range(4)]
+    raw_advantages = grpo_advantages(raw_rewards, group_indices)
     sdr_advantages = grpo_advantages(sdr_rewards, group_indices)
     sldr_advantages = grpo_advantages(sldr_rewards, group_indices)
 
@@ -227,8 +229,10 @@ def analyze(args: argparse.Namespace) -> dict:
         strict_class = composition([strict_safe(row) for row in groups[token]])
         composition_counts["production"][production_class] += 1
         composition_counts["strict"][strict_class] += 1
+        raw = np.asarray(raw_rewards[start:stop], dtype=float)
         sdr = np.asarray(sdr_rewards[start:stop], dtype=float)
         sldr = np.asarray(sldr_rewards[start:stop], dtype=float)
+        raw_adv = raw_advantages[start:stop]
         sdr_adv = sdr_advantages[start:stop]
         sldr_adv = sldr_advantages[start:stop]
         delta = float(np.mean(np.abs(sldr_adv - sdr_adv)))
@@ -237,12 +241,16 @@ def analyze(args: argparse.Namespace) -> dict:
                 "token": token,
                 "production_composition": production_class,
                 "strict_composition": strict_class,
+                "raw_reward_std": float(raw.std(ddof=1)),
                 "sdr_reward_std": float(sdr.std(ddof=1)),
                 "sldr_reward_std": float(sldr.std(ddof=1)),
+                "raw_unique_rewards": int(np.unique(raw).size),
                 "sdr_unique_rewards": int(np.unique(sdr).size),
                 "sldr_unique_rewards": int(np.unique(sldr).size),
+                "raw_reward_gap": float(raw.max() - raw.min()),
                 "sdr_reward_gap": float(sdr.max() - sdr.min()),
                 "sldr_reward_gap": float(sldr.max() - sldr.min()),
+                "raw_advantage_span": float(raw_adv.max() - raw_adv.min()),
                 "sdr_advantage_span": float(sdr_adv.max() - sdr_adv.min()),
                 "sldr_advantage_span": float(sldr_adv.max() - sldr_adv.min()),
                 "delta_a": delta,
@@ -327,6 +335,15 @@ def analyze(args: argparse.Namespace) -> dict:
     material_groups = [row for row in group_geometry if row["material_delta"]]
     strict_mixed_material = sum(row["strict_composition"] == "mixed_safety" for row in material_groups)
     production_mixed_material = sum(row["production_composition"] == "mixed_safety" for row in material_groups)
+    raw_rows = [
+        {
+            "reward_std": row["raw_reward_std"],
+            "unique_rewards": row["raw_unique_rewards"],
+            "reward_gap": row["raw_reward_gap"],
+            "advantage_span": row["raw_advantage_span"],
+        }
+        for row in group_geometry
+    ]
     sdr_rows = [
         {
             "reward_std": row["sdr_reward_std"],
@@ -345,6 +362,7 @@ def analyze(args: argparse.Namespace) -> dict:
         }
         for row in group_geometry
     ]
+    raw_geometry = geometry_summary(raw_rows)
     sdr_geometry = geometry_summary(sdr_rows)
     sldr_geometry = geometry_summary(sldr_rows)
     zero_reduction_pp = 100.0 * (
@@ -384,6 +402,7 @@ def analyze(args: argparse.Namespace) -> dict:
         },
         "field_coverage_and_recovery": field_coverage,
         "reward_recompute": {
+            "raw_definition": "Production compute_score_group_raw_pdms overall = NAVSIM pdms.",
             "sdr_definition": "Production compute_score_group_fast overall = NAVSIM pdms_scaled.",
             "sldr_definition": "Production safety_dense_reward.compute_sldr.",
             "recorded_training_reward_sdr_mismatch_rows": recorded_mismatches,
@@ -403,6 +422,7 @@ def analyze(args: argparse.Namespace) -> dict:
             for scope, counts in composition_counts.items()
         },
         "reward_and_advantage_geometry": {
+            "raw": raw_geometry,
             "sdr": sdr_geometry,
             "sldr": sldr_geometry,
             "exact_zero_reduction_percentage_points": zero_reduction_pp,
