@@ -73,7 +73,7 @@ class AlgorithmConfig:
     lam: float = 1.0
     """lambda value for ppo gae advantage estimator"""
     adv_estimator: str = "grpo"
-    """advantage estimator, including `grpo`, `dr_grpo`, and `std_floor_grpo`"""
+    """advantage estimator, including `grpo`, `cdt_hla_grpo`, `dr_grpo`, and `std_floor_grpo`"""
     std_floor: float = 0.05
     """minimum group reward standard deviation used by `std_floor_grpo`"""
     disable_kl: bool = False

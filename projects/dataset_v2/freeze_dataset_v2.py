@@ -132,6 +132,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stage2-model", type=Path, required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--rebind-source", action="store_true")
     parser.add_argument("--expected-active", type=int, default=10000)
     parser.add_argument("--expected-final", type=int, default=1000)
     return parser.parse_args()
@@ -140,8 +141,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     marker = args.dataset_dir / "V2_DATA_FROZEN"
-    if marker.exists():
+    if marker.exists() and not args.rebind_source:
         raise SystemExit(f"Dataset is already frozen: {marker}")
+    if args.rebind_source and not marker.exists():
+        raise SystemExit(f"Source rebind requires an existing freeze marker: {marker}")
     if len(args.source_commit) != 40 or any(character not in "0123456789abcdef" for character in args.source_commit):
         raise ValueError("source-commit must be a full lowercase Git SHA")
     for path in (
@@ -176,6 +179,13 @@ def main() -> None:
 
     card_path = args.dataset_dir / "dataset_card.json"
     acceptance_path = args.manifest_dir / "acceptance_report.json"
+    previous_marker = json.loads(marker.read_text(encoding="utf-8")) if marker.exists() else None
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    if previous_marker is not None:
+        shutil.copy2(marker, args.output.parent / "previous_V2_DATA_FROZEN.json")
+        shutil.copy2(card_path, args.output.parent / "previous_dataset_card.json")
+        shutil.copy2(acceptance_path, args.output.parent / "previous_acceptance_report.json")
+        shutil.copy2(args.manifest_dir / "sha256sum.txt", args.output.parent / "previous_sha256sum.txt")
     card = json.loads(card_path.read_text(encoding="utf-8"))
     acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
     card["artifacts"]["image_stage"] = {"state": "complete", "files": assets["readable_images"]}
@@ -199,9 +209,10 @@ def main() -> None:
 
     usage = shutil.disk_usage(args.data_root)
     report = {
-        "id": "V2-D0",
+        "id": "V2-D0-SOURCE-REBIND" if args.rebind_source else "V2-D0",
         "status": "COMPLETE",
         "source_commit": args.source_commit,
+        "previous_source_commit": previous_marker.get("source_commit") if previous_marker else None,
         "assets": assets,
         "input_hashes": input_hashes,
         "stage2_model_hashes": stage2_hashes,
@@ -210,22 +221,15 @@ def main() -> None:
         "hash_manifest_sha256": sha256(hash_manifest),
         "disk_free_bytes": usage.free,
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
     atomic_json(args.output, report)
-    marker.write_text(
-        json.dumps(
-            {
-                "dataset_version": card["dataset_version"],
-                "source_commit": args.source_commit,
-                "freeze_report": str(args.output),
-                "freeze_report_sha256": sha256(args.output),
-            },
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
+    atomic_json(
+        marker,
+        {
+            "dataset_version": card["dataset_version"],
+            "source_commit": args.source_commit,
+            "freeze_report": str(args.output),
+            "freeze_report_sha256": sha256(args.output),
+        },
     )
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
 

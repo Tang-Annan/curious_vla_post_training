@@ -21,6 +21,7 @@ ACTIVE_MANIFEST=""
 MODEL_PATH=""
 LOAD_CHECKPOINT=""
 REWARD_FUNCTION=""
+ADV_ESTIMATOR="grpo"
 ROLLOUT_N=""
 SEED=""
 TEMPERATURE=""
@@ -55,6 +56,7 @@ while [[ $# -gt 0 ]]; do
         --model-path) MODEL_PATH="$2"; shift 2 ;;
         --load-checkpoint) LOAD_CHECKPOINT="$2"; shift 2 ;;
         --reward-function) REWARD_FUNCTION="$2"; shift 2 ;;
+        --adv-estimator) ADV_ESTIMATOR="$2"; shift 2 ;;
         --rollout-n) ROLLOUT_N="$2"; shift 2 ;;
         --seed) SEED="$2"; shift 2 ;;
         --temperature) TEMPERATURE="$2"; shift 2 ;;
@@ -102,6 +104,7 @@ else
     if [[ -n "$LOAD_CHECKPOINT" ]]; then
         [[ -d "$LOAD_CHECKPOINT/actor" ]] || { echo "Invalid load checkpoint: $LOAD_CHECKPOINT" >&2; exit 1; }
     fi
+    [[ "$ADV_ESTIMATOR" =~ ^(grpo|cdt_hla_grpo)$ ]] || { echo "Unsupported advantage estimator: $ADV_ESTIMATOR" >&2; exit 2; }
     if [[ "$STAGE" == eval || ( "$STAGE" == train && "$SKIP_FINAL_VALIDATION" != true ) ]]; then
         [[ -n "$DEV_ACCESS_LOCK" ]] || { echo "Formal dev access requires --dev-access-lock" >&2; exit 2; }
         [[ ! -e "$DEV_ACCESS_LOCK" ]] || { echo "Dev access is already locked: $DEV_ACCESS_LOCK" >&2; exit 1; }
@@ -131,9 +134,9 @@ mkdir -p "$RUN_DIR"
 touch "$RUN_DIR/RUNNING"
 printf '%s\n' "$SOURCE_COMMIT" > "$RUN_DIR/source_commit.txt"
 git -C "$PROJECT_ROOT" status --porcelain > "$RUN_DIR/source_status.txt"
-printf 'stage=%s\nrun_id=%s\nsource_commit=%s\ntrain_parquet=%s\ndev_parquet=%s\nactive_parquet=%s\nactive_manifest=%s\ncache_manifest=%s\ncache_dir=%s\nmodel_path=%s\nreward_function=%s\nrollout_n=%s\nseed=%s\ntemperature=%s\ntop_p=%s\nmax_steps=%s\nexperiment_root=%s\n' \
+printf 'stage=%s\nrun_id=%s\nsource_commit=%s\ntrain_parquet=%s\ndev_parquet=%s\nactive_parquet=%s\nactive_manifest=%s\ncache_manifest=%s\ncache_dir=%s\nmodel_path=%s\nreward_function=%s\nadv_estimator=%s\nrollout_n=%s\nseed=%s\ntemperature=%s\ntop_p=%s\nmax_steps=%s\nexperiment_root=%s\n' \
     "$STAGE" "$RUN_ID" "$SOURCE_COMMIT" "$TRAIN_PARQUET" "$DEV_PARQUET" "$ACTIVE_PARQUET" \
-    "$ACTIVE_MANIFEST" "$CACHE_MANIFEST" "$CACHE_DIR" "$MODEL_PATH" "$REWARD_FUNCTION" "$ROLLOUT_N" \
+    "$ACTIVE_MANIFEST" "$CACHE_MANIFEST" "$CACHE_DIR" "$MODEL_PATH" "$REWARD_FUNCTION" "$ADV_ESTIMATOR" "$ROLLOUT_N" \
     "$SEED" "$TEMPERATURE" "$TOP_P" "$MAX_STEPS" "$EXPERIMENT_ROOT" > "$RUN_DIR/run.env"
 printf 'load_checkpoint=%s\n' "$LOAD_CHECKPOINT" >> "$RUN_DIR/run.env"
 printf 'dev_access_lock=%s\n' "$DEV_ACCESS_LOCK" >> "$RUN_DIR/run.env"
@@ -288,7 +291,8 @@ else
         data.val_files="$DEV_PARQUET@train" \
         data.token_filter_file="$ACTIVE_MANIFEST" \
         data.val_token_filter_file="$MANIFEST_DIR/dev_2000.txt" \
-        algorithm.adv_estimator=grpo \
+        data.shuffle=false \
+        algorithm.adv_estimator="$ADV_ESTIMATOR" \
         trainer.max_steps="$MAX_STEPS" \
         trainer.max_try_make_batch=20 \
         trainer.val_before_train=false \

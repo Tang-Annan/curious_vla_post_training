@@ -20,6 +20,9 @@ import pyarrow.parquet as pq
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
+EASYR1_ROOT = REPOSITORY_ROOT / "EasyR1"
+if str(EASYR1_ROOT) not in sys.path:
+    sys.path.insert(0, str(EASYR1_ROOT))
 
 from projects.dataset_v2.build_dataset_v2 import Row, largest_remainder, select_rows, stable_key
 
@@ -449,6 +452,286 @@ def build_manifests(args: argparse.Namespace) -> dict:
     return report
 
 
+def _row_tier(row: dict) -> str | None:
+    from verl.trainer.cdt_hla import classify_cdt
+
+    return classify_cdt(
+        bool(row.get("parsed_ok", True)),
+        row["no_at_fault_collisions"],
+        row["drivable_area_compliance"],
+        row["time_to_collision_within_bound"],
+    )
+
+
+def _advantage_replay(groups: dict[str, list[dict]], tokens: list[str]) -> dict:
+    import torch
+
+    from verl.trainer.cdt_hla import compute_cdtr
+    from verl.trainer.core_algos import compute_cdt_hla_outcome_advantage, compute_grpo_outcome_advantage
+
+    rows = [row for token in tokens for row in groups[token]]
+    group_ids = [token for token in tokens for _ in groups[token]]
+    rewards = torch.tensor([[float(row["pdms_scaled"])] for row in rows], dtype=torch.float32)
+    mask = torch.ones_like(rewards)
+    reward_metrics = {
+        key: [row.get(key, True) if key == "parsed_ok" else row[key] for row in rows]
+        for key in (
+            "parsed_ok",
+            "no_at_fault_collisions",
+            "drivable_area_compliance",
+            "time_to_collision_within_bound",
+        )
+    }
+    diagnostics: dict[str, float] = {}
+    hla, _ = compute_cdt_hla_outcome_advantage(
+        rewards,
+        mask,
+        group_ids,
+        reward_metrics=reward_metrics,
+        diagnostics=diagnostics,
+    )
+    sdr, _ = compute_grpo_outcome_advantage(rewards, mask, group_ids)
+    cdtr_rewards = torch.tensor(
+        [
+            [compute_cdtr(tier, row["pdms_scaled"]) if tier is not None else 0.0]
+            for row, tier in zip(rows, (_row_tier(row) for row in rows))
+        ],
+        dtype=torch.float32,
+    )
+    cdtr, _ = compute_grpo_outcome_advantage(cdtr_rewards, mask, group_ids)
+    return {
+        "rows": rows,
+        "hla": hla[:, 0].tolist(),
+        "sdr": sdr[:, 0].tolist(),
+        "cdtr": cdtr[:, 0].tolist(),
+        "diagnostics": diagnostics,
+    }
+
+
+def _distribution(values: list[float]) -> dict[str, float]:
+    array = np.asarray(values, dtype=float)
+    return {
+        "mean": float(array.mean()),
+        "std": float(array.std(ddof=1)),
+        "min": float(array.min()),
+        "max": float(array.max()),
+    }
+
+
+def analyze_h0(args: argparse.Namespace) -> dict:
+    from verl.trainer.cdt_hla import is_strict_clear
+
+    if len(args.s0_block) != 4:
+        raise ValueError("V2-H0 requires exactly four S0 blocks")
+    args.output_dir.mkdir(parents=True, exist_ok=False)
+    candidate_tokens = load_tokens(args.candidate_manifest)
+    master = load_master(args.master_index)
+    bank = load_groups(args.bank_rollouts, set(candidate_tokens), 4)
+
+    stability_tokens = load_tokens(args.stability_manifest)
+    stability_sets = []
+    stability_ratios = []
+    for path in args.s0_block:
+        block = load_groups(path, set(stability_tokens), 4)
+        mixed = {
+            token
+            for token in stability_tokens
+            if all(_row_tier(row) is not None for row in block[token])
+            and len({_row_tier(row) for row in block[token]}) >= 2
+        }
+        stability_sets.append(mixed)
+        stability_ratios.append(len(mixed) / len(stability_tokens))
+    jaccards = [jaccard(stability_sets[a], stability_sets[b]) for a, b in combinations(range(4), 2)]
+    ratio_array = np.asarray(stability_ratios)
+    ratio_cv = float(ratio_array.std(ddof=1) / ratio_array.mean()) if ratio_array.mean() else math.inf
+    stability_report = {
+        "blocks": len(args.s0_block),
+        "tokens_per_block": len(stability_tokens),
+        "mixed_tier_ratios": stability_ratios,
+        "mixed_tier_ratio_cv": ratio_cv,
+        "membership_jaccards": jaccards,
+        "membership_jaccard_median": float(np.median(jaccards)),
+    }
+
+    tiers_by_token = {token: [_row_tier(row) for row in bank[token]] for token in candidate_tokens}
+    fully_valid = [token for token in candidate_tokens if all(tier is not None for tier in tiers_by_token[token])]
+    mixed = {token for token in fully_valid if len(set(tiers_by_token[token])) >= 2}
+    priority = {token: float(token in mixed) for token in fully_valid}
+    selected, intent_counts = constrained_ranked_select(
+        fully_valid, master, priority, args.seed, "safetymix-g4"
+    )
+    if selected is None:
+        raise ValueError("SafetyMix-1K is infeasible under frozen quota and per-log cap")
+    repeated, _ = constrained_ranked_select(fully_valid, master, priority, args.seed, "safetymix-g4")
+    if repeated != selected:
+        raise AssertionError("SafetyMix membership is not deterministic")
+    ordered = sorted(selected, key=lambda token: stable_key(args.seed, "safetymix-train-order", token))
+    repeated_order = sorted(repeated, key=lambda token: stable_key(args.seed, "safetymix-train-order", token))
+    if ordered != repeated_order:
+        raise AssertionError("SafetyMix order is not deterministic")
+    manifest = args.output_dir / "safetymix_1k.txt"
+    write_tokens(manifest, ordered)
+
+    dev_tokens = set(load_tokens(args.dev_manifest))
+    final_tokens = set(load_tokens(args.final_manifest))
+    per_log = Counter(master[token]["log_name"] for token in selected)
+    safetymix_report = {
+        "selected": len(selected),
+        "mixed_selected": sum(token in mixed for token in selected),
+        "fully_valid_candidates": len(fully_valid),
+        "intent_counts": intent_counts,
+        "logs": len(per_log),
+        "max_per_log": max(per_log.values()),
+        "dev_overlap": len(set(selected) & dev_tokens),
+        "final_overlap": len(set(selected) & final_tokens),
+        "membership_sha256": hashlib.sha256("".join(f"{token}\n" for token in sorted(selected)).encode()).hexdigest(),
+        "order_sha256": sha256(manifest),
+    }
+
+    full_replay = _advantage_replay(bank, candidate_tokens)
+    selected_replay = _advantage_replay(bank, ordered)
+    table_rows = []
+    zero_composition = Counter()
+    offset = 0
+    for token in ordered:
+        group = bank[token]
+        tiers = tiers_by_token[token]
+        hla = selected_replay["hla"][offset : offset + 4]
+        sdr = selected_replay["sdr"][offset : offset + 4]
+        cdtr = selected_replay["cdtr"][offset : offset + 4]
+        offset += 4
+        effective = max(abs(value) for value in hla) > 0.0
+        unique = set(tiers)
+        if not effective:
+            if len(unique) == 1:
+                reason = f"all_{next(iter(unique))}"
+            else:
+                reason = "other"
+            if max(sdr) == min(sdr):
+                reason += "_sdr_tie"
+            zero_composition[reason] += 1
+        table_rows.append(
+            {
+                "token": token,
+                "tiers": "|".join(tiers),
+                "mixed_tier": len(unique) >= 2,
+                "sdr_advantages": "|".join(f"{value:.9g}" for value in sdr),
+                "cdtr_advantages": "|".join(f"{value:.9g}" for value in cdtr),
+                "hla_train_advantages": "|".join(f"{value:.9g}" for value in hla),
+                "mean_abs_hla_minus_sdr": float(np.mean(np.abs(np.asarray(hla) - np.asarray(sdr)))),
+                "effective": effective,
+            }
+        )
+    with (args.output_dir / "group_geometry.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(table_rows[0]))
+        writer.writeheader()
+        writer.writerows(table_rows)
+
+    e0_rows = [json.loads(line) for line in args.e0_rollouts.read_text(encoding="utf-8-sig").splitlines() if line]
+    strict_clear_e0 = float(
+        np.mean(
+            [
+                is_strict_clear(
+                    bool(row.get("parsed_ok", True)),
+                    row["no_at_fault_collisions"],
+                    row["drivable_area_compliance"],
+                    row["time_to_collision_within_bound"],
+                )
+                for row in e0_rows
+            ]
+        )
+    )
+    selected_diagnostics = selected_replay["diagnostics"]
+    c_half_high = sum(
+        float(row["no_at_fault_collisions"]) == 0.5 and _row_tier(row) in {"L2", "L3"}
+        for token in candidate_tokens
+        for row in bank[token]
+    )
+    technical_gates = {
+        "bank_6000x4": len(bank) == 6000 and sum(len(rows) for rows in bank.values()) == 24000,
+        "mapping_error_zero": True,
+        "c_half_never_l2_l3": c_half_high == 0,
+        "safetymix_exact": len(selected) == 1000 and intent_counts == {"straight": 634, "left": 251, "right": 115},
+        "per_log_cap": max(per_log.values()) <= 5,
+        "no_dev_final_overlap": not (set(selected) & (dev_tokens | final_tokens)),
+        "finite": all(math.isfinite(value) for value in finite_numbers(selected_diagnostics)),
+        "identity": selected_diagnostics["identity_max_abs_difference"] <= 1e-7,
+        "identity_covered": selected_diagnostics["identity_groups"] > 0,
+        "invalid_zero": full_replay["diagnostics"]["invalid_advantage_max_abs"] == 0.0,
+        "e0_coverage": len(e0_rows) == 2000,
+    }
+    technical_gates["passed"] = all(technical_gates.values())
+    scientific_gates = {
+        "mixed_ratio_cv": ratio_cv <= 0.20,
+        "mixed_jaccard": float(np.median(jaccards)) >= 0.50,
+        "hla_no_cross_tier_inversion": selected_diagnostics["hla_cross_tier_inversions"] == 0.0,
+        "raw_margin": selected_diagnostics["min_cross_tier_raw_margin"] >= 5.0 / 12.0,
+        "all_group_material": selected_diagnostics["material_change_ratio"] >= 0.10,
+        "mixed_group_material": selected_diagnostics["mixed_material_change_ratio"] >= 0.80,
+    }
+    scientific_gates["passed"] = all(scientific_gates.values())
+    advantage_report = {
+        "bank_diagnostics": full_replay["diagnostics"],
+        "safetymix_diagnostics": selected_diagnostics,
+        "sdr_distribution": _distribution(selected_replay["sdr"]),
+        "cdtr_distribution": _distribution(selected_replay["cdtr"]),
+        "hla_train_distribution": _distribution(selected_replay["hla"]),
+        "zero_group_composition": dict(zero_composition),
+        "tier_counts": dict(Counter(tier for tiers in tiers_by_token.values() for tier in tiers if tier is not None)),
+        "invalid_rollouts": sum(tier is None for tiers in tiers_by_token.values() for tier in tiers),
+        "strict_clear_e0": strict_clear_e0,
+        "headroom_e0": 1.0 - strict_clear_e0,
+        "technical_gates": technical_gates,
+        "scientific_gates": scientific_gates,
+        "decision": "proceed_hla_smoke" if technical_gates["passed"] and scientific_gates["passed"] else "close_hla",
+    }
+    for name, payload in (
+        ("cdt_stability_report.json", stability_report),
+        ("safetymix_report.json", safetymix_report),
+        ("advantage_geometry_report.json", advantage_report),
+    ):
+        (args.output_dir / name).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+        )
+    (args.output_dir / "input_sha256.json").write_text(
+        json.dumps(
+            {
+                str(path): sha256(path)
+                for path in [
+                    *args.s0_block,
+                    args.stability_manifest,
+                    args.bank_rollouts,
+                    args.candidate_manifest,
+                    args.dev_manifest,
+                    args.final_manifest,
+                    args.master_index,
+                    args.e0_rollouts,
+                ]
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (args.output_dir / "source_commit.txt").write_text(args.source_commit + "\n", encoding="utf-8")
+    (args.output_dir / "resolved_method_definition.json").write_text(
+        json.dumps(
+            {
+                "tiers": "L0<L1<L2<L3; invalid excluded",
+                "same_l2_l3": "standard_grpo_identity",
+                "mixed": "tier_pairwise_plus_0.125_bounded_centered_sdr",
+                "scale": "valid_subset_torch_std_plus_1e-6",
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (args.output_dir / "exit_code").write_text("0\n", encoding="utf-8")
+    (args.output_dir / "COMPLETE").touch()
+    return {"stability": stability_report, "safetymix": safetymix_report, "advantage": advantage_report}
+
+
 def compare_rollouts(args: argparse.Namespace) -> dict:
     tokens = load_tokens(args.manifest)
     allowed = set(tokens)
@@ -578,6 +861,20 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--seed", type=int, default=20260825)
     command.add_argument("--skip-adas", action="store_true")
     command.set_defaults(function=build_manifests)
+
+    command = subparsers.add_parser("analyze-h0")
+    command.add_argument("--s0-block", type=Path, action="append", required=True)
+    command.add_argument("--stability-manifest", type=Path, required=True)
+    command.add_argument("--bank-rollouts", type=Path, required=True)
+    command.add_argument("--candidate-manifest", type=Path, required=True)
+    command.add_argument("--dev-manifest", type=Path, required=True)
+    command.add_argument("--final-manifest", type=Path, required=True)
+    command.add_argument("--master-index", type=Path, required=True)
+    command.add_argument("--e0-rollouts", type=Path, required=True)
+    command.add_argument("--output-dir", type=Path, required=True)
+    command.add_argument("--source-commit", required=True)
+    command.add_argument("--seed", type=int, default=20260825)
+    command.set_defaults(function=analyze_h0)
 
     command = subparsers.add_parser("compare")
     command.add_argument("--baseline", type=Path, required=True)

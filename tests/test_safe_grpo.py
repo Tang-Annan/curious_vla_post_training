@@ -114,6 +114,94 @@ def test_std_floor_zero_variance_is_zero():
     assert torch.equal(advantages, torch.zeros_like(advantages))
 
 
+def cdt_metrics(tiers):
+    mapping = {
+        "L3": (True, 1.0, 1.0, 1.0),
+        "L2": (True, 1.0, 1.0, 0.0),
+        "L1": (True, 0.5, 1.0, 1.0),
+        "L0": (True, 0.0, 1.0, 1.0),
+        None: (False, 0.0, 0.0, 0.0),
+    }
+    values = [mapping[tier] for tier in tiers]
+    return {
+        "parsed_ok": [value[0] for value in values],
+        "no_at_fault_collisions": [value[1] for value in values],
+        "drivable_area_compliance": [value[2] for value in values],
+        "time_to_collision_within_bound": [value[3] for value in values],
+    }
+
+
+def test_cdt_canonicalization_and_tiers():
+    cdt = load_module(ROOT / "EasyR1/verl/trainer/cdt_hla.py", "cdt_hla")
+    assert cdt.classify_cdt(True, 1.0, 1.0, 1.0) == "L3"
+    assert cdt.classify_cdt(True, 1.0, 1.0, 0.0) == "L2"
+    assert cdt.classify_cdt(True, 0.5, 1.0, 1.0) == "L1"
+    assert cdt.classify_cdt(True, 0.0, 1.0, 1.0) == "L0"
+    assert cdt.classify_cdt(False, 0.2, 0.2, 0.2) is None
+    assert cdt.classify_cdt(True, 1.0 - 1e-6, 1.0, 1.0) == "L3"
+    with pytest.raises(ValueError, match="cannot be mapped"):
+        cdt.classify_cdt(True, 0.25, 1.0, 1.0)
+
+
+def test_cdt_hla_same_high_tier_is_standard_grpo_identity():
+    torch = pytest.importorskip("torch")
+    core = importlib.import_module("verl.trainer.core_algos")
+    rewards = torch.tensor([[0.90], [0.89], [0.50], [0.49]])
+    mask = torch.ones_like(rewards)
+    index = ["group"] * 4
+    baseline, _ = core.compute_grpo_outcome_advantage(rewards, mask, index)
+    diagnostics = {}
+    hla, _ = core.compute_cdt_hla_outcome_advantage(
+        rewards, mask, index, reward_metrics=cdt_metrics(["L3"] * 4), diagnostics=diagnostics
+    )
+    assert torch.equal(hla, baseline)
+    assert diagnostics["identity_max_abs_difference"] == 0.0
+
+
+def test_cdt_hla_mixed_tier_preserves_continuous_within_geometry_and_margin():
+    torch = pytest.importorskip("torch")
+    core = importlib.import_module("verl.trainer.core_algos")
+    rewards = torch.tensor([[0.90], [0.89], [0.50], [0.49]])
+    diagnostics = {}
+    hla, _ = core.compute_cdt_hla_outcome_advantage(
+        rewards,
+        torch.ones_like(rewards),
+        ["group"] * 4,
+        reward_metrics=cdt_metrics(["L3", "L3", "L3", "L2"]),
+        diagnostics=diagnostics,
+    )
+    values = hla[:, 0]
+    assert values[0] > values[1] > values[2] > values[3]
+    assert values[0] - values[1] < (values[1] - values[2]) / 10
+    assert torch.sum(values).item() == pytest.approx(0.0, abs=1e-6)
+    assert diagnostics["min_cross_tier_raw_margin"] >= 5 / 12
+    assert diagnostics["hla_cross_tier_inversions"] == 0.0
+
+
+def test_cdt_hla_invalid_is_excluded_and_failure_tiers_do_not_learn_quality():
+    torch = pytest.importorskip("torch")
+    core = importlib.import_module("verl.trainer.core_algos")
+    rewards = torch.tensor([[0.2], [0.0], [0.0], [0.0]])
+    mask = torch.ones_like(rewards)
+    hla, _ = core.compute_cdt_hla_outcome_advantage(
+        rewards, mask, ["group"] * 4, reward_metrics=cdt_metrics(["L0", None, None, None])
+    )
+    assert torch.equal(hla, torch.zeros_like(hla))
+
+    rewards = torch.tensor([[0.8], [0.3], [0.0], [0.0]])
+    hla, _ = core.compute_cdt_hla_outcome_advantage(
+        rewards, mask, ["group"] * 4, reward_metrics=cdt_metrics(["L3", "L2", None, None])
+    )
+    assert hla[0] > hla[1]
+    assert torch.equal(hla[2:], torch.zeros_like(hla[2:]))
+    assert hla.sum().item() == pytest.approx(0.0, abs=1e-6)
+
+    hla, _ = core.compute_cdt_hla_outcome_advantage(
+        rewards, mask, ["group"] * 4, reward_metrics=cdt_metrics(["L1"] * 4)
+    )
+    assert torch.equal(hla, torch.zeros_like(hla))
+
+
 def test_dr_grpo_centers_without_std_normalization():
     torch = pytest.importorskip("torch")
     core = importlib.import_module("verl.trainer.core_algos")

@@ -91,6 +91,9 @@ def test_dataset_v2_launcher_has_no_legacy_fallbacks() -> None:
     assert 'TENSORBOARD_DIR="$RUN_DIR/tensorboard"' in launcher
     assert 'trainer.dev_access_lock_path="$DEV_ACCESS_LOCK"' in launcher
     assert "trainer.val_only=true" in launcher
+    assert '--adv-estimator) ADV_ESTIMATOR="$2"' in launcher
+    assert 'algorithm.adv_estimator="$ADV_ESTIMATOR"' in launcher
+    assert "data.shuffle=false" in launcher
 
 
 def test_validation_creates_exclusive_dev_access_lock() -> None:

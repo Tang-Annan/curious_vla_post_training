@@ -163,6 +163,8 @@ def compute_advantage(
     gamma: float = 1.0,
     lam: float = 1.0,
     std_floor: float = 0.05,
+    reward_metrics: Optional[dict[str, list[float]]] = None,
+    diagnostics: Optional[dict[str, float]] = None,
 ):
     """Compute advantage estimates for policy optimization."""
     adv_inputs = {
@@ -172,6 +174,8 @@ def compute_advantage(
         "gamma": gamma,
         "lam": lam,
         "std_floor": std_floor,
+        "reward_metrics": reward_metrics,
+        "diagnostics": diagnostics,
     }
     if "values" in data.batch:
         adv_inputs["values"] = data.batch["values"]
@@ -660,6 +664,7 @@ class RayPPOTrainer:
                 batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
 
                 # compute reward
+                per_response_reward_metrics = None
                 if "token_level_scores" not in batch.batch:
                     with timer("reward", timing_raw):
                         reward_ref = self.reward_fn.compute_reward.remote(batch)
@@ -685,6 +690,7 @@ class RayPPOTrainer:
                     if "token_level_scores" not in batch.batch:
                         # get token level scores asynchronously
                         reward_tensor, reward_metrics = ray.get(reward_ref)
+                        per_response_reward_metrics = reward_metrics
                         batch.batch["token_level_scores"] = reward_tensor
                         reward_metrics = {f"reward/{k}": v for k, v in reduce_metrics(reward_metrics).items()}
                         metrics.update(reward_metrics)
@@ -698,13 +704,17 @@ class RayPPOTrainer:
                         batch.batch["token_level_rewards"] = batch.batch["token_level_scores"]
 
                     # compute advantages, executed on the driver process
+                    advantage_diagnostics = {}
                     batch = compute_advantage(
                         batch,
                         adv_estimator=self.config.algorithm.adv_estimator,
                         gamma=self.config.algorithm.gamma,
                         lam=self.config.algorithm.lam,
                         std_floor=self.config.algorithm.std_floor,
+                        reward_metrics=per_response_reward_metrics,
+                        diagnostics=advantage_diagnostics,
                     )
+                    metrics.update({f"hla/{key}": value for key, value in advantage_diagnostics.items()})
 
                 # update critic
                 if self.use_critic:

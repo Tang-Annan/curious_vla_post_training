@@ -18,6 +18,7 @@ The function implemented in this file should be used by trainer with different d
 implement PPO
 """
 
+import math
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from enum import Enum
@@ -86,6 +87,7 @@ class AdvantageEstimator(str, Enum):
     REINFORCE_PLUS_PLUS = "reinforce_plus_plus"
     REMAX = "remax"
     RLOO = "rloo"
+    CDT_HLA_GRPO = "cdt_hla_grpo"
 
 
 ADV_ESTIMATOR_MAP: dict[str, Any] = {}
@@ -174,6 +176,21 @@ def compute_gae_advantage_return(
     return advantages, returns
 
 
+def _standardize_group_scores(scores: torch.Tensor, index, eps: float) -> torch.Tensor:
+    normalized = scores.clone()
+    id2score = defaultdict(list)
+    id2mean, id2std = {}, {}
+    for i in range(scores.shape[0]):
+        id2score[index[i]].append(scores[i])
+    for idx in id2score:
+        assert len(id2score[idx]) > 1, "GRPO needs rollout.n > 1."
+        id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
+        id2std[idx] = torch.std(torch.tensor(id2score[idx]))
+    for i in range(scores.shape[0]):
+        normalized[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + eps)
+    return normalized
+
+
 @register_adv_estimator(AdvantageEstimator.GRPO)
 def compute_grpo_outcome_advantage(
     token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: torch.Tensor, eps: float = 1e-6, **kwargs
@@ -198,23 +215,163 @@ def compute_grpo_outcome_advantage(
             shape: (bs, response_length)
 
     """
-    scores = token_level_rewards.sum(dim=-1)
-    id2score = defaultdict(list)
-    id2mean, id2std = {}, {}
-
-    bsz = scores.shape[0]
-    for i in range(bsz):
-        id2score[index[i]].append(scores[i])
-
-    for idx in id2score:
-        assert len(id2score[idx]) > 1, "GRPO needs rollout.n > 1."
-        id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
-        id2std[idx] = torch.std(torch.tensor(id2score[idx]))
-
-    for i in range(bsz):
-        scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + eps)
-
+    scores = _standardize_group_scores(token_level_rewards.sum(dim=-1), index, eps)
     returns = scores.unsqueeze(-1) * response_mask
+    return returns, returns
+
+
+@register_adv_estimator(AdvantageEstimator.CDT_HLA_GRPO)
+def compute_cdt_hla_outcome_advantage(
+    token_level_rewards: torch.Tensor,
+    response_mask: torch.Tensor,
+    index,
+    reward_metrics: dict[str, list[float]] | None = None,
+    diagnostics: dict[str, float] | None = None,
+    eps: float = 1e-6,
+    **kwargs,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply CDT hierarchy only to valid mixed-tier GRPO groups."""
+    from verl.trainer.cdt_hla import TIER_VALUE, classify_cdt
+
+    required = (
+        "parsed_ok",
+        "no_at_fault_collisions",
+        "drivable_area_compliance",
+        "time_to_collision_within_bound",
+    )
+    if reward_metrics is None or any(key not in reward_metrics for key in required):
+        raise ValueError("CDT-HLA requires per-response parsed_ok/C/D/T reward metrics.")
+    batch_size = token_level_rewards.shape[0]
+    if any(len(reward_metrics[key]) != batch_size for key in required):
+        raise ValueError("CDT-HLA reward metrics are not aligned with the response batch.")
+
+    scores = token_level_rewards.sum(dim=-1)
+    baseline = _standardize_group_scores(scores, index, eps)
+    output = torch.zeros_like(scores)
+    tiers = [
+        classify_cdt(
+            bool(reward_metrics["parsed_ok"][i]),
+            reward_metrics["no_at_fault_collisions"][i],
+            reward_metrics["drivable_area_compliance"][i],
+            reward_metrics["time_to_collision_within_bound"][i],
+        )
+        for i in range(batch_size)
+    ]
+    groups = defaultdict(list)
+    for position, group_id in enumerate(index):
+        groups[group_id].append(position)
+
+    mixed_groups = effective_groups = material_groups = mixed_material_groups = 0
+    all_l3 = all_l2 = all_l1 = all_l0 = all_invalid = partial_invalid = identity_groups = 0
+    cross_tier_pairs = baseline_inversions = hla_inversions = hla_corrections = 0
+    tier_abs: list[float] = []
+    within_abs: list[float] = []
+    raw_values: list[float] = []
+    min_raw_margin = math.inf
+    identity_max_diff = 0.0
+    invalid_max_abs = 0.0
+
+    for positions in groups.values():
+        valid = [position for position in positions if tiers[position] is not None]
+        if not valid:
+            all_invalid += 1
+        elif len(valid) != len(positions):
+            partial_invalid += 1
+        unique_tiers = {tiers[position] for position in valid}
+        if len(valid) < 2:
+            pass
+        elif len(unique_tiers) == 1:
+            tier = next(iter(unique_tiers))
+            if tier in {"L2", "L3"}:
+                valid_scores = scores[valid]
+                valid_ids = ["valid"] * len(valid)
+                output[valid] = _standardize_group_scores(valid_scores, valid_ids, eps)
+                if len(valid) == len(positions):
+                    identity_groups += 1
+                    identity_max_diff = max(
+                        identity_max_diff,
+                        float(torch.max(torch.abs(output[valid] - baseline[valid])).item()),
+                    )
+            if len(valid) == len(positions):
+                all_l3 += tier == "L3"
+                all_l2 += tier == "L2"
+                all_l1 += tier == "L1"
+                all_l0 += tier == "L0"
+        else:
+            mixed_groups += 1
+            tier_advantage = torch.zeros(len(valid), dtype=scores.dtype, device=scores.device)
+            within_advantage = torch.zeros_like(tier_advantage)
+            for local_i, position_i in enumerate(valid):
+                tier_advantage[local_i] = sum(
+                    (TIER_VALUE[tiers[position_i]] > TIER_VALUE[tiers[position_j]])
+                    - (TIER_VALUE[tiers[position_i]] < TIER_VALUE[tiers[position_j]])
+                    for position_j in valid
+                    if position_j != position_i
+                ) / (len(valid) - 1)
+            for tier in ("L2", "L3"):
+                local_members = [local for local, position in enumerate(valid) if tiers[position] == tier]
+                if len(local_members) > 1:
+                    values = scores[[valid[local] for local in local_members]]
+                    centered = values - values.mean()
+                    maximum = centered.abs().max()
+                    if maximum > 0:
+                        within_advantage[local_members] = centered / (maximum + eps)
+            raw = tier_advantage + 0.125 * within_advantage
+            train = raw / (raw.std() + eps) if raw.std() > 0 else torch.zeros_like(raw)
+            output[valid] = train
+            tier_abs.extend(float(value) for value in tier_advantage.abs())
+            within_abs.extend(float(value) for value in (0.125 * within_advantage).abs())
+            raw_values.extend(float(value) for value in raw)
+            for local_i, position_i in enumerate(valid):
+                for local_j, position_j in enumerate(valid):
+                    if TIER_VALUE[tiers[position_i]] <= TIER_VALUE[tiers[position_j]]:
+                        continue
+                    cross_tier_pairs += 1
+                    inverted = baseline[position_i] <= baseline[position_j]
+                    baseline_inversions += int(inverted)
+                    hla_inversions += int(train[local_i] <= train[local_j])
+                    hla_corrections += int(inverted and train[local_i] > train[local_j])
+                    min_raw_margin = min(min_raw_margin, float(raw[local_i] - raw[local_j]))
+
+        group_difference = float(torch.mean(torch.abs(output[positions] - baseline[positions])).item())
+        changed = group_difference >= 0.10
+        material_groups += int(changed)
+        mixed_material_groups += int(changed and len(unique_tiers) > 1)
+        effective_groups += int(bool(torch.any(output[positions].abs() > 0)))
+        invalid_positions = [position for position in positions if tiers[position] is None]
+        if invalid_positions:
+            invalid_max_abs = max(invalid_max_abs, float(output[invalid_positions].abs().max().item()))
+
+    if diagnostics is not None:
+        group_count = len(groups)
+        diagnostics.update(
+            {
+                "mixed_tier_ratio": mixed_groups / group_count,
+                "all_l3_ratio": all_l3 / group_count,
+                "all_l2_ratio": all_l2 / group_count,
+                "all_l1_ratio": all_l1 / group_count,
+                "all_l0_ratio": all_l0 / group_count,
+                "all_invalid_ratio": all_invalid / group_count,
+                "partial_invalid_ratio": partial_invalid / group_count,
+                "effective_group_rate": effective_groups / group_count,
+                "material_change_ratio": material_groups / group_count,
+                "mixed_material_change_ratio": mixed_material_groups / mixed_groups if mixed_groups else 0.0,
+                "mean_abs_tier": sum(tier_abs) / len(tier_abs) if tier_abs else 0.0,
+                "mean_abs_scaled_within": sum(within_abs) / len(within_abs) if within_abs else 0.0,
+                "cross_tier_pairs": float(cross_tier_pairs),
+                "sdr_cross_tier_inversion_tie_rate": baseline_inversions / cross_tier_pairs if cross_tier_pairs else 0.0,
+                "hla_cross_tier_inversions": float(hla_inversions),
+                "hla_corrections": float(hla_corrections),
+                "min_cross_tier_raw_margin": min_raw_margin if cross_tier_pairs else 0.0,
+                "identity_max_abs_difference": identity_max_diff,
+                "identity_groups": float(identity_groups),
+                "invalid_advantage_max_abs": invalid_max_abs,
+                "raw_min": min(raw_values) if raw_values else 0.0,
+                "raw_max": max(raw_values) if raw_values else 0.0,
+            }
+        )
+
+    returns = output.unsqueeze(-1) * response_mask
     return returns, returns
 
 
