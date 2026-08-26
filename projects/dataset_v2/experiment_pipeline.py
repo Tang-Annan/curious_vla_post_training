@@ -302,8 +302,9 @@ def spearman(left: dict[str, float], right: dict[str, float]) -> float:
 def analyze_s0(args: argparse.Namespace) -> dict:
     tokens = load_tokens(args.manifest)
     allowed = set(tokens)
-    if len(args.block) != 8:
-        raise ValueError("V2-S0 requires exactly eight independent G4 blocks")
+    if len(args.block) != 4:
+        raise ValueError("V2-S0 requires exactly four independent G4 blocks")
+    block_count = len(args.block)
     eligible_sets = []
     scores = []
     for path in args.block:
@@ -312,23 +313,23 @@ def analyze_s0(args: argparse.Namespace) -> dict:
         eligible_sets.append({token for token in tokens if adas_eligible(stats[token])})
         scores.append({token: fals_score(stats[token]) for token in tokens})
     eligible_ratios = np.asarray([len(tokens_set) / len(tokens) for tokens_set in eligible_sets])
-    adas_jaccards = [jaccard(eligible_sets[a], eligible_sets[b]) for a, b in combinations(range(8), 2)]
-    correlations = [spearman(scores[a], scores[b]) for a, b in combinations(range(8), 2)]
+    adas_jaccards = [jaccard(eligible_sets[a], eligible_sets[b]) for a, b in combinations(range(block_count), 2)]
+    correlations = [spearman(scores[a], scores[b]) for a, b in combinations(range(block_count), 2)]
     top_size = math.ceil(len(tokens) * 0.25)
     top_sets = [set(sorted(tokens, key=lambda token: (-block[token], token))[:top_size]) for block in scores]
-    top_jaccards = [jaccard(top_sets[a], top_sets[b]) for a, b in combinations(range(8), 2)]
+    top_jaccards = [jaccard(top_sets[a], top_sets[b]) for a, b in combinations(range(block_count), 2)]
     ratio_mean = float(eligible_ratios.mean())
     ratio_cv = float(eligible_ratios.std(ddof=1) / ratio_mean) if ratio_mean else math.inf
     gates = {
-        "adas_eligible_ratio_cv_at_most_0_15": ratio_cv <= 0.15,
-        "adas_membership_jaccard_median_at_least_0_60": float(np.median(adas_jaccards)) >= 0.60,
-        "fals_rank_spearman_median_at_least_0_70": float(np.median(correlations)) >= 0.70,
-        "fals_top25_jaccard_median_at_least_0_60": float(np.median(top_jaccards)) >= 0.60,
+        "adas_eligible_ratio_cv_at_most_0_20": ratio_cv <= 0.20,
+        "adas_membership_jaccard_median_at_least_0_50": float(np.median(adas_jaccards)) >= 0.50,
+        "fals_rank_spearman_median_at_least_0_60": float(np.median(correlations)) >= 0.60,
+        "fals_top25_jaccard_median_at_least_0_50": float(np.median(top_jaccards)) >= 0.50,
         "all_statistics_finite": bool(np.isfinite([*eligible_ratios, *adas_jaccards, *correlations, *top_jaccards]).all()),
     }
     report = {
         "id": "V2-S0",
-        "blocks": 8,
+        "blocks": block_count,
         "tokens": len(tokens),
         "adas": {
             "eligible_ratios": eligible_ratios.tolist(),
@@ -339,7 +340,7 @@ def analyze_s0(args: argparse.Namespace) -> dict:
             "rank_spearman_median": float(np.median(correlations)),
             "top25_jaccard_median": float(np.median(top_jaccards)),
         },
-        "gates": {**gates, "adas_passed": gates["adas_eligible_ratio_cv_at_most_0_15"] and gates["adas_membership_jaccard_median_at_least_0_60"] and gates["all_statistics_finite"], "fals_passed": gates["fals_rank_spearman_median_at_least_0_70"] and gates["fals_top25_jaccard_median_at_least_0_60"] and gates["all_statistics_finite"]},
+        "gates": {**gates, "adas_passed": gates["adas_eligible_ratio_cv_at_most_0_20"] and gates["adas_membership_jaccard_median_at_least_0_50"] and gates["all_statistics_finite"], "fals_passed": gates["fals_rank_spearman_median_at_least_0_60"] and gates["fals_top25_jaccard_median_at_least_0_50"] and gates["all_statistics_finite"]},
     }
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     return report

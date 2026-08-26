@@ -1,6 +1,8 @@
 import csv
+import json
 import subprocess
 import sys
+from argparse import Namespace
 from pathlib import Path
 
 import pyarrow as pa
@@ -15,7 +17,7 @@ from projects.dataset_v2.build_dataset_v2 import (
     v2_image_path,
 )
 from projects.dataset_v2.freeze_dataset_v2 import load_cache_manifest, validate_assets
-from projects.dataset_v2.experiment_pipeline import adas_eligible, fals_score, spearman
+from projects.dataset_v2.experiment_pipeline import adas_eligible, analyze_s0, fals_score, spearman
 
 
 def test_intent_normalization_and_image_namespace() -> None:
@@ -103,6 +105,26 @@ def test_selector_formulas_match_preregistered_g4_rules() -> None:
     assert fals_score(eligible) == (1.0 - 0.4) * (0.8 - 0.4)
     assert not adas_eligible({**eligible, "pdms_std": 0.0})
     assert spearman({"a": 1.0, "b": 2.0, "c": 3.0}, {"a": 2.0, "b": 4.0, "c": 6.0}) == 1.0
+
+
+def test_s0_analyzes_four_shared_g4_blocks(tmp_path: Path) -> None:
+    tokens = ["a", "b", "c", "d"]
+    manifest = tmp_path / "manifest.txt"
+    manifest.write_text("\n".join(tokens) + "\n", encoding="utf-8")
+    blocks = []
+    for block_index in range(4):
+        block = tmp_path / f"block_{block_index}.jsonl"
+        rows = []
+        for token_index, token in enumerate(tokens):
+            scaled = [0.1, 0.2, 0.3, 0.9 - token_index * 0.1]
+            rows.extend({"token": token, "pdms": value, "pdms_scaled": scaled[index]} for index, value in enumerate([0.0, 0.0, 1.0, 1.0]))
+        block.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        blocks.append(block)
+    output = tmp_path / "report.json"
+    report = analyze_s0(Namespace(manifest=manifest, block=blocks, output=output))
+    assert report["blocks"] == 4
+    assert report["gates"]["adas_passed"]
+    assert report["gates"]["fals_passed"]
 
 
 def test_pipeline_cli_runs_outside_repository_cwd(tmp_path: Path) -> None:
