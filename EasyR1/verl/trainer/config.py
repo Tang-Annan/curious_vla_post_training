@@ -122,6 +122,8 @@ class TrainerConfig:
     """validate before training"""
     val_only: bool = False
     """validate only, skip training"""
+    dev_access_lock_path: Optional[str] = None
+    """exclusive marker created when validation first starts"""
     val_generations_to_log: int = 0
     """number of generations to log for validation"""
     save_freq: int = -1
