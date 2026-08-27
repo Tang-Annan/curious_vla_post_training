@@ -259,9 +259,7 @@ def build_eval_rows(log_paths: list[Path], template: str) -> tuple[list[EvalRow]
         for window in eligible_windows(frames):
             center = window[NUM_HISTORY_FRAMES - 1]
             command_index = int(np.argmax(center["driving_command"]))
-            if command_index not in (0, 1, 2):
-                raise ValueError(f"Unsupported evaluation driving command for {center['token']}")
-            intent = ("left", "straight", "right")[command_index]
+            intent = ("left", "straight", "right", "unknown")[command_index]
             source_image = center["cams"]["CAM_F0"]["data_path"]
             vehicle, vru, flag = scene_risk(center)
             row = EvalRow(

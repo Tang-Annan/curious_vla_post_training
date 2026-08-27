@@ -74,3 +74,6 @@ def test_problem_uses_relative_history_and_four_second_prompt() -> None:
     assert "t-0: (0.0, 0.0, 0.0)" in problem
     assert "optimal future 4-second trajectory" in problem
     assert "optimal future 5-second trajectory" not in problem
+
+    window[3]["driving_command"] = [0, 0, 0, 1]
+    assert "Current high-level intent (string): unknown" in build_problem(window, template)
