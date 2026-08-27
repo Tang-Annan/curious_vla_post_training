@@ -28,6 +28,8 @@ from projects.dataset_v2.build_dataset_v2 import Row, largest_remainder, select_
 
 
 INTENTS = ("straight", "left", "right")
+TIER_RANK = {"L0": 0, "L1": 1, "L2": 2, "L3": 3}
+TIER_PAIRS = ("L3-L2", "L3-L1", "L3-L0", "L2-L1", "L2-L0", "L1-L0")
 METRICS = (
     "pdms",
     "pdms_scaled",
@@ -518,6 +520,318 @@ def _distribution(values: list[float]) -> dict[str, float]:
     }
 
 
+def _cross_tier_pairs(token: str, rows: list[dict], metadata: dict[str, str], epsilon: float) -> list[dict]:
+    tiers = [_row_tier(row) for row in rows]
+    pair_rows = []
+    for left, right in combinations(range(len(rows)), 2):
+        if tiers[left] is None or tiers[right] is None or tiers[left] == tiers[right]:
+            continue
+        high, low = (left, right) if TIER_RANK[tiers[left]] > TIER_RANK[tiers[right]] else (right, left)
+        high_row, low_row = rows[high], rows[low]
+        gap = float(high_row["pdms_scaled"]) - float(low_row["pdms_scaled"])
+        pair_type = "tie" if abs(gap) <= epsilon else "inversion" if gap < -epsilon else "correct"
+        pair_rows.append(
+            {
+                "token": token,
+                "log_id": metadata["log_name"],
+                "intent": metadata["intent"],
+                "rollout_i": high,
+                "rollout_j": low,
+                "tier_i": tiers[high],
+                "tier_j": tiers[low],
+                "C_i": float(high_row["no_at_fault_collisions"]),
+                "D_i": float(high_row["drivable_area_compliance"]),
+                "T_i": float(high_row["time_to_collision_within_bound"]),
+                "C_j": float(low_row["no_at_fault_collisions"]),
+                "D_j": float(low_row["drivable_area_compliance"]),
+                "T_j": float(low_row["time_to_collision_within_bound"]),
+                "SDR_i": float(high_row["pdms_scaled"]),
+                "SDR_j": float(low_row["pdms_scaled"]),
+                "SDR_gap": gap,
+                "pair_type": pair_type,
+                "tier_pair": f"{tiers[high]}-{tiers[low]}",
+            }
+        )
+    return pair_rows
+
+
+def _conflict_group(token: str, rows: list[dict], metadata: dict[str, str], epsilon: float) -> tuple[dict, list[dict]]:
+    pairs = _cross_tier_pairs(token, rows, metadata, epsilon)
+    conflicts = [pair for pair in pairs if pair["pair_type"] != "correct"]
+    tiers = [_row_tier(row) for row in rows]
+    valid_tiers = {tier for tier in tiers if tier is not None}
+    conflict_pairs = {pair["tier_pair"] for pair in conflicts}
+    if conflict_pairs & {"L3-L1", "L3-L0"}:
+        severity = "Critical"
+    elif conflict_pairs & {"L2-L1", "L2-L0"}:
+        severity = "Moderate"
+    elif conflicts:
+        severity = "Mild"
+    else:
+        severity = ""
+    worst = min(conflicts, key=lambda pair: (pair["SDR_gap"], pair["tier_pair"])) if conflicts else None
+    composition = Counter(tier for tier in tiers if tier is not None)
+    return (
+        {
+            "token": token,
+            "log_id": metadata["log_name"],
+            "intent": metadata["intent"],
+            "tiers": "|".join(tier or "invalid" for tier in tiers),
+            "tier_composition": "+".join(
+                f"{tier}x{composition[tier]}" for tier in reversed(TIER_RANK) if composition[tier]
+            ),
+            "SDRs": "|".join(f'{float(row["pdms_scaled"]):.9g}' for row in rows),
+            "mixed_tier": len(valid_tiers) >= 2,
+            "num_cross_tier_pairs": len(pairs),
+            "num_correct_pairs": sum(pair["pair_type"] == "correct" for pair in pairs),
+            "num_tie_pairs": sum(pair["pair_type"] == "tie" for pair in pairs),
+            "num_inversion_pairs": sum(pair["pair_type"] == "inversion" for pair in pairs),
+            "worst_conflict_pair": (
+                f'{worst["tier_pair"]}:{worst["rollout_i"]}>{worst["rollout_j"]}' if worst else ""
+            ),
+            "max_inversion_gap": max(
+                [-pair["SDR_gap"] for pair in conflicts if pair["pair_type"] == "inversion"], default=0.0
+            ),
+            "severity": severity,
+        },
+        pairs,
+    )
+
+
+def _membership_report(sets: list[set[str]], denominator: int) -> dict:
+    ratios = [len(values) / denominator for values in sets]
+    mean = float(np.mean(ratios))
+    jaccards = [jaccard(sets[left], sets[right]) for left, right in combinations(range(len(sets)), 2)]
+    return {
+        "counts": [len(values) for values in sets],
+        "ratios": ratios,
+        "ratio_cv": float(np.std(ratios, ddof=1) / mean) if mean else None,
+        "membership_jaccards": jaccards,
+        "membership_jaccard_median": float(np.median(jaccards)),
+    }
+
+
+def _gap_statistics(values: list[float]) -> dict:
+    if not values:
+        return {"count": 0, "mean": None, "median": None, "p90": None, "max": None}
+    array = np.asarray(values, dtype=float)
+    return {
+        "count": len(values),
+        "mean": float(array.mean()),
+        "median": float(np.median(array)),
+        "p90": float(np.quantile(array, 0.90)),
+        "max": float(array.max()),
+    }
+
+
+def analyze_conflicts(args: argparse.Namespace) -> dict:
+    if len(args.s0_block) != 4:
+        raise ValueError("V2-C0 requires exactly four S0 blocks")
+    candidate_tokens = load_tokens(args.candidate_manifest)
+    stability_tokens = load_tokens(args.stability_manifest)
+    if len(candidate_tokens) != args.expected_groups:
+        raise ValueError(f"Expected {args.expected_groups} candidate groups, found {len(candidate_tokens)}")
+    if len(stability_tokens) != args.expected_stability_tokens:
+        raise ValueError(
+            f"Expected {args.expected_stability_tokens} stability tokens, found {len(stability_tokens)}"
+        )
+    args.output_dir.mkdir(parents=True, exist_ok=False)
+    master = load_master(args.master_index)
+    missing_master = (set(candidate_tokens) | set(stability_tokens)) - set(master)
+    if missing_master:
+        raise ValueError(f"Master index is missing {len(missing_master)} audit tokens")
+    bank = load_groups(args.bank_rollouts, set(candidate_tokens), 4)
+
+    pair_rows = []
+    group_rows = []
+    group_by_token = {}
+    for token in candidate_tokens:
+        group, pairs = _conflict_group(token, bank[token], master[token], args.epsilon)
+        group_by_token[token] = group
+        pair_rows.extend(pairs)
+        if group["severity"]:
+            group_rows.append(group)
+
+    conflict_tokens = [token for token in candidate_tokens if group_by_token[token]["severity"]]
+    geometry_values = []
+    if conflict_tokens:
+        replay = _advantage_replay(bank, conflict_tokens)
+        for offset, token in enumerate(conflict_tokens):
+            start = offset * 4
+            sdr = np.asarray(replay["sdr"][start : start + 4])
+            hla = np.asarray(replay["hla"][start : start + 4])
+            difference = float(np.mean(np.abs(hla - sdr)))
+            group_by_token[token]["mean_abs_hla_minus_sdr"] = difference
+            geometry_values.append(difference)
+    geometry_report = {
+        "conflict_groups": len(conflict_tokens),
+        "mean_abs_hla_minus_sdr": float(np.mean(geometry_values)) if geometry_values else None,
+        "median_abs_hla_minus_sdr": float(np.median(geometry_values)) if geometry_values else None,
+        "p90_abs_hla_minus_sdr": float(np.quantile(geometry_values, 0.90)) if geometry_values else None,
+        "max_abs_hla_minus_sdr": max(geometry_values, default=None),
+        "ratios": {
+            f"at_least_{threshold:.2f}": sum(value >= threshold for value in geometry_values) / len(geometry_values)
+            if geometry_values
+            else 0.0
+            for threshold in (0.05, 0.10, 0.20)
+        },
+    }
+
+    pair_counts = {tier_pair: Counter() for tier_pair in TIER_PAIRS}
+    for row in pair_rows:
+        pair_counts[row["tier_pair"]]["total"] += 1
+        pair_counts[row["tier_pair"]][row["pair_type"]] += 1
+    pair_summary = {}
+    for tier_pair in (*TIER_PAIRS, "All"):
+        counts = sum(pair_counts.values(), Counter()) if tier_pair == "All" else pair_counts[tier_pair]
+        total = counts["total"]
+        pair_summary[tier_pair] = {
+            "total": total,
+            "correct": counts["correct"],
+            "tie": counts["tie"],
+            "inversion": counts["inversion"],
+            "conflict_rate": (counts["tie"] + counts["inversion"]) / total if total else 0.0,
+            "inversion_rate": counts["inversion"] / total if total else 0.0,
+        }
+
+    log_rows = []
+    tokens_by_log = defaultdict(list)
+    for token in candidate_tokens:
+        tokens_by_log[master[token]["log_name"]].append(token)
+    for log_id in sorted(tokens_by_log):
+        tokens = tokens_by_log[log_id]
+        log_rows.append(
+            {
+                "log_id": log_id,
+                "tokens": len(tokens),
+                "mixed_tier_tokens": sum(group_by_token[token]["mixed_tier"] for token in tokens),
+                "conflict_tokens": sum(bool(group_by_token[token]["severity"]) for token in tokens),
+                "critical_conflict_tokens": sum(group_by_token[token]["severity"] == "Critical" for token in tokens),
+                "inversion_pairs": sum(group_by_token[token]["num_inversion_pairs"] for token in tokens),
+            }
+        )
+    ranked_logs = sorted(log_rows, key=lambda row: (-row["conflict_tokens"], row["log_id"]))
+    conflict_count = len(conflict_tokens)
+    intent_summary = {}
+    for intent in INTENTS:
+        intent_tokens = [token for token in candidate_tokens if master[token]["intent"] == intent]
+        intent_conflicts = sum(bool(group_by_token[token]["severity"]) for token in intent_tokens)
+        intent_summary[intent] = {
+            "phase1_groups": len(intent_tokens),
+            "conflict_groups": intent_conflicts,
+            "conflict_rate": intent_conflicts / len(intent_tokens) if intent_tokens else 0.0,
+        }
+
+    stability_conflicts = []
+    stability_critical = []
+    for path in args.s0_block:
+        block = load_groups(path, set(stability_tokens), 4)
+        conflict_set = set()
+        critical_set = set()
+        for token in stability_tokens:
+            group, _ = _conflict_group(token, block[token], master[token], args.epsilon)
+            if group["severity"]:
+                conflict_set.add(token)
+            if group["severity"] == "Critical":
+                critical_set.add(token)
+        stability_conflicts.append(conflict_set)
+        stability_critical.append(critical_set)
+    stability_report = {
+        "blocks": 4,
+        "tokens_per_block": len(stability_tokens),
+        "conflict": _membership_report(stability_conflicts, len(stability_tokens)),
+        "critical": _membership_report(stability_critical, len(stability_tokens)),
+    }
+
+    inversion_gaps = defaultdict(list)
+    for row in pair_rows:
+        if row["pair_type"] == "inversion":
+            inversion_gaps[row["tier_pair"]].append(-row["SDR_gap"])
+    audit_report = {
+        "id": "V2-C0-SDR-CDT-CONFLICT-AUDIT",
+        "epsilon_q": args.epsilon,
+        "pair_summary": pair_summary,
+        "group_summary": {
+            "total_groups": len(candidate_tokens),
+            "mixed_tier_groups": sum(group_by_token[token]["mixed_tier"] for token in candidate_tokens),
+            "conflict_groups": conflict_count,
+            "conflict_group_ratio": conflict_count / len(candidate_tokens),
+            "critical_conflict_groups": sum(row["severity"] == "Critical" for row in group_rows),
+            "moderate_conflict_groups": sum(row["severity"] == "Moderate" for row in group_rows),
+            "mild_conflict_groups": sum(row["severity"] == "Mild" for row in group_rows),
+            "unique_conflict_logs": len({row["log_id"] for row in group_rows}),
+            "max_conflict_groups_per_log": max((row["conflict_tokens"] for row in log_rows), default=0),
+            "tier_composition": dict(Counter(row["tier_composition"] for row in group_rows)),
+            "invalid_rollouts": sum(_row_tier(row) is None for token in candidate_tokens for row in bank[token]),
+        },
+        "log_concentration": {
+            "conflict_logs": sum(row["conflict_tokens"] > 0 for row in log_rows),
+            "top_10_share": sum(row["conflict_tokens"] for row in ranked_logs[:10]) / conflict_count
+            if conflict_count
+            else 0.0,
+            "top_20_share": sum(row["conflict_tokens"] for row in ranked_logs[:20]) / conflict_count
+            if conflict_count
+            else 0.0,
+        },
+        "intent_summary": intent_summary,
+        "inversion_gap": {
+            "All": _gap_statistics([gap for values in inversion_gaps.values() for gap in values]),
+            **{tier_pair: _gap_statistics(inversion_gaps[tier_pair]) for tier_pair in TIER_PAIRS},
+        },
+        "scope": "CPU-only train-rollout diagnostic; no dev/final access; does not reopen V2-H0",
+    }
+
+    pair_fields = [
+        "token", "log_id", "intent", "rollout_i", "rollout_j", "tier_i", "tier_j",
+        "C_i", "D_i", "T_i", "C_j", "D_j", "T_j", "SDR_i", "SDR_j", "SDR_gap",
+        "pair_type", "tier_pair",
+    ]
+    group_fields = [
+        "token", "log_id", "intent", "tiers", "SDRs", "num_cross_tier_pairs", "num_correct_pairs",
+        "num_tie_pairs", "num_inversion_pairs", "worst_conflict_pair", "max_inversion_gap", "severity",
+        "mean_abs_hla_minus_sdr",
+    ]
+    for name, rows, fields in (
+        ("conflict_pairs.csv", pair_rows, pair_fields),
+        ("conflict_groups.csv", group_rows, group_fields),
+        ("conflict_log_report.csv", log_rows, list(log_rows[0])),
+    ):
+        with (args.output_dir / name).open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+    for name, payload in (
+        ("conflict_audit_report.json", audit_report),
+        ("conflict_stability_report.json", stability_report),
+        ("conflict_geometry_report.json", geometry_report),
+    ):
+        (args.output_dir / name).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+        )
+    inputs = [*args.s0_block, args.stability_manifest, args.bank_rollouts, args.candidate_manifest, args.master_index]
+    (args.output_dir / "input_sha256.json").write_text(
+        json.dumps({str(path): sha256(path) for path in inputs}, indent=2) + "\n", encoding="utf-8"
+    )
+    (args.output_dir / "resolved_definition.json").write_text(
+        json.dumps(
+            {
+                "epsilon_q": args.epsilon,
+                "tiers": "L0<L1<L2<L3; invalid excluded",
+                "conflict": "cross-tier SDR tie or inversion",
+                "severity": {"Critical": ["L3-L1", "L3-L0"], "Moderate": ["L2-L1", "L2-L0"], "Mild": ["L3-L2", "L1-L0"]},
+                "geometry_thresholds": [0.05, 0.10, 0.20],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (args.output_dir / "source_commit.txt").write_text(args.source_commit + "\n", encoding="utf-8")
+    (args.output_dir / "exit_code").write_text("0\n", encoding="utf-8")
+    (args.output_dir / "COMPLETE").touch()
+    return {"audit": audit_report, "stability": stability_report, "geometry": geometry_report}
+
+
 def analyze_h0(args: argparse.Namespace) -> dict:
     from verl.trainer.cdt_hla import is_strict_clear
 
@@ -875,6 +1189,19 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--source-commit", required=True)
     command.add_argument("--seed", type=int, default=20260825)
     command.set_defaults(function=analyze_h0)
+
+    command = subparsers.add_parser("analyze-conflicts")
+    command.add_argument("--s0-block", type=Path, action="append", required=True)
+    command.add_argument("--stability-manifest", type=Path, required=True)
+    command.add_argument("--bank-rollouts", type=Path, required=True)
+    command.add_argument("--candidate-manifest", type=Path, required=True)
+    command.add_argument("--master-index", type=Path, required=True)
+    command.add_argument("--output-dir", type=Path, required=True)
+    command.add_argument("--source-commit", required=True)
+    command.add_argument("--epsilon", type=float, default=1e-6)
+    command.add_argument("--expected-groups", type=int, default=6000)
+    command.add_argument("--expected-stability-tokens", type=int, default=500)
+    command.set_defaults(function=analyze_conflicts)
 
     command = subparsers.add_parser("compare")
     command.add_argument("--baseline", type=Path, required=True)

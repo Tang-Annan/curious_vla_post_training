@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from projects.dataset_v2.build_dataset_v2 import (
     HORIZON_4,
@@ -17,7 +18,14 @@ from projects.dataset_v2.build_dataset_v2 import (
     v2_image_path,
 )
 from projects.dataset_v2.freeze_dataset_v2 import load_cache_manifest, validate_assets
-from projects.dataset_v2.experiment_pipeline import adas_eligible, analyze_s0, build_manifests, fals_score, spearman
+from projects.dataset_v2.experiment_pipeline import (
+    adas_eligible,
+    analyze_conflicts,
+    analyze_s0,
+    build_manifests,
+    fals_score,
+    spearman,
+)
 
 
 def test_intent_normalization_and_image_namespace() -> None:
@@ -184,6 +192,105 @@ def test_m0_skips_adas_closed_by_s0(tmp_path: Path) -> None:
     assert report["adas_status"] == "skipped_by_s0"
     assert not (output_dir / "adas_1k.txt").exists()
     assert (output_dir / "fals_1k.txt").is_file()
+
+
+def test_conflict_audit_writes_pair_group_stability_and_geometry_evidence(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
+    tokens = ["critical", "mild", "clear"]
+    manifest = tmp_path / "phase1.txt"
+    manifest.write_text("\n".join(tokens) + "\n", encoding="utf-8")
+    master = tmp_path / "master.csv"
+    with master.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["token", "intent", "log_name"])
+        writer.writeheader()
+        writer.writerows(
+            [
+                {"token": "critical", "intent": "straight", "log_name": "log-a"},
+                {"token": "mild", "intent": "left", "log_name": "log-b"},
+                {"token": "clear", "intent": "right", "log_name": "log-c"},
+            ]
+        )
+
+    cdt = {
+        "L3": (1.0, 1.0, 1.0),
+        "L2": (1.0, 1.0, 0.0),
+        "L1": (0.5, 1.0, 1.0),
+    }
+
+    def row(token: str, tier: str, sdr: float) -> dict:
+        collision, dac, ttc = cdt[tier]
+        return {
+            "token": token,
+            "parsed_ok": True,
+            "no_at_fault_collisions": collision,
+            "drivable_area_compliance": dac,
+            "time_to_collision_within_bound": ttc,
+            "pdms_scaled": sdr,
+        }
+
+    rows = [
+        row("critical", "L3", 0.2),
+        row("critical", "L1", 0.8),
+        row("critical", "L3", 0.9),
+        row("critical", "L1", 0.1),
+        row("mild", "L3", 0.7),
+        row("mild", "L2", 0.7),
+        row("mild", "L3", 0.8),
+        row("mild", "L2", 0.6),
+        *[row("clear", "L3", value) for value in (0.9, 0.8, 0.7, 0.6)],
+    ]
+    bank = tmp_path / "bank.jsonl"
+    bank.write_text("".join(json.dumps(value) + "\n" for value in rows), encoding="utf-8")
+    blocks = []
+    for index in range(4):
+        block = tmp_path / f"block-{index}.jsonl"
+        block.write_text(bank.read_text(encoding="utf-8"), encoding="utf-8")
+        blocks.append(block)
+
+    output = tmp_path / "audit"
+    result = analyze_conflicts(
+        Namespace(
+            s0_block=blocks,
+            stability_manifest=manifest,
+            bank_rollouts=bank,
+            candidate_manifest=manifest,
+            master_index=master,
+            output_dir=output,
+            source_commit="test-source",
+            epsilon=1e-6,
+            expected_groups=3,
+            expected_stability_tokens=3,
+        )
+    )
+    assert result["audit"]["pair_summary"]["All"] == {
+        "total": 8,
+        "correct": 6,
+        "tie": 1,
+        "inversion": 1,
+        "conflict_rate": 0.25,
+        "inversion_rate": 0.125,
+    }
+    assert result["audit"]["group_summary"]["conflict_groups"] == 2
+    assert result["audit"]["group_summary"]["critical_conflict_groups"] == 1
+    assert result["audit"]["group_summary"]["mild_conflict_groups"] == 1
+    assert result["stability"]["conflict"]["counts"] == [2, 2, 2, 2]
+    assert result["stability"]["conflict"]["membership_jaccard_median"] == 1.0
+    assert result["geometry"]["conflict_groups"] == 2
+    for name in (
+        "conflict_audit_report.json",
+        "conflict_pairs.csv",
+        "conflict_groups.csv",
+        "conflict_log_report.csv",
+        "conflict_stability_report.json",
+        "conflict_geometry_report.json",
+        "input_sha256.json",
+        "resolved_definition.json",
+        "source_commit.txt",
+        "COMPLETE",
+        "exit_code",
+    ):
+        assert (output / name).exists()
+    assert (output / "exit_code").read_text(encoding="utf-8") == "0\n"
 
 
 def test_pipeline_cli_runs_outside_repository_cwd(tmp_path: Path) -> None:
