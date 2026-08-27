@@ -229,7 +229,7 @@ Input:
 - 1 frame of front-view image collected from the ego-vehicle at the present timestep
 Picture 1: <image> the front view of the ego-vehicle
 - Current high-level intent (string): {command}
-- 1.5-second past trajectory(3 steps at 2 Hz): {', '.join(statuses)}
+- 1.5-second past trajectory(3 steps at 2 Hz): {' '.join(statuses)}
 """
     return (prefix + suffix).replace("optimal future 5-second trajectory", "optimal future 4-second trajectory")
 

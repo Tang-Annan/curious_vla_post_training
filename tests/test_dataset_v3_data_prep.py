@@ -70,6 +70,7 @@ def test_problem_uses_relative_history_and_four_second_prompt() -> None:
 
     assert "Current high-level intent (string): go straight" in problem
     assert "t-3: (-3.00, 0.0, 0.0)" in problem
+    assert "0.0)    - t-2:" in problem
     assert "t-0: (0.0, 0.0, 0.0)" in problem
     assert "optimal future 4-second trajectory" in problem
     assert "optimal future 5-second trajectory" not in problem
