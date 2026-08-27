@@ -535,3 +535,33 @@ NetTierGain=P_{up}-P_{down}
 8. 写入最终结论并停止，不追加 reward/selector/estimator sweep。
 
 实际执行在第 1 步结束：`V2-H0` 已完成并返回 `close_hla`；第 2–7 步均按门控跳过，final reserve 未访问。当前没有待执行实验动作。
+
+## 17. `V2-C0`：SDR/CDT Conflict Audit
+
+### 17.1 执行边界与证据
+
+该 audit 是 H0 关闭后的独立 CPU-only 诊断，不修改或重新打开 H0，不生成新 rollout，不访问 dev/final，不连接 reward server，也不调 tier、epsilon、selector 或 HLA geometry。执行 source 为 `9ce86116ce34b54d3ad1aecf4f9b6b87c14f03c5`，服务器使用分支 `codex/dataset-v2-cdt-hla-execution` 的独立 worktree；focused tests 为 `11 passed`。
+
+正式证据目录：`experiments/dataset_v2_20260825/v2_c0_sdr_cdt_conflict_audit_seed20260825/`。`COMPLETE` 存在且 `exit_code=0`；`conflict_audit_report.json`、`conflict_pairs.csv`、`conflict_groups.csv`、`conflict_log_report.csv`、`conflict_stability_report.json`、`conflict_geometry_report.json`、input/source hash 和 resolved definition 均完整。输入 hash 仅包含冻结的 S0/S1、Phase-1 6K manifest、stability manifest 与 master index。
+
+### 17.2 Pair 与 group 结果
+
+- 6K bank 共 `1,808` 个 valid cross-tier pairs，其中 correct `1,781`、tie `21`、inversion `6`；总体 conflict rate `1.493363%`，单独 inversion rate `0.331858%`；
+- `L3>L2`、`L3>L0`、`L2>L0` 均无 conflict；conflict 分布为 `L3>L1: 11 tie + 1 inversion`、`L2>L1: 4 tie + 5 inversion`、`L1>L0: 6 tie`；
+- 只有 `12/6000=0.2%` 的 groups 是 Conflict Groups；其中 Critical `5`、Moderate `4`、Mild `3`；
+- 12 组来自 12 个不同 logs，每个 log 最多 1 组。straight `5/3781`、left `7/1555`、right `0/664`；冲突不是单一 log 重复污染，但总体规模极小；
+- inversion 仅 6 对，gap median `0.014381`、mean `0.113180`、P90 `0.312088`、max `0.416667`。
+
+### 17.3 稳定性与 conflict-only geometry
+
+- 四个 S0 blocks 的 Conflict Group 数为 `2/1/0/0`，ratio CV `1.276569`，membership median Jaccard `0`；
+- Critical Conflict 数为 `1/1/0/0`，ratio CV `1.154701`，membership median Jaccard `0`；
+- 在 12 个 Conflict Groups 上，`mean(mean(|A_HLA-A_SDR|))=0.680965`，median `0.749999`，P90 `0.999346`；达到 `0.05/0.10/0.20` 的比例均为 `100%`。
+
+这说明 HLA 在真正发生 SDR/CDT 冲突时确实能产生强且方向正确的 advantage 改写，出发点具有局部意义；但冻结数据上的冲突发生率只有 0.2%，且独立 rollout block 几乎不复现，不能形成具有规模与稳定性的 ConflictMix 训练分布。
+
+### 17.4 最终决定
+
+最终选择路线 B：`CLOSE_CONFLICTMIX_CDT_HLA_ON_DATASET_V2`。不启动 `ConflictMix + SDR` 或 `ConflictMix + HLA` 训练，不恢复 SafetyMix-HLA，也不根据本次结果修改既有门控。Dataset V2 上的 CDT-HLA / lexicographic shaping 路线至此关闭；下一研究方向转为 `failure / near-failure data selection + tail-risk optimization`，必须另建台账和实验协议后才能执行。
+
+Audit 以 CPU-only 单线程低优先级运行，结束后无残留 audit 进程；并行的 `V2-F4-SDR-FALS1K` 训练进程、GPU actor 与 8901 reward server 均保持运行，服务器 source 和训练目录未被切换或修改。
