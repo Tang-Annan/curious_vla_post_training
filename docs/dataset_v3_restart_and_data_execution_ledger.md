@@ -364,7 +364,7 @@ SFT-E0 不替代 Random-Raw。所有最终候选同时报告相对 SFT-E0 与 Ra
 
 seed 协议固定为两阶段：
 
-1. RR/TR/RC/TC 四格首先全部运行 discovery seed `20260827`；
+1. RR/TR/RC/TC 四格首先全部运行 discovery seed `20260827`；执行优先级固定为 `RR → TC → TR → RC`，先取得 primary baseline 与完整方法端点，再补齐两个主效应 cell；该顺序不允许省略 TR/RC，也不改变四格 matched-seed 要求；
 2. 只有达到 M0 预注册 promotion gate 的主效应或 interaction 才进入确认；
 3. 如果正式声称 selector × reward interaction，四格必须全部补齐完全相同的三个 matched seeds；计划 seed 为 `20260827/20260828/20260829`；
 4. interaction 必须先在每个 matched seed 内计算，再汇总 seed 间结果；不得用不同 seed 集合的 cell 均值相减；
@@ -590,7 +590,7 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 | 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | `TBD` | `BLOCKED_BY_R0` |
 | 14 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `BLOCKED_BY_H0` |
 | 15 | `V3-E0-SFT` | 在冻结 V3 dev 上生成零更新锚点 | `TBD` | `BLOCKED_BY_M0` |
-| 16 | `V3-RR/TR/RC/TC` | 最小 2×2 discovery 与 matched-seed 确认 | `TBD` | `BLOCKED_BY_E0` |
+| 16 | `V3-RR/TC/TR/RC` | 按 `RR → TC → TR → RC` 执行最小 2×2 discovery，并按门控补齐 matched-seed 确认 | `TBD` | `BLOCKED_BY_E0` |
 
 不增加与当前主问题无关的算法分支。数据制作完成前的唯一执行路线为 `A0 → B0 → B1 → S0 → D0I → D0R-1 → D0R-2 → D0S → D0A → D0F`。
 
@@ -676,3 +676,26 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 当前允许的核心结论是“受控 overlap GRPO 在严格 SFT-unseen Dev/Final 上相对 SFT 的 post-training 增量”；
 - `Retrain-SFT` 与等待新增 logs 均不是当前执行路线；若未来重开，必须新增决策记录并重新冻结全部 provenance、split 和 baseline；
 - 外部数据集、online selector、HLA、SLDR、constraint optimizer 和多 reward sweep 均不属于当前首轮。
+
+## 10. 证据保存与空间闭环
+
+每个正式 run 至少保留：
+
+- `run.env`、resolved config、source commit/status；
+- model/data/manifest/input hash；
+- train/dev tokens；
+- raw train/dev rollout 和 parsed trajectory；
+- train diagnosis、final metrics、paired cluster-bootstrap report；
+- policy loss、entropy、KL、clip、grad、LR、advantage、reward 分项、response length、timing 和显存曲线；
+- LoRA adapter、optimizer/config、代表样本、`COMPLETE`、`exit_code` 和 result hash。
+
+空间规则：
+
+- 正式训练启动前必须验证上述证据路径可写、预计峰值空间充足；任一前置检查失败时不得启动 run；
+- run 顺序执行，不并行保留多个 8 GB full actor state；
+- 只有 LoRA、评估、rollout、曲线和 hash 全部固化且进程回收后，才允许精确删除该 run 的 full actor model；
+- 不删除 Dataset V2、Stage-2、旧实验 ledger/rollout/report；
+- 大日志在结果 hash 固化后可以压缩，不以删除原始科学证据换空间；
+- 任何删除都必须记录精确路径、大小、时间和不可恢复性。
+
+长任务监控规则：Luna 必须在单次 turn 内启动服务器侧阻塞 watcher，以 `while + sleep` 持续检查终态、错误、磁盘和 GPU/8901；正常快照不返回 final，只有 `COMPLETE`、`FAILED` 或明确异常才结束并完成验收。主进程启动 run 后直接长时间暂停等待 Luna 唤醒，不做固定间隔轮询，也不承担正常进度兜底。
