@@ -18,6 +18,15 @@
 - 原队列中的 `V2-R4-SDR/RAW/FALS/ADAS` 暂停，不作为本轮前置条件；本轮 baseline 必须是同一 SafetyMix manifest 上的 `SM4-SDR`；
 - `V2-H0` 已完成，全部技术门控通过，但两个 material-change 科学门控失败；依照冻结规则，本轮已关闭 HLA 正式训练，`V2-HT0-HLA`、`V2-SM4-SDR/HLA`、matched seeds 与 final 均未启动。
 
+执行分支于 2026-08-27 冻结为：
+
+- Git remote：`post-training`；
+- branch：`codex/dataset-v2-cdt-hla-execution`；
+- fork point：`d8b2c38`（`Record CDT-HLA H0 terminal decision`）；
+- 本台账后续若有经明确重新预注册的补充执行，只允许从该分支建立独立 server worktree/实验目录，不得直接复用或切换其他正在运行任务的 source worktree；分支变更必须先回填本台账。
+
+创建该分支时远程服务器正在执行其他任务，因此本次只完成 Git 分支隔离与台账冻结，未连接、切换或修改服务器上的现有 source、进程和实验目录。
+
 本轮结论边界：
 
 - `SafetyMix` 是当前 Stage-2 policy 的安全决策边界 selector，不表述为数据集固有危险度；
