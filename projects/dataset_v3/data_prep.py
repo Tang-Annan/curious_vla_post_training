@@ -386,7 +386,8 @@ def prepare(args: argparse.Namespace) -> None:
     sft_logs = {row.log_name for row in sft_rows}
 
     parquet = pq.ParquetFile(args.sft_parquet)
-    template = parquet.read_row_group(0, columns=["problem"]).column("problem")[0].as_py()
+    template_batch = next(parquet.iter_batches(columns=["problem"], batch_size=1))
+    template = template_batch.column("problem")[0].as_py()
     raw_log_paths = sorted(args.navsim_logs.rglob("*.pkl"))
     unseen_paths = [path for path in raw_log_paths if path.stem not in sft_logs]
     eval_rows, log_summary = build_eval_rows(unseen_paths, template)
