@@ -503,11 +503,12 @@ def verify_train(args: argparse.Namespace) -> dict:
         raise ValueError(f"Parse gate failed: train={train_parse} dev={dev_parse}")
 
     log_rows = [json.loads(line) for line in args.training_log.read_text(encoding="utf-8-sig").splitlines() if line]
-    if [int(row["step"]) for row in log_rows] != list(range(1, args.expected_steps + 1)):
+    training_log_rows = [row for row in log_rows if "val" not in row]
+    if [int(row["step"]) for row in training_log_rows] != list(range(1, args.expected_steps + 1)):
         raise ValueError("Training steps are incomplete or out of order")
     if any(not math.isfinite(value) for row in log_rows for value in finite_numbers(row)):
         raise ValueError("Training log contains non-finite values")
-    if any(float(row["response_length"]["clip_ratio"]) != 0.0 for row in log_rows):
+    if any(float(row["response_length"]["clip_ratio"]) != 0.0 for row in training_log_rows):
         raise ValueError("Training response clipping is nonzero")
 
     from tensorboard.backend.event_processing.event_accumulator import EventAccumulator

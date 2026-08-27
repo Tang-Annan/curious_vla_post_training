@@ -17,7 +17,15 @@ from projects.dataset_v2.build_dataset_v2 import (
     v2_image_path,
 )
 from projects.dataset_v2.freeze_dataset_v2 import load_cache_manifest, validate_assets
-from projects.dataset_v2.experiment_pipeline import adas_eligible, analyze_s0, build_manifests, fals_score, spearman
+from projects.dataset_v2.experiment_pipeline import (
+    REQUIRED_TRAIN_TAGS,
+    adas_eligible,
+    analyze_s0,
+    build_manifests,
+    fals_score,
+    spearman,
+    verify_train,
+)
 
 
 def test_intent_normalization_and_image_namespace() -> None:
@@ -193,3 +201,59 @@ def test_pipeline_cli_runs_outside_repository_cwd(tmp_path: Path) -> None:
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_verify_train_excludes_terminal_validation_row(tmp_path: Path, monkeypatch) -> None:
+    manifest = tmp_path / "manifest.txt"
+    manifest.write_text("token-a\n", encoding="utf-8")
+    rollouts = tmp_path / "rollouts.jsonl"
+    rollout = {
+        "token": "token-a",
+        "response_length": 10,
+        "parsed_ok": True,
+        "pdms": 1.0,
+    }
+    rollouts.write_text("".join(json.dumps(rollout) + "\n" for _ in range(4)), encoding="utf-8")
+    training_log = tmp_path / "experiment_log.jsonl"
+    training_log.write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for row in (
+                {"step": 1, "response_length": {"clip_ratio": 0.0}},
+                {"step": 2, "response_length": {"clip_ratio": 0.0}},
+                {"step": 2, "val": {"reward_score": 1.0}},
+            )
+        ),
+        encoding="utf-8",
+    )
+    tensorboard_dir = tmp_path / "tensorboard"
+    tensorboard_dir.mkdir()
+    (tensorboard_dir / "events.out.tfevents.test").touch()
+
+    from tensorboard.backend.event_processing import event_accumulator
+
+    class FakeEventAccumulator:
+        def __init__(self, _path):
+            pass
+
+        def Reload(self):
+            pass
+
+        def Tags(self):
+            return {"scalars": list(REQUIRED_TRAIN_TAGS)}
+
+    monkeypatch.setattr(event_accumulator, "EventAccumulator", FakeEventAccumulator)
+    report = verify_train(
+        Namespace(
+            manifest=manifest,
+            train_rollouts=rollouts,
+            dev_rollouts=None,
+            dev_manifest=None,
+            training_log=training_log,
+            tensorboard_dir=tensorboard_dir,
+            expected_steps=2,
+            output=tmp_path / "technical_report.json",
+        )
+    )
+    assert report["passed"]
+    assert report["steps"] == 2
