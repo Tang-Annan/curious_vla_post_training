@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`D0I_COMPLETE_REUSE_SFT_INSUFFICIENT`；历史分支、V3 干净分支、通用基础设施和服务器新源码目录已经完成初始化，D0I 已证明现有本地数据只有 118 个 SFT-unseen logs / 835 个 eligible scenes，不能支撑原定 Reuse-SFT 规模；尚未生成 split、rollout 或启动训练。
+> 当前状态：`D0R_ROUTE_FROZEN_REUSE_SFT_CONTROLLED_OVERLAP`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；尚未冻结 Dev/Final 具体分配与 Tail 几何，未生成 split、rollout 或启动训练。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -9,13 +9,15 @@
 本次“完全重启”包含三个相互独立的重启边界：
 
 1. **代码重启**：从固定的干净基线重新建立执行分支，不继承旧 GRPO、selector、reward、HLA 或 Dataset V2 实验逻辑；已验证的通用基础设施修复允许经逐项 diff 审计后迁入；
-2. **数据重启**：重新盘点原始数据并按 log 划分，GRPO、dev、final 必须与 SFT 训练数据在 log 层级无重叠；
+2. **数据重启**：重新盘点原始数据并按 log 划分；GRPO train-side 明确复用 SFT-seen logs，Dev/Final 严格使用 SFT-unseen logs，两个来源宇宙在 log 层级无重叠；
 3. **实验重启**：旧 V2 指标只作历史参考；SFT-E0、Random-Raw 和全部新方法必须在 V3 上重新执行。
 
 已经冻结的科学结论：
 
-- 新 GRPO 数据不能继续使用与 SFT 完全相同的 103,288 条源数据视图；
-- SFT checkpoint 是零更新锚点，回答“GRPO 是否值得”；
+- 本轮冻结 `Reuse-SFT + Controlled GRPO Overlap`，不冻结 `Retrain-SFT`，也不等待新增 logs；
+- 保留现有 `models/sft_stage2`；它是零更新锚点，回答“GRPO 是否值得”；
+- 118 个 SFT-unseen logs / 835 个 eligible scenes 全部只用于 Dev/Final，不得进入任何训练侧筛选、rollout、replay、monitor 或 optimizer manifest；
+- GRPO train-side 只能从已审计的 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建，并冻结 exact token/log reuse 与 overlap 报告；
 - Random-Raw GRPO 是 selector/reward 的 primary matched baseline，回答“方法是否有效”；
 - 首轮只研究 selector 与 scalar reward，不恢复 SLDR 或 CDT-HLA advantage 注入；
 - 旧 CDT L0–L3 定义、validity 边界和统计方法可以作为 V3 候选定义，但必须在新数据上重新审计；
@@ -25,7 +27,7 @@
 - V3 不直接继承 V2 的训练超参数；在新数据、selector 和 reward geometry 冻结后，先用 train-only monitor 校准一套四格共用配置；
 - 不从旧分支搬运实验处理逻辑，不删除或覆盖旧证据。
 
-尚未冻结、必须等待新数据统计后讨论的内容统一标记为 `TBD_AFTER_D0`。
+尚未冻结的 Dev/Final 具体 log 分配、Natural/Tail 几何、训练规模和 TailMix 比例统一标记为 `TBD_D0R_EVAL_GEOMETRY` 或后续对应门控；这些决策不等待新增 logs。
 
 ## 2. Git 与历史证据边界
 
@@ -38,11 +40,13 @@
 | 干净代码基线 | `93937eb01905aa5f3983a6a3600fa970ba50ad8b` | `origin/main` 已不再发布；已按完整 SHA 从 origin 重新 fetch 并验证 object |
 | V3 执行分支 | `codex/grpo-v3-selector-reward` | 已创建并推送；D0I 执行 source 为 `08ec535` |
 | 可写远端 | `post-training` | 新分支只推送到该远端 |
-| V3 数据命名空间 | `dataset_v3_sft_unseen` | 固定名称 |
-| V3 实验命名空间 | `experiments/dataset_v3_sft_unseen/` | 固定名称 |
+| V3 数据命名空间 | `dataset_v3_controlled_overlap` | 正式命名；明确训练侧受控复用 SFT-seen 数据 |
+| V3 实验命名空间 | `experiments/dataset_v3_controlled_overlap/` | 固定名称 |
 | 服务器新源码目录 | `/root/autodl-tmp/curious-vla-workspace/src/curious_vla_v3` | 已独立 clone；source clean；当前 `08ec535` |
 
 `93937eb` 是本文创建时由 `origin/main` 指向的已知干净基线，而不是自动跟随远端默认分支。执行时远端已不再发布 `main`，因此按完整 SHA 重新 fetch 并固定该 object；没有改用当前默认分支。如果后续决定改用另一个上游 commit，必须先在本文登记新 commit 和理由，不得静默换基线。
+
+D0I 已产生的 `dataset_v3_sft_unseen` 路径是历史 inventory 证据，保留原位且不改写；从 D0S 开始的新正式资产统一写入 `dataset_v3_controlled_overlap`，避免把受控训练重用误称为全数据 SFT-unseen。
 
 ### 2.2 历史分支封存
 
@@ -116,23 +120,23 @@ V3 分支从干净基线创建后，只从最终 archive commit 恢复以下历�
 
 Dataset V3 首先服务于两个目标：
 
-1. 在 SFT 未见过的日志上，测量 GRPO 相对 SFT 的真实增量；
-2. 在同一冻结候选宇宙中，用不同 selector manifest 稳定暴露可学习的安全尾部事件。
+1. 在严格 SFT-unseen 的 Dev/Final 上，测量受控重用训练数据的 GRPO 相对 SFT 的 post-training 增量；
+2. 在同一个冻结的 SFT-seen train-side 宇宙中，用不同 selector manifest 稳定暴露可学习的安全尾部事件。
 
-V3 不要求立即更换到外部驾驶数据集。首选方案仍是 NAVSIM/nuPlan 同任务域内的 SFT-unseen logs，以保持图像输入、动作表示、metric cache 和 evaluator 不变。是否需要引入其他来源，必须由 D0 盘点结果决定。
+V3 不要求立即更换到外部驾驶数据集，也不等待新增 logs。当前数据由互斥的两个来源宇宙组成：SFT-seen 只服务训练侧，SFT-unseen 只服务严格评估侧；两者保持相同的图像输入、动作表示、metric cache 和 evaluator。
 
 ### 3.2 最小数据层级
 
-V3 只维护一个底层数据集和多个 manifest，不为每个 selector 复制一套 parquet/image/cache：
+V3 只维护一个统一 Master Index，其中训练与评估是互斥的来源分区；每个 selector 只增加 manifest，不复制底层 parquet/image/cache：
 
 ```text
-SFT-unseen raw logs
-        ↓
-V3 Master Pool + image/cache
-        ↓
-Frozen SFT Rollout Bank
-        ↓
-Random / TailMix / 后续 selector manifests
+1,192 SFT-seen logs / 103,288 tokens        118 SFT-unseen logs / 835 scenes
+                 ↓                                           ↓
+   Controlled Train Master Pool                  Strict Eval Reserve
+                 ↓                                           ↓
+      Frozen SFT Rollout Bank                     Dev / Final only
+                 ↓
+ Random / TailMix / 后续 selector manifests
 ```
 
 每次测试新 selector，通常只生成新的 sample-ID manifest。只有 selector 需要 Rollout Bank 中不存在的指标时，才为同一 Master Pool 补算字段或 rollout；不得重新划分 dev/final。
@@ -143,8 +147,8 @@ Random / TailMix / 后续 selector manifests
 
 | Split | 作用 | 允许的访问 |
 | --- | --- | --- |
-| `sft_provenance` | 记录 SFT 实际使用的 token/log，不一定重新训练 | 只用于排除和模型溯源 |
-| `grpo_screen` | selector 初筛和确认 rollout | train-only |
+| `sft_provenance` | 记录 SFT 实际使用的 103,288 tokens / 1,192 logs | 模型溯源和受控训练来源边界 |
+| `grpo_screen` | 从 SFT-seen 来源构建 selector 初筛和确认 rollout | train-only |
 | `train_monitor` | 训练预算、LR 和 estimator 的固定校准集 | train-only；不进入正式 optimizer manifest |
 | `dev_natural` | 正常分布方法选择 | 允许在预注册方法完成后评估 |
 | `dev_tail` | 模型无关安全尾部方法选择 | 允许在预注册方法完成后评估 |
@@ -153,9 +157,11 @@ Random / TailMix / 后续 selector manifests
 
 必须始终成立：
 
-- GRPO、dev、final 与 SFT 的 log overlap 为 0；
+- `dev_natural/dev_tail/final_natural/final_tail` 的并集覆盖全部 118 个 SFT-unseen logs / 835 个 eligible scenes，并且与 SFT provenance 的 token、log overlap 为 0；
+- `grpo_screen`、`train_monitor`、Random/TailMix optimizer manifest 只能来自 SFT provenance；其 SFT overlap 是预注册的受控重用，不得写作 unseen，必须报告 exact unique token/log reuse、选择率与 per-log cap；
 - `grpo_screen`、`train_monitor`、两个 dev、两个 final 之间 token、log overlap 均为 0；
-- 同一连续事件窗口不得跨 split；事件窗口定义为 `TBD_AFTER_D0`，但必须在 split 前冻结；
+- 所有训练侧 selector rollout、reward replay、H0 pilot 和正式 optimizer manifest 与全部 Dev/Final 的 token、log overlap 均为 0；
+- 同一连续事件窗口不得跨 split；事件窗口定义为 `TBD_D0R_EVAL_GEOMETRY`，并在 split 前冻结；
 - final 不参与 selector 设计、reward 参数、训练预算和非劣界限的确定；
 - 所有 prompt 时间描述使用同一正确版本，不重新引入 V2 已发现的 5-second/4-second 不一致。
 
@@ -177,7 +183,7 @@ D0I 必须先审计这些字段是否真实存在、含义是否可用于 scene 
 - 不替代 `dev_natural/final_natural`；
 - 选择规则在 GRPO 训练前冻结，GRPO 结果不得反向改变其成员。
 
-最终采用模型无关 Tail 还是 SFT-challenge 路线记为 `TBD_AFTER_D0:TAIL_EVAL_ROUTE`。
+最终采用模型无关 Tail 还是 SFT-challenge 路线记为 `TBD_D0R_EVAL_GEOMETRY:TAIL_EVAL_ROUTE`。
 
 ### 3.5 SFT 路线决策
 
@@ -188,12 +194,14 @@ D0 首先重建 SFT provenance：
 - 实际 token 数、唯一 log 数和 log-ID blacklist；
 - 无法追溯的样本数量及原因。
 
-随后只允许二选一：
+D0I 证明严格 unseen 容量不足以同时承担原定 GRPO train 与 Dev/Final，但足以作为宝贵的严格评估保留集。D0R 因此冻结第三条路线：
 
-1. **Reuse-SFT**：剩余 SFT-unseen logs 足以构建 GRPO、dev 和 final，则保留当前 SFT checkpoint；
-2. **Retrain-SFT**：剩余 logs 不足，重新做全局 SFT/GRPO/dev/final log split，并重新训练 SFT。
+1. **Reuse-SFT + Controlled GRPO Overlap（已选）**：保留 `models/sft_stage2`；将全部 SFT-unseen 数据只分配给 Dev/Final；GRPO train-side 只从 SFT-seen provenance 构建受控、可审计的训练池；
+2. **Retrain-SFT（本轮不冻结）**：不作为当前执行路线，也不以等待新增 logs 作为 D0R/D0S 前置条件。
 
-该决定记为 `TBD_AFTER_D0:SFT_ROUTE`。在它冻结前，不生成正式 GRPO manifest，不运行 SFT-E0 或 selector rollout。
+`SFT_ROUTE=REUSE_SFT_CONTROLLED_GRPO_OVERLAP` 已冻结。Dev/Final 的具体 log 分配、Natural/Tail 几何和 train manifest 规模仍为 `TBD_D0R_EVAL_GEOMETRY`；在这些项目冻结前，不生成正式 split、GRPO manifest、SFT-E0 或 selector rollout。
+
+该路线的结论边界固定为：允许报告“受控重用 SFT-seen 数据进行 GRPO 后，在严格 SFT-unseen Dev/Final 上相对 SFT 的 post-training 增量”；不得声称 GRPO train 数据本身 unseen、获得了新增 logs，或证明了新数据效率。
 
 ### 3.6 容量目标而非冻结规模
 
@@ -201,16 +209,14 @@ D0 首先重建 SFT provenance：
 
 | 资产 | 初始容量目标 | 冻结状态 |
 | --- | ---: | --- |
-| Selector Screen Pool | 上限约 20,000 unique prompts | `TBD_AFTER_D0` |
-| Train-only Monitor | 初始考虑 256–512 | `TBD_AFTER_D0` |
-| Random Train Manifest | 初始考虑 2,000–4,000 | `TBD_AFTER_D0` |
-| TailMix Train Manifest | 与 Random 完全等量 | `TBD_AFTER_D0` |
-| Natural Dev | 约 2,000 | `TBD_AFTER_D0` |
-| Tail Dev | 约 1,000 | `TBD_AFTER_D0` |
-| Final Natural | 约 1,000 | `TBD_AFTER_D0` |
-| Final Tail | 约 1,000 | `TBD_AFTER_D0` |
+| Selector Screen Pool | 来源上限为 103,288 个 SFT-seen unique tokens | `TBD_D0R_EVAL_GEOMETRY` |
+| Train-only Monitor | 初始考虑 256–512 | `TBD_D0R_EVAL_GEOMETRY` |
+| Random Train Manifest | 初始考虑 2,000–4,000 | `TBD_D0R_EVAL_GEOMETRY` |
+| TailMix Train Manifest | 与 Random 完全等量 | `TBD_D0R_EVAL_GEOMETRY` |
+| Natural Dev + Tail Dev | 与 Final 共同分配 118 个 unseen logs / 835 个 scenes | `TBD_D0R_EVAL_GEOMETRY` |
+| Final Natural + Final Tail | 与 Dev 共同分配 118 个 unseen logs / 835 个 scenes | `TBD_D0R_EVAL_GEOMETRY` |
 
-精确规模只能根据 SFT-unseen unique logs、intent 分布、连续事件去重后容量、image/cache 可用性、safety-conflict coverage 和完整 2×2 matched-seed 成本确定。D0R 的问题不是“能否凑到 8K”，而是“满足预定 safety-conflict coverage 所需的最小训练规模是多少”。不得通过重复 rare token 填满目标；必须报告 Screen→Train 选择率，避免 selector 覆盖接近全候选池而失去对比分布。
+评估规模只能根据 118 个 SFT-unseen logs 的 intent 分布、连续事件去重后容量、image/cache 可用性和 safety-conflict coverage 确定；训练规模只根据 1,192 个 SFT-seen logs 的受控候选容量、rollout 成本和完整 2×2 matched-seed 成本确定。D0R 的问题不是“能否凑到 8K”，而是“满足预定 safety-conflict coverage 所需的最小训练规模是多少”。不得通过重复 rare token 填满目标；必须报告 Screen→Train 选择率，避免 selector 覆盖接近全候选池而失去对比分布。
 
 ### 3.7 Master Index
 
@@ -234,11 +240,11 @@ selector 指标、rollout 统计和 reward 结果不重复写入底层 parquet�
 建议固定为：
 
 ```text
-data/dataset_v3_sft_unseen/hf/
-data/dataset_v3_sft_unseen/sensor_blobs/
-manifests/dataset_v3_sft_unseen/
-experiments/dataset_v3_sft_unseen/data_build/
-experiments/dataset_v3_sft_unseen/rollout_bank/
+data/dataset_v3_controlled_overlap/hf/
+data/dataset_v3_controlled_overlap/sensor_blobs/
+manifests/dataset_v3_controlled_overlap/
+experiments/dataset_v3_controlled_overlap/data_build/
+experiments/dataset_v3_controlled_overlap/rollout_bank/
 ```
 
 正式路径在 V3 分支创建后写入配置，不允许自动 fallback 到 Dataset V2、旧 5,656 数据或旧 566/2,000-token dev。
@@ -247,7 +253,7 @@ experiments/dataset_v3_sft_unseen/rollout_bank/
 
 ### 4.1 `V3-D0I`：只读 inventory
 
-目标：在不生成训练数据的情况下回答 V3 是否具备足够的 SFT-unseen 数据。
+目标：在不生成训练数据的情况下回答 V3 的严格 SFT-unseen 评估容量、SFT-seen 受控训练容量和可行路线。
 
 输出：
 
@@ -258,22 +264,22 @@ experiments/dataset_v3_sft_unseen/rollout_bank/
 - 可用于模型无关 Tail split 的场景/evaluator/cache 字段、值域和覆盖率；
 - 图像与 metric-cache 可获得性；
 - 相邻事件去重后的容量；
-- `Reuse-SFT` 与 `Retrain-SFT` 两条路线的容量表；
+- `Reuse-SFT`、`Retrain-SFT` 与 controlled-overlap 路线的容量证据；
 - 建议的正式 split 数量，但不创建 final 内容。
 
-通过条件：SFT provenance 可追溯，且至少一条 SFT 路线能够形成 log-disjoint 的 GRPO、dev、final；同时明确 `TAIL_EVAL_ROUTE` 的可行候选。否则停在 D0I 讨论数据源，不写 selector/reward 代码。
+通过条件：SFT provenance 可追溯，SFT-seen 与 SFT-unseen 的 token/log 边界可精确复现，并且 D0R 能据此冻结一条诚实、可执行的训练/评估路线；同时明确 `TAIL_EVAL_ROUTE` 的可行候选。D0I 本身只提供证据，不生成 split 或 selector/reward 代码。
 
 ### 4.2 `V3-D0S`：split 与基础 manifest
 
-在 `SFT_ROUTE` 和规模冻结后执行：
+在 `SFT_ROUTE`、Dev/Final 几何和规模冻结后执行：
 
-1. 使用固定 seed `20260827` 按 log 分配 split；
+1. 先锁定全部 118 个 SFT-unseen logs 为 Strict Eval Reserve，再使用固定 seed `20260827` 按 log 分配 Dev/Final；训练侧只读取 SFT-seen provenance；
 2. 对连续事件窗口去重；
 3. 预留固定 `train_monitor` logs，后续不得进入 Random/TailMix optimizer manifest；
 4. 在各 split 内按 intent 做确定性抽样；
 5. 按第 3.4 节冻结的模型无关规则构建 primary Tail split；若不可行则使用明确重命名的 SFT-challenge 路线；
 6. 生成 Master Index 与基础 manifests；
-7. 生成 overlap、分布、Tail 定义和容量报告；
+7. 生成 overlap、SFT token/log reuse、Screen→Train 选择率、分布、Tail 定义和容量报告；
 8. final 只生成不可读内容锁和 hash，不进入后续常规入口。
 
 此阶段不根据 SFT rollout、PDMS、CDT tier 或难度挑选 GRPO 训练样本。除已经选择并明确命名的 SFT-challenge 路线外，也不得根据 SFT rollout 构建 primary Tail evaluation。它只建立候选宇宙和评估边界。
@@ -308,7 +314,8 @@ Random、TailMix 和后续 selector 共用同一份资产。不得按 selector �
 技术门控：
 
 - 所有 token 唯一且可回到唯一 log/scene；
-- SFT/GRPO/dev/final 的规定 overlap 全为 0；
+- Dev/Final 与 SFT provenance 的 token/log overlap 为 0，训练侧与 Dev/Final 的 token/log overlap 为 0；
+- GRPO train-side 与 SFT provenance 的 overlap 精确等于冻结 manifest 声明，且 unique token/log reuse、选择率和 per-log cap 可审计；
 - image/cache coverage 为 100%；
 - prompt/version 一致；
 - primary Tail 的每个选择字段均能证明与被评估 policy 输出无关；若采用 SFT-challenge，split 名称、报告和结论边界全部一致；
@@ -524,10 +531,10 @@ Tail Dev/Final 至少报告：
 
 | 决策项 | 需要的新数据证据 | 当前状态 |
 | --- | --- | --- |
-| `SFT_ROUTE` | SFT blacklist 后剩余 logs/tokens | `TBD_AFTER_D0` |
-| split 精确规模 | unique logs、intent 和事件去重容量 | `TBD_AFTER_D0` |
-| `TAIL_EVAL_ROUTE` | 模型无关场景/evaluator/cache 字段；必要时单独定义 SFT-challenge | `TBD_AFTER_D0` |
-| Screen Pool 与 train manifest 规模 | SFT-unseen 容量和 rollout 成本 | `TBD_AFTER_D0` |
+| `SFT_ROUTE` | 1,192 SFT-seen logs / 103,288 tokens；118 SFT-unseen logs / 835 scenes | `FROZEN: REUSE_SFT_CONTROLLED_GRPO_OVERLAP` |
+| split 精确规模 | 118 unseen logs 的 intent、Tail 字段和事件去重容量 | `TBD_D0R_EVAL_GEOMETRY` |
+| `TAIL_EVAL_ROUTE` | 模型无关场景/evaluator/cache 字段；必要时单独定义 SFT-challenge | `TBD_D0R_EVAL_GEOMETRY` |
+| Screen Pool 与 train manifest 规模 | 1,192 SFT-seen logs / 103,288 tokens 的受控容量和 rollout 成本 | `TBD_D0R_EVAL_GEOMETRY` |
 | TailMix 四类比例 | G4/G-confirm tier、headroom 与稳定性 | `TBD_AFTER_D0` |
 | selector 启动门槛 | Random 与 TailMix mixed-tier coverage | `TBD_AFTER_D0` |
 | CDT tier 是否沿用 V2 | 新 evaluator 字段和值域审计 | `TBD_AFTER_D0` |
@@ -542,7 +549,7 @@ Tail Dev/Final 至少报告：
 | 主效应确认 seeds | discovery 结果和计算成本 | `TBD_AFTER_D0` |
 | interaction 确认 | 四格 discovery 结果和 matched-seed 成本 | `TBD_AFTER_D0`；正式结论固定三组 matched seeds |
 
-这些项目在 D0F 完成后集中讨论一次并回填。未冻结前不得启动正式方法训练。
+`split 精确规模`、`TAIL_EVAL_ROUTE`、`Screen Pool 与 train manifest 规模` 在 D0R-2 冻结并由 D0S/D0F 验证；其余项目在 D0F 后按 S1、R0、H0、M0 对应门控逐项回填。未冻结前不得启动正式方法训练。
 
 ### 6.3 `V3-M0` 必须冻结的最小项目
 
@@ -572,19 +579,20 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 | 2 | `V3-B0` | 从 `93937eb` 创建并推送 V3 分支 | 0 | `COMPLETE` |
 | 3 | `V3-B1` | 审计并迁入通用基础设施修复 | 0 | `COMPLETE` |
 | 4 | `V3-S0` | 服务器新目录 clone、环境与基础入口检查 | 0 | `COMPLETE` |
-| 5 | `V3-D0I` | SFT provenance、SFT-unseen inventory 与 Tail 字段审计 | 0 | `COMPLETE / REUSE_SFT_INSUFFICIENT` |
-| 6 | `V3-D0R` | 讨论并冻结 SFT 路线、split 规模和 Tail evaluation 定义 | 0 | `PENDING_DECISION` |
-| 7 | `V3-D0S` | 生成 split、Master Index 和基础 manifests | 0 | `BLOCKED_BY_D0R` |
-| 8 | `V3-D0A` | 生成/链接 image 与 metric cache | 0 | `BLOCKED_BY_D0S` |
-| 9 | `V3-D0F` | 数据验收、hash 与 freeze | 0 | `BLOCKED_BY_D0A` |
-| 10 | `V3-S1` | SFT shared rollout bank、Confirm 与 selector manifests | `TBD` | `BLOCKED_BY_D0F` |
-| 11 | `V3-R0` | 四格 reward/advantage geometry 与 CDT reward freeze | 0 | `BLOCKED_BY_S1` |
-| 12 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | `TBD` | `BLOCKED_BY_R0` |
-| 13 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `BLOCKED_BY_H0` |
-| 14 | `V3-E0-SFT` | 在冻结 V3 dev 上生成零更新锚点 | `TBD` | `BLOCKED_BY_M0` |
-| 15 | `V3-RR/TR/RC/TC` | 最小 2×2 discovery 与 matched-seed 确认 | `TBD` | `BLOCKED_BY_E0` |
+| 5 | `V3-D0I` | SFT provenance、SFT-unseen inventory 与 Tail 字段审计 | 0 | `COMPLETE` |
+| 6 | `V3-D0R-1` | 冻结 Reuse-SFT + Controlled GRPO Overlap 与双宇宙边界 | 0 | `COMPLETE / ROUTE_FROZEN` |
+| 7 | `V3-D0R-2` | 冻结 Dev/Final 分配、Tail evaluation 定义和训练规模 | 0 | `PENDING_DECISION` |
+| 8 | `V3-D0S` | 生成 split、Master Index 和基础 manifests | 0 | `BLOCKED_BY_D0R_2` |
+| 9 | `V3-D0A` | 生成/链接 image 与 metric cache | 0 | `BLOCKED_BY_D0S` |
+| 10 | `V3-D0F` | 数据验收、hash 与 freeze | 0 | `BLOCKED_BY_D0A` |
+| 11 | `V3-S1` | SFT shared rollout bank、Confirm 与 selector manifests | `TBD` | `BLOCKED_BY_D0F` |
+| 12 | `V3-R0` | 四格 reward/advantage geometry 与 CDT reward freeze | 0 | `BLOCKED_BY_S1` |
+| 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | `TBD` | `BLOCKED_BY_R0` |
+| 14 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `BLOCKED_BY_H0` |
+| 15 | `V3-E0-SFT` | 在冻结 V3 dev 上生成零更新锚点 | `TBD` | `BLOCKED_BY_M0` |
+| 16 | `V3-RR/TR/RC/TC` | 最小 2×2 discovery 与 matched-seed 确认 | `TBD` | `BLOCKED_BY_E0` |
 
-不增加与当前主问题无关的算法分支。数据制作完成前的唯一执行路线为 `A0 → B0 → B1 → S0 → D0I → D0R → D0S → D0A → D0F`。
+不增加与当前主问题无关的算法分支。数据制作完成前的唯一执行路线为 `A0 → B0 → B1 → S0 → D0I → D0R-1 → D0R-2 → D0S → D0A → D0F`。
 
 ## 8. 记录模板
 
@@ -645,10 +653,26 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 状态：`COMPLETE / REUSE_SFT_INSUFFICIENT`；
 - 下一唯一动作：进入 D0R，只讨论并冻结 `Retrain-SFT`，或先补充新的原始 NAVSIM/同域 logs 后重新执行 D0I；在路线与规模冻结前不生成正式 split、image/cache 或训练入口。
 
+### 记录 V3-004：冻结 Reuse-SFT + Controlled GRPO Overlap 路线
+
+- 时间：2026-08-27 22:57（Asia/Shanghai）；
+- branch / source commit / source status：`codex/grpo-v3-selector-reward@f9054d4`；本记录开始前 source clean；
+- 决策关系：本记录基于用户新决策取代记录 V3-003 的“只讨论 Retrain-SFT 或等待新 logs”下一动作；V3-003 的 inventory 数值与文件 hash 保持历史有效；
+- 输入与证据：D0I 已确认 SFT provenance 为 103,288 unique tokens / 1,192 unique logs，严格 SFT-unseen reserve 为 118 logs / 835 eligible unique scenes，两个来源宇宙 token/log overlap 为 0；
+- 冻结决策：本轮采用 `SFT_ROUTE=REUSE_SFT_CONTROLLED_GRPO_OVERLAP`，保留 `models/sft_stage2`，不冻结 `Retrain-SFT`，不等待新增 logs；
+- 训练边界：`grpo_screen`、`train_monitor`、SFT Rollout Bank、reward replay、H0 pilot 与 Random/TailMix optimizer manifests 只能从 1,192 个 SFT-seen logs 构建；四格使用同一来源宇宙和 matched quota，并报告 exact token/log reuse、Screen→Train 选择率及 per-log cap；
+- 评估边界：118 个 SFT-unseen logs / 835 个 eligible scenes 全部且仅分配给 Dev/Final；不得进入任何训练侧产物；Dev/Final 与 SFT provenance、GRPO train-side 的 token/log overlap 必须为 0；
+- 结论边界：只允许声称“受控重用 SFT-seen 数据进行 GRPO 后，在严格 SFT-unseen Dev/Final 上相对 SFT 的 post-training 增量”；不声称 GRPO train 数据 unseen、新增了 logs 或证明了新数据效率；
+- 命名空间：D0I 的 `dataset_v3_sft_unseen` 历史证据保留原位；D0S 起正式资产使用 `dataset_v3_controlled_overlap`；
+- 状态：`COMPLETE / ROUTE_FROZEN`；本记录只冻结路线和来源边界，未生成 split、rollout、cache 或训练产物；
+- 下一唯一动作：执行 `V3-D0R-2`，在现有 118 logs / 835 scenes 内冻结 Dev/Final 具体 log 分配、Natural/Tail 定义，并同步冻结受控 GRPO train manifest 规模。
+
 ## 9. 结论边界
 
 - V3 只承认在 V3 数据和 V3 代码上重新产生的指标；
 - 旧台账用于解释设计来源和已失败机制，不为 V3 提供可直接复用的 baseline 数值；
-- 如果 V3 仍使用旧 SFT checkpoint，结论是“在 SFT-unseen logs 上的 post-training 增量”，不是全模型从零训练；
-- 如果 D0 决定重训 SFT，则新 SFT checkpoint 成为 V3 唯一初始化和零更新锚点；
+- V3 当前保留 `models/sft_stage2`；它是唯一初始化和零更新锚点，不是全模型从零训练；
+- GRPO train-side 是对 SFT-seen 数据的受控重用，不能称为 unseen；严格 unseen 只描述 Dev/Final；
+- 当前允许的核心结论是“受控 overlap GRPO 在严格 SFT-unseen Dev/Final 上相对 SFT 的 post-training 增量”；
+- `Retrain-SFT` 与等待新增 logs 均不是当前执行路线；若未来重开，必须新增决策记录并重新冻结全部 provenance、split 和 baseline；
 - 外部数据集、online selector、HLA、SLDR、constraint optimizer 和多 reward sweep 均不属于当前首轮。
