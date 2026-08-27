@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`PRE_DATA_REVISED_HPARAM`；已完成方案与 V2 训练参数审计，只冻结已经能够确定的代码、数据和比较边界，尚未开始新分支创建、数据制作、rollout 或训练。
+> 当前状态：`D0I_COMPLETE_REUSE_SFT_INSUFFICIENT`；历史分支、V3 干净分支、通用基础设施和服务器新源码目录已经完成初始化，D0I 已证明现有本地数据只有 118 个 SFT-unseen logs / 835 个 eligible scenes，不能支撑原定 Reuse-SFT 规模；尚未生成 split、rollout 或启动训练。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -34,15 +34,15 @@
 | 项目 | 固定值 / 当前值 | 状态 |
 | --- | --- | --- |
 | 历史证据分支 | `codex/grpo-g4-execution` | 保留，不清空、不改写历史 |
-| 当前历史 HEAD | `2118555` | 仅作为本文创建时快照；封存时记录最终 commit |
-| 干净代码基线 | `origin/main@93937eb` | 新分支创建前重新 fetch 并验证 object 存在 |
-| V3 执行分支 | `codex/grpo-v3-selector-reward` | 固定名称，待创建 |
+| 历史封存 commit | `def56881179618efbbef0cadb92f14916feca6c2` | 已推送 `post-training/codex/grpo-g4-execution` |
+| 干净代码基线 | `93937eb01905aa5f3983a6a3600fa970ba50ad8b` | `origin/main` 已不再发布；已按完整 SHA 从 origin 重新 fetch 并验证 object |
+| V3 执行分支 | `codex/grpo-v3-selector-reward` | 已创建并推送；D0I 执行 source 为 `08ec535` |
 | 可写远端 | `post-training` | 新分支只推送到该远端 |
 | V3 数据命名空间 | `dataset_v3_sft_unseen` | 固定名称 |
 | V3 实验命名空间 | `experiments/dataset_v3_sft_unseen/` | 固定名称 |
-| 服务器新源码目录 | `/root/autodl-tmp/curious-vla-workspace/src/curious_vla_v3` | 新 clone，不复用旧 checkout |
+| 服务器新源码目录 | `/root/autodl-tmp/curious-vla-workspace/src/curious_vla_v3` | 已独立 clone；source clean；当前 `08ec535` |
 
-`origin/main@93937eb` 表示当前项目中已知的干净基线，而不是自动跟随未来的 `main`。如果执行前决定改用另一个上游 commit，必须先在本文登记新 commit 和理由，再创建分支；不得创建后静默换基线。
+`93937eb` 是本文创建时由 `origin/main` 指向的已知干净基线，而不是自动跟随远端默认分支。执行时远端已不再发布 `main`，因此按完整 SHA 重新 fetch 并固定该 object；没有改用当前默认分支。如果后续决定改用另一个上游 commit，必须先在本文登记新 commit 和理由，不得静默换基线。
 
 ### 2.2 历史分支封存
 
@@ -568,12 +568,12 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 | 顺序 | ID | 动作 | GPU | 状态 |
 | ---: | --- | --- | ---: | --- |
 | 0 | `V3-P0` | 创建并按方案、参数审计修订本文 | 0 | `COMPLETE_REVISED_HPARAM` |
-| 1 | `V3-A0` | 封存历史台账分支 | 0 | `PENDING` |
-| 2 | `V3-B0` | 从 `93937eb` 创建并推送 V3 分支 | 0 | `PENDING` |
-| 3 | `V3-B1` | 审计并迁入通用基础设施修复 | 0 | `BLOCKED_BY_B0` |
-| 4 | `V3-S0` | 服务器新目录 clone、环境与基础入口检查 | 0 | `BLOCKED_BY_B1` |
-| 5 | `V3-D0I` | SFT provenance、SFT-unseen inventory 与 Tail 字段审计 | 0 | `BLOCKED_BY_S0` |
-| 6 | `V3-D0R` | 讨论并冻结 SFT 路线、split 规模和 Tail evaluation 定义 | 0 | `BLOCKED_BY_D0I` |
+| 1 | `V3-A0` | 封存历史台账分支 | 0 | `COMPLETE` |
+| 2 | `V3-B0` | 从 `93937eb` 创建并推送 V3 分支 | 0 | `COMPLETE` |
+| 3 | `V3-B1` | 审计并迁入通用基础设施修复 | 0 | `COMPLETE` |
+| 4 | `V3-S0` | 服务器新目录 clone、环境与基础入口检查 | 0 | `COMPLETE` |
+| 5 | `V3-D0I` | SFT provenance、SFT-unseen inventory 与 Tail 字段审计 | 0 | `COMPLETE / REUSE_SFT_INSUFFICIENT` |
+| 6 | `V3-D0R` | 讨论并冻结 SFT 路线、split 规模和 Tail evaluation 定义 | 0 | `PENDING_DECISION` |
 | 7 | `V3-D0S` | 生成 split、Master Index 和基础 manifests | 0 | `BLOCKED_BY_D0R` |
 | 8 | `V3-D0A` | 生成/链接 image 与 metric cache | 0 | `BLOCKED_BY_D0S` |
 | 9 | `V3-D0F` | 数据验收、hash 与 freeze | 0 | `BLOCKED_BY_D0A` |
@@ -604,6 +604,46 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 状态：COMPLETE / FAILED_TECHNICAL / CLOSED_BY_GATE
 - 下一唯一动作：
 ```
+
+### 记录 V3-001：历史封存、干净分支与通用补丁初始化
+
+- 时间：2026-08-27 21:56–22:04（Asia/Shanghai）；
+- branch / source commit / source status：历史分支 `codex/grpo-g4-execution@def5688` 已推送；V3 从固定基线 `93937eb01905aa5f3983a6a3600fa970ba50ad8b` 创建，初始化 commit `4c8cf73f5358d25398f212ab3c8f8cc690e6cb72`，source clean；
+- 输入与 hash：创建分支前按完整 SHA 从 origin 重新 fetch `93937eb`；GitHub 当前不再发布 `main`，默认 HEAD 为 `codex/post-training-analysis`，因此没有静默改用远端默认分支；archive commit 为 `def56881179618efbbef0cadb92f14916feca6c2`；
+- 实际动作：历史分支只提交本文，不纳入 bundle、pytest 临时目录、artifacts 或分析草稿；V3 独立 worktree 只恢复第 2.3 节七份白名单文档；迁入 `683c05c` 的本地 parquet loader、`69559e3` 的 val-only 单 rollout 校验、`e514640` 的通用 config/trainer dev lock；不迁入 Dataset V2 launcher 和 `2118555` 的 Dataset V2 pipeline；
+- 预期/实际数量：白名单文档 `7/7`；通用基础设施修改 `3` 处；focused test `2/2` 通过；
+- 技术结果：本地 pytest、Python compile 和 `git diff --check` 通过；V3 分支已推送 `post-training/codex/grpo-v3-selector-reward`；
+- 科学结果：不适用；没有迁入 selector、reward、HLA、Dataset V2 路径或旧实验默认值；
+- 产物路径：本地独立 worktree `.worktrees/grpo-v3-selector-reward`；
+- 状态：`COMPLETE`；
+- 下一唯一动作：在服务器固定新目录完成 S0。
+
+### 记录 V3-002：远端清理与 S0 初始化
+
+- 时间：2026-08-27 22:01–22:23（Asia/Shanghai）；
+- branch / source commit / source status：服务器新 clone `/root/autodl-tmp/curious-vla-workspace/src/curious_vla_v3`，初始 `4c8cf73`，source clean；
+- 输入与 hash：服务器 cgroup `cpu.max=50000/100000`，即 0.5 CPU；GPU 不可用；清理前数据盘 `120 GiB / 18 GiB available / 86% used`；本地 V2 R4-RAW 证据归档 SHA-256 `48b1afa076858260af7eada6c93547cbd38fa6b2e81f19cc230eb62e76a6fb1e` 与旧台账一致；
+- 实际动作：按用户授权删除除 V2 R4-RAW 外的旧 Dataset V2/G4/preference checkpoint、adapter 和 optimizer/full-state；V2 R4-RAW 删除 step125 与 step250 full FSDP model/optimizer/resume state，只保留正式 step250 LoRA、Hugging Face 配置和全部训练/评估证据；SFT Stage-2 作为 V3 路线决策前的初始化锚点暂时保留；随后在固定新目录独立 clone V3 分支并检查环境与入口；
+- 预期/实际数量：清理后数据盘先恢复到 `65 GiB available / 47% used`；R4-RAW step250 `adapter_model.safetensors` SHA-256 清理前后均为 `63ec75166a779c5e0bca192105e47cfd2ced23f068f07e6a07265dbe2cac930b`，`adapter_config.json` 均为 `98f02c09f6623c69f1fab39d7b7cdcf1baff2940944c1035ae9f1ec9af101ed7`；
+- 技术结果：现有 `curious` 环境为 Python `3.10.20`、Torch `2.8.0`、datasets `5.0.1`、Transformers `4.57.1`、Accelerate `1.14.0`、PEFT `0.20.0`、Ray `2.48.0`、vLLM `0.11.0`；实际 EasyR1 依赖可导入，`torch.cuda.is_available=false`，远端 focused test `2/2` 通过；`pytorch_lightning` 不在当前 EasyR1 依赖声明中，不构成 S0 阻塞；
+- 科学结果：不适用；历史权重清理不改变已经固化的指标、曲线或结论；
+- 产物路径：服务器 V3 source 如上；保留权重 `/root/autodl-tmp/curious-vla-workspace/experiments/dataset_v2_20260825/v2_r4_raw_random1k_seed20260825/checkpoints/global_step_250/actor/lora_adapter/`；
+- 状态：`COMPLETE`；旧权重/full-state 已从远端不可恢复，R4-RAW 关键证据仍由本地归档覆盖；
+- 下一唯一动作：执行 D0I。
+
+### 记录 V3-003：D0I SFT provenance、SFT-unseen 容量与 Tail 字段审计
+
+- 时间：2026-08-27 22:28–22:40（Asia/Shanghai）；
+- branch / source commit / source status：`codex/grpo-v3-selector-reward@08ec535140893b6578dc8c87240c41e7ad9d5d20`；服务器 source tracked status clean；
+- 输入与 hash：SFT train parquet SHA-256 `86db9581c4bf29552822fdcc7c6bc71dee4a5d7f78c0f9c44b262bad4048f5dd`；旧 master index SHA-256 `887a67ff57e4299e43364ff6d897b655e25918eae44942cd32d3eab914dcb875`；model hash record SHA-256 `1606825c0bd2ede95ded6c16c53571900e1c834f05f284738edf477a7b7a4951`；
+- 实际动作：新增受限 NAVSIM Unpickler，只允许静态审计确认的 NumPy `_reconstruct/ndarray/dtype`，拒绝任意 pickle global；按 4 history + 10 future、frame interval 14、必须有 route 的模型无关规则扫描 SFT-unseen logs；在服务器生成 SFT token/log blacklist 和聚合报告，不把 token/log ID 下载到本地；
+- 预期/实际数量：SFT parquet/master 均为 `103,288` rows / `103,288` unique tokens，差集 `0/0`，覆盖 `1,192` unique logs；原始 NAVSIM 为 `1,310` unique logs，SFT-unseen 为 `118` logs；其中 `835` eligible unique scenes，token overlap `0`，118 logs 全部可读，但每 log eligible scene 中位数为 `0`、均值 `7.08`；
+- 技术结果：实现测试本地与远端均为 `5/5` 通过；report/blacklist 行数和 marker 验收通过；聚合报告 SHA-256 `b101c3d25b83035b6af5e72fe5af72b03078a2f7171fc621b7382c3bc6736742`，token blacklist `5614a8a32a7030bda7cc71696e085f59116df442ba6c0b2604bb0649fea7f083`，log blacklist `b59e4f618b80243ef03ef8f9438f83f4676c42157098a7ff0fdb19d43be1634b`；
+- 科学结果：`Reuse-SFT` 在当前本地数据上容量不足，835 scenes 无法同时支撑原定 2K–4K optimizer manifest、train monitor、Natural/Tail dev 和 final；118 个 unseen logs 的 `anns`、`traffic_lights`、`driving_command`、`ego_dynamic_state`、`map_location` 等原始字段完整，可继续审计模型无关 Tail 定义，但 raw sensor 与 metric-cache 文件覆盖均为 `0`，不能直接进入 D0S/D0A；
+- 产物路径：服务器 `/root/autodl-tmp/curious-vla-workspace/experiments/dataset_v3_sft_unseen/data_build/v3_d0i_20260827/`；本地 aggregate-only 报告 `artifacts/dataset_v3_sft_unseen/v3_d0i_20260827/inventory_report.json`；
+- 清理：D0I 固化 provenance 后删除 V2 可重建派生目录 `data/dataset_v2_20260825`（约 2.0 GiB）和 `exp_root/metric_cache_dataset_v2_20260825`（约 4.1 GiB）；保留 34 MiB provenance manifests、所有实验结论/曲线/log、SFT anchor、运行环境和 R4-RAW step250 LoRA；最终数据盘 `71 GiB available / 42% used`；
+- 状态：`COMPLETE / REUSE_SFT_INSUFFICIENT`；
+- 下一唯一动作：进入 D0R，只讨论并冻结 `Retrain-SFT`，或先补充新的原始 NAVSIM/同域 logs 后重新执行 D0I；在路线与规模冻结前不生成正式 split、image/cache 或训练入口。
 
 ## 9. 结论边界
 
