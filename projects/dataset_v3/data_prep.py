@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import hashlib
 import json
 import math
@@ -591,7 +592,7 @@ def fetch_images(args: argparse.Namespace) -> None:
             continue
         archive = args.state_dir / f"navtrain_current_{shard}.tgz"
         url = args.url_template.format(shard=shard)
-        subprocess.run(["wget", "-c", "-O", str(archive), url], check=True)
+        subprocess.run(["wget", "-c", "--progress=dot:giga", "-O", str(archive), url], check=True)
         extracted = []
         with tarfile.open(archive, "r:gz") as handle:
             for member in handle:
@@ -670,6 +671,8 @@ def build_cache(args: argparse.Namespace) -> None:
             if processor.compute_and_save_metric_cache(scenario) is None:
                 raise RuntimeError(f"Metric cache failed for {token}")
             found.add(token)
+            del scenario, scene
+            gc.collect()
         if found != by_log[log_name]:
             raise ValueError(f"Cache token mismatch for {log_name}: expected {len(by_log[log_name])}, found {len(found)}")
         marker.write_text(f"{len(found)}\n", encoding="utf-8")
