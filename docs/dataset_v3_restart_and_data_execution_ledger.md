@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`D0A_IMAGE_CACHE_ASSETS_COMPLETE / D0F_PENDING`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；图像与 metric cache 前置资产已达到 9,091/9,091，尚未冻结 Dev/Final 具体分配与 Tail 几何，未生成 rollout 或启动训练。
+> 当前状态：`D0F_COMPLETE / V3_DATA_FROZEN / S1_REQUIRES_GPU`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；9,091/9,091 图像与 metric cache、Dev/Final 分配、模型无关 Tail 几何和训练规模均已冻结，尚未生成 rollout 或启动训练。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -27,7 +27,7 @@
 - V3 不直接继承 V2 的训练超参数；在新数据、selector 和 reward geometry 冻结后，先用 train-only monitor 校准一套四格共用配置；
 - 不从旧分支搬运实验处理逻辑，不删除或覆盖旧证据。
 
-尚未冻结的 Dev/Final 具体 log 分配、Natural/Tail 几何、训练规模和 TailMix 比例统一标记为 `TBD_D0R_EVAL_GEOMETRY` 或后续对应门控；这些决策不等待新增 logs。
+Dev/Final 具体 log 分配、Natural/Tail 几何和每格 2,000-token 训练规模已由 D0R-2/D0S/D0F 冻结；TailMix 四类内部比例仍由 S1 的 train-only Rollout Bank 证据决定，不等待新增 logs，也不读取 Dev/Final。
 
 ## 2. Git 与历史证据边界
 
@@ -38,11 +38,11 @@
 | 历史证据分支 | `codex/grpo-g4-execution` | 保留，不清空、不改写历史 |
 | 历史封存 commit | `def56881179618efbbef0cadb92f14916feca6c2` | 已推送 `post-training/codex/grpo-g4-execution` |
 | 干净代码基线 | `93937eb01905aa5f3983a6a3600fa970ba50ad8b` | `origin/main` 已不再发布；已按完整 SHA 从 origin 重新 fetch 并验证 object |
-| V3 执行分支 | `codex/grpo-v3-selector-reward` | 已创建并推送；D0I 执行 source 为 `08ec535` |
+| V3 执行分支 | `codex/grpo-v3-selector-reward` | D0F source 为 `b46ffdf`；本地与服务器一致，GitHub `post-training` 暂停在 `108c609`，当前 ahead 2 |
 | 可写远端 | `post-training` | 新分支只推送到该远端 |
 | V3 数据命名空间 | `dataset_v3_controlled_overlap` | 正式命名；明确训练侧受控复用 SFT-seen 数据 |
 | V3 实验命名空间 | `experiments/dataset_v3_controlled_overlap/` | 固定名称 |
-| 服务器新源码目录 | `/root/autodl-tmp/curious-vla-workspace/src/curious_vla_v3` | 已独立 clone；source clean；当前 `08ec535` |
+| 服务器新源码目录 | `/root/autodl-tmp/curious-vla-workspace/src/curious_vla_v3` | 已独立 clone；source clean；当前 `b46ffdf` |
 
 `93937eb` 是本文创建时由 `origin/main` 指向的已知干净基线，而不是自动跟随远端默认分支。执行时远端已不再发布 `main`，因此按完整 SHA 重新 fetch 并固定该 object；没有改用当前默认分支。如果后续决定改用另一个上游 commit，必须先在本文登记新 commit 和理由，不得静默换基线。
 
@@ -161,7 +161,7 @@ V3 只维护一个统一 Master Index，其中训练与评估是互斥的来源�
 - `grpo_screen`、`train_monitor`、Random/TailMix optimizer manifest 只能来自 SFT provenance；其 SFT overlap 是预注册的受控重用，不得写作 unseen，必须报告 exact unique token/log reuse、选择率与 per-log cap；
 - `grpo_screen`、`train_monitor`、两个 dev、两个 final 之间 token、log overlap 均为 0；
 - 所有训练侧 selector rollout、reward replay、H0 pilot 和正式 optimizer manifest 与全部 Dev/Final 的 token、log overlap 均为 0；
-- 同一连续事件窗口不得跨 split；事件窗口定义为 `TBD_D0R_EVAL_GEOMETRY`，并在 split 前冻结；
+- 同一连续事件窗口不得跨 split；事件窗口冻结为 14 frames（4 history + 10 future），stride 14，且 center frame 必须具有 route；
 - final 不参与 selector 设计、reward 参数、训练预算和非劣界限的确定；
 - 所有 prompt 时间描述使用同一正确版本，不重新引入 V2 已发现的 5-second/4-second 不一致。
 
@@ -183,7 +183,7 @@ D0I 必须先审计这些字段是否真实存在、含义是否可用于 scene 
 - 不替代 `dev_natural/final_natural`；
 - 选择规则在 GRPO 训练前冻结，GRPO 结果不得反向改变其成员。
 
-最终采用模型无关 Tail 还是 SFT-challenge 路线记为 `TBD_D0R_EVAL_GEOMETRY:TAIL_EVAL_ROUTE`。
+`TAIL_EVAL_ROUTE=POLICY_INDEPENDENT_GT_ACTOR_PROXIMITY` 已冻结：scene flag 为 vehicle distance `<=5.0 m` 或 pedestrian/bicycle distance `<=10.0 m`；在 58 个含 eligible scene 的 logs 中，按 interaction rate、interaction count、minimum actor distance 和 stable hash 排序，前 29 个定义为 Tail，其余 29 个为 Natural；60 个零 eligible-scene logs 只保留在 Natural log reserve，不产生 token。Tail/Natural interaction scene rate 分别为 `83.2%/47.9%`。
 
 ### 3.5 SFT 路线决策
 
@@ -199,22 +199,22 @@ D0I 证明严格 unseen 容量不足以同时承担原定 GRPO train 与 Dev/Fin
 1. **Reuse-SFT + Controlled GRPO Overlap（已选）**：保留 `models/sft_stage2`；将全部 SFT-unseen 数据只分配给 Dev/Final；GRPO train-side 只从 SFT-seen provenance 构建受控、可审计的训练池；
 2. **Retrain-SFT（本轮不冻结）**：不作为当前执行路线，也不以等待新增 logs 作为 D0R/D0S 前置条件。
 
-`SFT_ROUTE=REUSE_SFT_CONTROLLED_GRPO_OVERLAP` 已冻结。Dev/Final 的具体 log 分配、Natural/Tail 几何和 train manifest 规模仍为 `TBD_D0R_EVAL_GEOMETRY`；在这些项目冻结前，不生成正式 split、GRPO manifest、SFT-E0 或 selector rollout。
+`SFT_ROUTE=REUSE_SFT_CONTROLLED_GRPO_OVERLAP` 已冻结。Dev/Final 的具体 log 分配、Natural/Tail 几何和 train manifest 规模已由 D0R-2/D0S/D0F 冻结；正式 SFT-E0、selector rollout 和训练仍未启动。
 
 该路线的结论边界固定为：允许报告“受控重用 SFT-seen 数据进行 GRPO 后，在严格 SFT-unseen Dev/Final 上相对 SFT 的 post-training 增量”；不得声称 GRPO train 数据本身 unseen、获得了新增 logs，或证明了新数据效率。
 
 ### 3.6 容量目标而非冻结规模
 
-以下数字用于 D0 盘点容量，不是当前承诺：
+以下数字已经由 D0R-2/D0S/D0F 冻结：
 
 | 资产 | 初始容量目标 | 冻结状态 |
 | --- | ---: | --- |
-| Selector Screen Pool | 来源上限为 103,288 个 SFT-seen unique tokens | `TBD_D0R_EVAL_GEOMETRY` |
-| Train-only Monitor | 初始考虑 256–512 | `TBD_D0R_EVAL_GEOMETRY` |
-| Random Train Manifest | 初始考虑 2,000–4,000 | `TBD_D0R_EVAL_GEOMETRY` |
-| TailMix Train Manifest | 与 Random 完全等量 | `TBD_D0R_EVAL_GEOMETRY` |
-| Natural Dev + Tail Dev | 与 Final 共同分配 118 个 unseen logs / 835 个 scenes | `TBD_D0R_EVAL_GEOMETRY` |
-| Final Natural + Final Tail | 与 Dev 共同分配 118 个 unseen logs / 835 个 scenes | `TBD_D0R_EVAL_GEOMETRY` |
+| Selector Screen Pool | 8,000 tokens / 1,063 SFT-seen logs；per-log cap 8 | `FROZEN` |
+| Train-only Monitor | 256 tokens / 129 disjoint SFT-seen logs；per-log cap 2 | `FROZEN` |
+| Random Train Manifest | 2,000 unique tokens；straight/left/right=`1333/434/233` | `FROZEN` |
+| TailMix Train Manifest | 2,000 unique tokens；与 Random 使用完全相同 intent quota | `FROZEN_TARGET / MEMBERSHIP_AFTER_S1` |
+| Natural Dev + Tail Dev | 416 scenes；Natural/Tail=`210/206` | `FROZEN` |
+| Final Natural + Final Tail | 419 scenes；Natural/Tail=`214/205` | `FROZEN / LOCKED` |
 
 评估规模只能根据 118 个 SFT-unseen logs 的 intent 分布、连续事件去重后容量、image/cache 可用性和 safety-conflict coverage 确定；训练规模只根据 1,192 个 SFT-seen logs 的受控候选容量、rollout 成本和完整 2×2 matched-seed 成本确定。D0R 的问题不是“能否凑到 8K”，而是“满足预定 safety-conflict coverage 所需的最小训练规模是多少”。不得通过重复 rare token 填满目标；必须报告 Screen→Train 选择率，避免 selector 覆盖接近全候选池而失去对比分布。
 
@@ -381,7 +381,7 @@ seed 协议固定为两阶段：
 - 与 TailMix 使用完全相同的 straight/left/right quota；
 - 与 TailMix 样本数、训练 step、group/rollout 预算一致。
 
-精确 intent quota、per-log cap 和样本数为 `TBD_AFTER_D0:RANDOM_MANIFEST`。Random/TailMix 同时报告 region、route-type 和有效 log 分布及 JS divergence；是否增加弱分布门槛在 M0 冻结，不要求逐项完全匹配。
+精确 intent quota 冻结为 straight/left/right=`1333/434/233`，样本数为每格 2,000，训练候选 per-log cap 为 8；Random/TailMix 同时报告 region、route-type 和有效 log 分布及 JS divergence；是否增加弱分布门槛在 M0 冻结，不要求逐项完全匹配。
 
 ### 5.4 TailMix selector
 
@@ -532,9 +532,9 @@ Tail Dev/Final 至少报告：
 | 决策项 | 需要的新数据证据 | 当前状态 |
 | --- | --- | --- |
 | `SFT_ROUTE` | 1,192 SFT-seen logs / 103,288 tokens；118 SFT-unseen logs / 835 scenes | `FROZEN: REUSE_SFT_CONTROLLED_GRPO_OVERLAP` |
-| split 精确规模 | 118 unseen logs 的 intent、Tail 字段和事件去重容量 | `TBD_D0R_EVAL_GEOMETRY` |
-| `TAIL_EVAL_ROUTE` | 模型无关场景/evaluator/cache 字段；必要时单独定义 SFT-challenge | `TBD_D0R_EVAL_GEOMETRY` |
-| Screen Pool 与 train manifest 规模 | 1,192 SFT-seen logs / 103,288 tokens 的受控容量和 rollout 成本 | `TBD_D0R_EVAL_GEOMETRY` |
+| split 精确规模 | 118 unseen logs 的 intent、Tail 字段和事件去重容量 | `FROZEN: Dev 416 / Final 419 scenes` |
+| `TAIL_EVAL_ROUTE` | 模型无关场景/evaluator/cache 字段；必要时单独定义 SFT-challenge | `FROZEN: POLICY_INDEPENDENT_GT_ACTOR_PROXIMITY` |
+| Screen Pool 与 train manifest 规模 | 1,192 SFT-seen logs / 103,288 tokens 的受控容量和 rollout 成本 | `FROZEN: Screen 8,000 / Monitor 256 / each cell 2,000` |
 | TailMix 四类比例 | G4/G-confirm tier、headroom 与稳定性 | `TBD_AFTER_D0` |
 | selector 启动门槛 | Random 与 TailMix mixed-tier coverage | `TBD_AFTER_D0` |
 | CDT tier 是否沿用 V2 | 新 evaluator 字段和值域审计 | `TBD_AFTER_D0` |
@@ -581,11 +581,11 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 | 4 | `V3-S0` | 服务器新目录 clone、环境与基础入口检查 | 0 | `COMPLETE` |
 | 5 | `V3-D0I` | SFT provenance、SFT-unseen inventory 与 Tail 字段审计 | 0 | `COMPLETE` |
 | 6 | `V3-D0R-1` | 冻结 Reuse-SFT + Controlled GRPO Overlap 与双宇宙边界 | 0 | `COMPLETE / ROUTE_FROZEN` |
-| 7 | `V3-D0R-2` | 冻结 Dev/Final 分配、Tail evaluation 定义和训练规模 | 0 | `PENDING_DECISION` |
-| 8 | `V3-D0S` | 生成 split、Master Index 和基础 manifests | 0 | `BLOCKED_BY_D0R_2` |
-| 9 | `V3-D0A` | 生成/链接 image 与 metric cache | 0 | `BLOCKED_BY_D0S` |
-| 10 | `V3-D0F` | 数据验收、hash 与 freeze | 0 | `BLOCKED_BY_D0A` |
-| 11 | `V3-S1` | SFT shared rollout bank、Confirm 与 selector manifests | `TBD` | `BLOCKED_BY_D0F` |
+| 7 | `V3-D0R-2` | 冻结 Dev/Final 分配、Tail evaluation 定义和训练规模 | 0 | `COMPLETE / FROZEN` |
+| 8 | `V3-D0S` | 生成 split、Master Index 和基础 manifests | 0 | `COMPLETE / RETRY2` |
+| 9 | `V3-D0A` | 生成/链接 image 与 metric cache | 0 | `COMPLETE` |
+| 10 | `V3-D0F` | 数据验收、hash 与 freeze | 0 | `COMPLETE / RETRY1` |
+| 11 | `V3-S1` | SFT shared rollout bank、Confirm 与 selector manifests | 1 | `READY / RESTART_GPU` |
 | 12 | `V3-R0` | 四格 reward/advantage geometry 与 CDT reward freeze | 0 | `BLOCKED_BY_S1` |
 | 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | `TBD` | `BLOCKED_BY_R0` |
 | 14 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `BLOCKED_BY_H0` |
@@ -677,6 +677,21 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 完成结果：补齐 `835` 张严格 SFT-unseen CAM_F0，image coverage 为 `9,091/9,091`、metric-cache 文件数为 `9,091/9,091`，生成 `D0A_IMAGES_COMPLETE`；`selective_zip_report.json` SHA-256 `2ef2f82c760d06da525f06c0c750fe57a8029a5302f0c80ec4c81c1eab0efcea`，`image_coverage_report.json` SHA-256 `c9e3cc553bc8ad7aa4011e2404fe313a377ea38edd32ef37cb7bc5cf6ee64e82`；
 - 空间闭环：删除已替代的旧 `full_front_parts`（9.9 GiB）与旧 staging（5.7 MiB），保留运行日志和报告；正式图像为 1.9 GiB、metric cache 为 3.9 GiB，`/root/autodl-tmp` 最终可用约 65 GiB / 使用率 47%；
 - 状态：`COMPLETE / D0A_IMAGE_CACHE_ASSETS_COMPLETE`；未启动 split 后的 rollout、训练或 Dev/Final 访问；下一动作仍由 `V3-D0R-2 → V3-D0S → V3-D0F` 的冻结顺序决定。
+
+### 记录 V3-006：D0R-2、D0S 与 D0F 无卡数据冻结完成
+
+- 时间：2026-08-28 17:56–18:23（Asia/Shanghai）；服务器仍为无卡模式，cgroup `cpu.max=50000/100000`，即 0.5 vCPU；
+- branch / source commit / source status：数据准备门控 commit `02d97e10a2f315ba7d144f454ad7bb02bd9b7e19`，prompt horizon 修复 commit `b46ffdf0f63bd7e5931f9e567b34a25aa809f413`；本地与服务器 source 一致且 tracked status clean；本地与服务器相对 GitHub `post-training/codex/grpo-v3-selector-reward@108c609` ahead 2，因当前会话未取得向该外部 GitHub 目的地发送代码的显式授权而未推送；
+- D0R-2 冻结：固定 seed `20260827`；14-frame 非重叠事件窗口（4 history + 10 future）；Screen 8,000 / per-log cap 8，Monitor 256 / per-log cap 2，每格 optimizer manifest 2,000；Random/TailMix intent quota 固定为 straight/left/right=`1333/434/233`；2×2 执行优先级固定为 `RR → TC → TR → RC`；
+- Tail 与评估几何：`TAIL_EVAL_ROUTE=POLICY_INDEPENDENT_GT_ACTOR_PROXIMITY`；vehicle `<=5.0 m` 或 pedestrian/bicycle `<=10.0 m` 定义 interaction scene，58 个含 eligible scene 的 unseen logs 按 interaction rate/count、minimum actor distance 和 stable hash 排序后等分为 Tail/Natural，各 29 logs；Tail/Natural interaction scene rate 为 `83.2%/47.9%`；Dev/Final 分别为 `416/419` scenes，四个 split 为 `dev_natural=210`、`dev_tail=206`、`final_natural=214`、`final_tail=205`；
+- D0S 重跑：新增 Master Index 的 `prompt_version`、`sft_overlap` 和 `data_status` 字段；每次正式生成均执行两次独立重跑，retry2 的 data/manifests/reports tree hash 分别为 `29999e3b2d00a97a405144dc4dcd213d97fe9ad4062222b828755033c68e0b2b`、`2983e134dedfe381358aab71f86efec22b603b3a5581138f132b326088a09eea`、`0357121b1120e5b2e0e5043fd2259eff6d9f3137e1b00595f00e9b312e69b481`，membership/order 和所有文件逐字节一致；
+- prompt 门控与修复：首次 D0F 在写入前因四个 parquet 每条 prompt 同时含 `4-second` 与遗留 `5-second` 而失败，其余门控全部通过；修复从只替换一个完整短语改为全局 `5-second → 4-second`，重新双跑 D0S 后，`grpo_screen/train_monitor/dev/final` 共 9,091 rows 的 `4-second` 覆盖为 9,091、`5-second` 计数为 0；本地与服务器 focused tests 均为 `9 passed`；
+- D0S 关键 hash：`d0r2_decision_report.json=7d94ff484dbbe55b1e7800831079dd88372e8a48d50cf386fe487de8fae1a306`；`d0s_acceptance_report.json=618e026d0fef4b224c819a9af17b76240e9d12da4861bd3b7f7a9a78762e6af9`；`reproducibility_report.json=40cb917605ae04fbd4117c8365229fe25567add868c03ca06d7840aaa10b5258`；`active_assets.csv=d39893ab548e4a69b7e50030b540d35d3a63a23b7627d3dbd6bfd67ccf8c6bb8`；`master_index.csv=40b3a1fb4a9c12a7a4cce26497aa0058128c7370870477033a2a7e523a90280b`；
+- D0F 结果：retry1 在 99 秒内完成；25 项 gate 全部为 true，含 9,091/9,091 CAM_F0、9,091/9,091 metric cache、SFT Stage-2 8 GiB 实物哈希、source clean/exact、报告 finite、prompt/version、训练/评估与四个 eval split 的 token/log 零重叠、Tail policy-independent 和 D0S replay 一致性；`asset_sha256.csv` 含 18,182 个资产 hash；
+- D0F 关键 hash：`dataset_card.json=53ff0b4fb5d65bd8597dd681e82f285efa5344575d99a842420764027e3c990b`；`asset_sha256.csv=c2a2e358276e0c47bb6991cde1510b325999a54ec377c46386ffca4e943e2ade`；`asset_coverage_report.json=1c9e8a6222eb8f64279df8c1dae89cd5875ea9f429375e059788b9ef6713f6b3`；`final_access_lock.json=0b1c67094974ab4efb27c4b71f15cf6f61038a78a71888314a90cfa606937fcf`；`V3_DATA_FROZEN`、`COMPLETE` 和 `exit_code=0` 齐全，4 个 Final 文件均为 mode `0400`；
+- 产物路径：服务器 `experiments/dataset_v3_controlled_overlap/data_build/v3_d0s_20260828_retry2/` 与 `experiments/dataset_v3_controlled_overlap/data_build/v3_d0f_20260828_retry1/`；未创建 `rollout_bank`，未运行 SFT/GRPO inference 或训练；
+- 空间闭环：删除两次重跑的精确临时目录与测试目录；D0S 证据 56 KiB、D0F 证据 2.8 MiB、正式图像 1.9 GiB、metric cache 3.9 GiB；数据盘仍为 120 GiB / 65 GiB available / 47% used；
+- 状态：`COMPLETE / V3_DATA_FROZEN`；无卡模式下能完成的数据准备已全部完成；下一唯一动作是将服务器重启到 GPU 模式后执行 `V3-S1` 的 SFT shared rollout bank，当前不得在 0.5 vCPU 无卡模式启动该阶段。
 
 ## 9. 结论边界
 
