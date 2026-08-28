@@ -14,6 +14,7 @@ from projects.dataset_v3.data_prep import (
     build_problem,
     choose_training_rows,
     decode_zip_member,
+    verify_replay,
 )
 
 
@@ -116,3 +117,21 @@ def test_decode_zip_member_checks_deflate_and_crc() -> None:
     damaged[30 + name_length + extra_length] ^= 1
     with pytest.raises((ValueError, zlib.error)):
         decode_zip_member(info, bytes(damaged))
+
+
+def test_verify_replay_requires_identical_files(tmp_path: Path) -> None:
+    roots = {}
+    for name in ("reference_data", "reference_manifests", "reference_report", "replay_data", "replay_manifests", "replay_report"):
+        root = tmp_path / name
+        root.mkdir()
+        (root / "artifact.txt").write_text("same\n", encoding="utf-8")
+        roots[name] = root
+    output = tmp_path / "reproducibility.json"
+    args = Namespace(**roots, output=output)
+
+    verify_replay(args)
+
+    assert output.is_file()
+    roots["replay_manifests"].joinpath("artifact.txt").write_text("changed\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="D0S replay mismatch"):
+        verify_replay(args)
