@@ -643,6 +643,7 @@ class VerifiedPartStream:
         self.parts = parts
         self.index = 0
         self.response = None
+        self.process = None
         self.digest = None
         self.actual_sha256: dict[str, str] = {}
 
@@ -653,7 +654,11 @@ class VerifiedPartStream:
         if self.index >= len(self.parts):
             return False
         url, path, _ = self.parts[self.index]
-        self.response = urllib.request.urlopen(url, timeout=120)
+        self.process = subprocess.Popen(
+            ["curl", "--fail", "--location", "--silent", "--show-error", url],
+            stdout=subprocess.PIPE,
+        )
+        self.response = self.process.stdout
         self.digest = hashlib.sha256()
         print(f"mirror_part_start={self.index + 1}/{len(self.parts)} path={path}", flush=True)
         return True
@@ -668,6 +673,9 @@ class VerifiedPartStream:
                 self.digest.update(data)
                 return data
             self.response.close()
+            return_code = self.process.wait()
+            if return_code:
+                raise OSError(f"Mirror download failed with exit code {return_code}: {self.parts[self.index][0]}")
             _, path, expected = self.parts[self.index]
             actual = self.digest.hexdigest()
             if actual != expected:
@@ -676,6 +684,7 @@ class VerifiedPartStream:
             print(f"mirror_part_complete={self.index + 1}/{len(self.parts)} path={path}", flush=True)
             self.index += 1
             self.response = None
+            self.process = None
             self.digest = None
 
 
