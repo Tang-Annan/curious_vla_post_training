@@ -81,7 +81,11 @@ def test_problem_uses_relative_history_and_four_second_prompt() -> None:
                 "driving_command": [0, 1, 0, 0],
             }
         )
-    template = "prefix\nEach trajectory point format: (x:float, y:float, heading:float)\noptimal future 5-second trajectory"
+    template = (
+        "predict a future 5-second horizon\n"
+        "Each trajectory point format: (x:float, y:float, heading:float)\n"
+        "optimal future 5-second trajectory"
+    )
 
     problem = build_problem(window, template)
 

@@ -249,7 +249,7 @@ Picture 1: <image> the front view of the ego-vehicle
 - Current high-level intent (string): {command}
 - 1.5-second past trajectory(3 steps at 2 Hz): {' '.join(statuses)}
 """
-    return (prefix + suffix).replace("optimal future 5-second trajectory", "optimal future 4-second trajectory")
+    return (prefix + suffix).replace("5-second", "4-second")
 
 
 def scene_risk(center: dict[str, Any]) -> tuple[float | None, float | None, bool]:
@@ -371,7 +371,7 @@ def update_source_row(raw: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"Unexpected source image path: {image}")
     return {
         "images": [V3_IMAGE_PREFIX + image[len(SOURCE_IMAGE_PREFIX) :]],
-        "problem": raw["problem"].replace("optimal future 5-second trajectory", "optimal future 4-second trajectory"),
+        "problem": raw["problem"].replace("5-second", "4-second"),
         "answer": raw["answer"],
     }
 
