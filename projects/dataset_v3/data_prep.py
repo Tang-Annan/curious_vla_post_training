@@ -649,12 +649,14 @@ def fetch_images(args: argparse.Namespace) -> None:
 
 
 class VerifiedPartStream:
-    def __init__(self, parts: list[tuple[str, str, str]]) -> None:
+    def __init__(self, parts: list[tuple[str, str, str]], download_dir: Path) -> None:
         self.parts = parts
+        self.download_dir = download_dir
+        self.download_dir.mkdir(parents=True, exist_ok=True)
         self.index = 0
         self.response = None
-        self.process = None
         self.digest = None
+        self.local_path = None
         self.actual_sha256: dict[str, str] = {}
 
     def readable(self) -> bool:
@@ -663,14 +665,37 @@ class VerifiedPartStream:
     def _open_next(self) -> bool:
         if self.index >= len(self.parts):
             return False
-        url, path, _ = self.parts[self.index]
-        self.process = subprocess.Popen(
-            ["curl", "--fail", "--location", "--silent", "--show-error", url],
-            stdout=subprocess.PIPE,
+        url, path, expected = self.parts[self.index]
+        self.local_path = self.download_dir / Path(path).name
+        control_path = Path(f"{self.local_path}.aria2")
+        already_complete = (
+            self.local_path.is_file()
+            and not control_path.exists()
+            and sha256_file(self.local_path) == expected
         )
-        self.response = self.process.stdout
         self.digest = hashlib.sha256()
         print(f"mirror_part_start={self.index + 1}/{len(self.parts)} path={path}", flush=True)
+        if not already_complete:
+            if self.local_path.exists() and not control_path.exists():
+                self.local_path.unlink()
+            subprocess.run(
+                [
+                    "aria2c",
+                    "--continue=true",
+                    "--allow-overwrite=true",
+                    "--auto-file-renaming=false",
+                    "--file-allocation=none",
+                    "--max-connection-per-server=8",
+                    "--split=8",
+                    "--min-split-size=64M",
+                    "--summary-interval=30",
+                    f"--dir={self.download_dir}",
+                    f"--out={self.local_path.name}",
+                    url,
+                ],
+                check=True,
+            )
+        self.response = self.local_path.open("rb")
         return True
 
     def read(self, size: int = -1) -> bytes:
@@ -683,19 +708,18 @@ class VerifiedPartStream:
                 self.digest.update(data)
                 return data
             self.response.close()
-            return_code = self.process.wait()
-            if return_code:
-                raise OSError(f"Mirror download failed with exit code {return_code}: {self.parts[self.index][0]}")
             _, path, expected = self.parts[self.index]
             actual = self.digest.hexdigest()
             if actual != expected:
+                self.local_path.unlink(missing_ok=True)
                 raise ValueError(f"Mirror part hash mismatch for {path}: expected {expected}, found {actual}")
             self.actual_sha256[path] = actual
+            self.local_path.unlink()
             print(f"mirror_part_complete={self.index + 1}/{len(self.parts)} path={path}", flush=True)
             self.index += 1
             self.response = None
-            self.process = None
             self.digest = None
+            self.local_path = None
 
 
 def fetch_full_front_images(args: argparse.Namespace) -> None:
@@ -727,7 +751,7 @@ def fetch_full_front_images(args: argparse.Namespace) -> None:
         (f"{FULL_FRONT_MIRROR_ROOT}/{path}", path, FULL_FRONT_PART_SHA256[index])
         for index, path in enumerate(part_paths)
     ]
-    stream = VerifiedPartStream(parts)
+    stream = VerifiedPartStream(parts, args.state_dir / "full_front_parts")
     extracted = set()
     with zstandard.ZstdDecompressor().stream_reader(stream) as decompressed:
         with tarfile.open(fileobj=decompressed, mode="r|") as archive:

@@ -1,9 +1,12 @@
 from argparse import Namespace
+import hashlib
+from pathlib import Path
 
 import pytest
 
 from projects.dataset_v3.data_prep import (
     SftRow,
+    VerifiedPartStream,
     assign_eval_logs,
     build_cache,
     build_problem,
@@ -92,3 +95,26 @@ def test_problem_uses_relative_history_and_four_second_prompt() -> None:
 def test_cache_workers_must_be_positive() -> None:
     with pytest.raises(ValueError, match="workers must be at least 1"):
         build_cache(Namespace(workers=0))
+
+
+def test_verified_part_stream_uses_parallel_resumable_download(monkeypatch, tmp_path: Path) -> None:
+    payload = b"verified multipart payload"
+    download_dir = tmp_path / "parts"
+    calls = []
+
+    def fake_run(command, check):
+        calls.append(command)
+        download_dir.mkdir(parents=True, exist_ok=True)
+        (download_dir / "part-0000").write_bytes(payload)
+
+    monkeypatch.setattr("projects.dataset_v3.data_prep.subprocess.run", fake_run)
+    stream = VerifiedPartStream(
+        [("https://example.test/part-0000", "part-0000", hashlib.sha256(payload).hexdigest())],
+        download_dir,
+    )
+
+    assert b"".join(iter(lambda: stream.read(5), b"")) == payload
+    assert calls[0][0] == "aria2c"
+    assert "--max-connection-per-server=8" in calls[0]
+    assert stream.actual_sha256["part-0000"] == hashlib.sha256(payload).hexdigest()
+    assert not (download_dir / "part-0000").exists()
