@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import binascii
 import csv
 import gc
 import hashlib
@@ -8,10 +9,13 @@ import json
 import math
 import os
 import shutil
+import struct
 import subprocess
 import tarfile
+import zipfile
+import zlib
 from collections import Counter, defaultdict
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
@@ -42,27 +46,16 @@ V3_IMAGE_PREFIX = f"{VERSION}/sensor_blobs/trainval/"
 INTENTS = ("straight", "left", "right")
 VEHICLE_DISTANCE_M = 5.0
 VRU_DISTANCE_M = 10.0
-FULL_FRONT_MIRROR_REVISION = "a08a0aa345c0f0d0f12693c4bae8e2ad0d15d6cc"
-FULL_FRONT_MIRROR_ROOT = (
-    f"https://hf-mirror.com/datasets/WeiXiCZ/navsim-trainval-full-front/resolve/{FULL_FRONT_MIRROR_REVISION}"
+SELECTIVE_ZIP_REVISION = "7707301e13828b4599b3a0f834b44efed57df90e"
+SELECTIVE_ZIP_URL = (
+    f"https://hf-mirror.com/datasets/richardyann/navsim-select/resolve/{SELECTIVE_ZIP_REVISION}"
+    "/sensor_blobs/trainval.zip"
 )
 MIRROR_OVERLAP_CHECKS = 64
-FULL_FRONT_PART_SHA256 = (
-    "c9d4a65a80da570733176bb7d2d62c60ac8aecd29759e1c00ac6ddd695b2ea3a",
-    "d6c9318d90cf7b49c0885056b0befc0fe1c607dd42f3a2429a5ab20f8aef63fe",
-    "77b21a79292eb26223c36ce1a49413b08a566fc418f0b8edf0743256930188a5",
-    "48d17d48e438a581001b4c774f27cc66e3da77a6834f24cd237c51ebae109ecd",
-    "0e9038c978b1fadd9b092ae4f605468821d391daf145d57fcac7b32635f3f7a1",
-    "62ab2a491358c0d06bfb2cf15c60fbd444cba2fcc184a4caf77b9a8cad8524ec",
-    "37ab2f92ef5aaf4430f780547df837bb934fa0fb7efab08164c5b367b1b64dc2",
-    "7d61d17e80511945e5bb5290ec0dfcb8001bc837e514bb7013aa9256f0bd29d6",
-    "9753f5629766e6ddc7d36da7d6717deef34f46b50c327b06d01d734359eb735e",
-    "6a7f194b2f5d9e944bb0667c24c628386169b3f2077dd0b25f9f4aa856f15a77",
-    "3a612b36dc4c21d3a4d919c44988f890488d9f849f2fdac9d261cf7c72972b67",
-    "833bedbb0e5b39c44238e88bad1d8cdfec58292ef2de8d99322defc4f90d1e5a",
-    "4aa76fa173e799f163e23407385bbfdca3c8ed079d3da6f58c1744fb18d41793",
-    "76d8035c73a7a2ec6a9a5c7a28242d0e4466d9f4d8ce9ff2fe598d7349246be1",
-)
+SELECTIVE_ZIP_SIZE = 148_230_424_017
+SELECTIVE_ZIP_DIRECTORY_OFFSET = 148_109_563_035
+SELECTIVE_ZIP_WORKERS = 8
+ZIP_LOCAL_EXTRA_LIMIT = 65_535
 
 
 @dataclass(frozen=True)
@@ -648,83 +641,65 @@ def fetch_images(args: argparse.Namespace) -> None:
     (args.state_dir / "D0A_IMAGES_COMPLETE").touch()
 
 
-class VerifiedPartStream:
-    def __init__(self, parts: list[tuple[str, str, str]], download_dir: Path) -> None:
-        self.parts = parts
-        self.download_dir = download_dir
-        self.download_dir.mkdir(parents=True, exist_ok=True)
-        self.index = 0
-        self.response = None
-        self.digest = None
-        self.local_path = None
-        self.actual_sha256: dict[str, str] = {}
+def decode_zip_member(info: zipfile.ZipInfo, payload: bytes) -> bytes:
+    if len(payload) < 30:
+        raise ValueError(f"Truncated ZIP local header for {info.filename}")
+    signature, _, flags, compression, _, _, _, _, _, name_length, extra_length = struct.unpack_from(
+        "<4s5H3I2H", payload
+    )
+    if signature != b"PK\x03\x04" or flags & 1:
+        raise ValueError(f"Invalid or encrypted ZIP member: {info.filename}")
+    if compression != info.compress_type:
+        raise ValueError(f"ZIP compression mismatch for {info.filename}")
+    data_start = 30 + name_length + extra_length
+    compressed = payload[data_start : data_start + info.compress_size]
+    if len(compressed) != info.compress_size:
+        raise ValueError(f"Truncated ZIP member data for {info.filename}")
+    if compression == zipfile.ZIP_STORED:
+        data = compressed
+    elif compression == zipfile.ZIP_DEFLATED:
+        data = zlib.decompress(compressed, -zlib.MAX_WBITS)
+    else:
+        raise ValueError(f"Unsupported ZIP compression {compression} for {info.filename}")
+    if len(data) != info.file_size or binascii.crc32(data) & 0xFFFFFFFF != info.CRC:
+        raise ValueError(f"ZIP integrity check failed for {info.filename}")
+    return data
 
-    def readable(self) -> bool:
-        return True
 
-    def _open_next(self) -> bool:
-        if self.index >= len(self.parts):
-            return False
-        url, path, expected = self.parts[self.index]
-        self.local_path = self.download_dir / Path(path).name
-        control_path = Path(f"{self.local_path}.aria2")
-        already_complete = (
-            self.local_path.is_file()
-            and not control_path.exists()
-            and sha256_file(self.local_path) == expected
-        )
-        self.digest = hashlib.sha256()
-        print(f"mirror_part_start={self.index + 1}/{len(self.parts)} path={path}", flush=True)
-        if not already_complete:
-            if self.local_path.exists() and not control_path.exists():
-                self.local_path.unlink()
-            subprocess.run(
-                [
-                    "aria2c",
-                    "--continue=true",
-                    "--allow-overwrite=true",
-                    "--auto-file-renaming=false",
-                    "--file-allocation=none",
-                    "--max-connection-per-server=8",
-                    "--split=8",
-                    "--min-split-size=64M",
-                    "--summary-interval=30",
-                    f"--dir={self.download_dir}",
-                    f"--out={self.local_path.name}",
-                    url,
-                ],
-                check=True,
-            )
-        self.response = self.local_path.open("rb")
-        return True
+def download_zip_member(url: str, info: zipfile.ZipInfo, relative: str, staging: Path) -> dict[str, Any]:
+    destination = staging / relative
+    if destination.is_file():
+        data = destination.read_bytes()
+        if len(data) == info.file_size and binascii.crc32(data) & 0xFFFFFFFF == info.CRC:
+            return {"path": relative, "crc32": f"{info.CRC:08x}", "compressed_bytes": info.compress_size}
+        destination.unlink()
 
-    def read(self, size: int = -1) -> bytes:
-        size = 8 * 1024 * 1024 if size < 0 else size
-        while True:
-            if self.response is None and not self._open_next():
-                return b""
-            data = self.response.read(size)
-            if data:
-                self.digest.update(data)
-                return data
-            self.response.close()
-            _, path, expected = self.parts[self.index]
-            actual = self.digest.hexdigest()
-            if actual != expected:
-                self.local_path.unlink(missing_ok=True)
-                raise ValueError(f"Mirror part hash mismatch for {path}: expected {expected}, found {actual}")
-            self.actual_sha256[path] = actual
-            self.local_path.unlink()
-            print(f"mirror_part_complete={self.index + 1}/{len(self.parts)} path={path}", flush=True)
-            self.index += 1
-            self.response = None
-            self.digest = None
-            self.local_path = None
+    range_size = 30 + len(info.filename.encode("utf-8")) + ZIP_LOCAL_EXTRA_LIMIT + info.compress_size
+    end = min(info.header_offset + range_size - 1, SELECTIVE_ZIP_SIZE - 1)
+    result = subprocess.run(
+        [
+            "curl",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--max-filesize",
+            str(range_size),
+            "--range",
+            f"{info.header_offset}-{end}",
+            url,
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+    )
+    data = decode_zip_member(info, result.stdout)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(f"{destination.suffix}.part")
+    temporary.write_bytes(data)
+    temporary.replace(destination)
+    return {"path": relative, "crc32": f"{info.CRC:08x}", "compressed_bytes": info.compress_size}
 
 
 def fetch_full_front_images(args: argparse.Namespace) -> None:
-    import zstandard
-
     assets = read_active_assets(args.active_assets)
     expected = {row["archive_relative"] for row in assets}
     missing_rows = [row for row in assets if not (args.output_root / row["archive_relative"]).is_file()]
@@ -735,62 +710,111 @@ def fetch_full_front_images(args: argparse.Namespace) -> None:
         (row for row in assets if (args.output_root / row["archive_relative"]).is_file()), key=lambda row: row["token"]
     )[:MIRROR_OVERLAP_CHECKS]
     selected_rows = missing_rows + overlap_rows
-    desired = {f"sensor_blobs/trainval_full/{row['archive_relative']}" for row in selected_rows}
-    staging = args.state_dir / "full_front_mirror_staging"
-    if staging.exists():
-        shutil.rmtree(staging)
-    staging.mkdir(parents=True)
-    path_list = args.state_dir / "full_front_mirror_paths.txt"
+    desired = {f"trainval/{row['archive_relative']}": row["archive_relative"] for row in selected_rows}
+    staging = args.state_dir / "selective_zip_staging"
+    staging.mkdir(parents=True, exist_ok=True)
+    path_list = args.state_dir / "selective_zip_paths.txt"
     path_list.write_text("\n".join(sorted(desired)) + "\n", encoding="utf-8")
 
-    part_paths = [
-        f"archives/navsim-trainval-full-front.tar.zst.part-{index:04d}"
-        for index in range(len(FULL_FRONT_PART_SHA256))
-    ]
-    parts = [
-        (f"{FULL_FRONT_MIRROR_ROOT}/{path}", path, FULL_FRONT_PART_SHA256[index])
-        for index, path in enumerate(part_paths)
-    ]
-    stream = VerifiedPartStream(parts, args.state_dir / "full_front_parts")
-    extracted = set()
-    with zstandard.ZstdDecompressor().stream_reader(stream) as decompressed:
-        with tarfile.open(fileobj=decompressed, mode="r|") as archive:
-            for member in archive:
-                if member.name not in desired:
-                    continue
-                source = archive.extractfile(member)
-                if source is None:
-                    raise ValueError(f"Mirror member is not a file: {member.name}")
-                destination = staging / member.name
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                with source, destination.open("wb") as target:
-                    shutil.copyfileobj(source, target)
-                extracted.add(member.name)
-    if extracted != desired:
-        raise ValueError(f"Full-front mirror is missing {len(desired - extracted)} selected images")
+    resolved = subprocess.run(
+        [
+            "curl",
+            "--fail",
+            "--location",
+            "--silent",
+            "--show-error",
+            "--range",
+            "0-0",
+            "--output",
+            os.devnull,
+            "--write-out",
+            "%{url_effective}",
+            SELECTIVE_ZIP_URL,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    directory_tail = args.state_dir / "selective_zip_directory.bin"
+    directory_size = SELECTIVE_ZIP_SIZE - SELECTIVE_ZIP_DIRECTORY_OFFSET
+    if not directory_tail.is_file() or directory_tail.stat().st_size != directory_size:
+        directory_tail.unlink(missing_ok=True)
+        print(f"selective_zip_directory_start bytes={directory_size}", flush=True)
+        subprocess.run(
+            [
+                "curl",
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--max-filesize",
+                str(directory_size),
+                "--range",
+                f"{SELECTIVE_ZIP_DIRECTORY_OFFSET}-{SELECTIVE_ZIP_SIZE - 1}",
+                "--output",
+                str(directory_tail),
+                resolved,
+            ],
+            check=True,
+        )
+        print("selective_zip_directory_complete", flush=True)
+
+    sparse_index = args.state_dir / "selective_zip_index.zip"
+    with sparse_index.open("wb") as index_handle:
+        index_handle.truncate(SELECTIVE_ZIP_SIZE)
+        index_handle.seek(SELECTIVE_ZIP_DIRECTORY_OFFSET)
+        with directory_tail.open("rb") as tail_handle:
+            shutil.copyfileobj(tail_handle, index_handle)
+    try:
+        with zipfile.ZipFile(sparse_index) as archive:
+            archive_infos = archive.infolist()
+            matched = {info.filename: info for info in archive_infos if info.filename in desired}
+    finally:
+        sparse_index.unlink(missing_ok=True)
+    absent = sorted(set(desired) - set(matched))
+    if absent:
+        raise ValueError(f"Selective ZIP is missing {len(absent)} selected images")
+
+    print(f"selective_zip_members_start count={len(matched)} workers={SELECTIVE_ZIP_WORKERS}", flush=True)
+    member_records = []
+    with ThreadPoolExecutor(max_workers=SELECTIVE_ZIP_WORKERS) as executor:
+        futures = {
+            executor.submit(download_zip_member, resolved, info, desired[member], staging): member
+            for member, info in matched.items()
+        }
+        for completed, future in enumerate(as_completed(futures), start=1):
+            member_records.append(future.result())
+            if completed % 50 == 0 or completed == len(futures):
+                print(f"selective_zip_members_progress={completed}/{len(futures)}", flush=True)
 
     for row in overlap_rows:
         relative = row["archive_relative"]
-        mirror_path = staging / f"sensor_blobs/trainval_full/{relative}"
+        mirror_path = staging / relative
         if sha256_file(mirror_path) != sha256_file(args.output_root / relative):
-            raise ValueError(f"Full-front mirror overlap mismatch for {relative}")
+            raise ValueError(f"Selective ZIP overlap mismatch for {relative}")
     for row in missing_rows:
         relative = row["archive_relative"]
-        source = staging / f"sensor_blobs/trainval_full/{relative}"
+        source = staging / relative
         destination = args.output_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         source.replace(destination)
     write_json(
-        args.state_dir / "full_front_mirror_report.json",
+        args.state_dir / "selective_zip_report.json",
         {
-            "revision": FULL_FRONT_MIRROR_REVISION,
+            "repository": "richardyann/navsim-select",
+            "revision": SELECTIVE_ZIP_REVISION,
+            "archive_path": "sensor_blobs/trainval.zip",
+            "archive_bytes": SELECTIVE_ZIP_SIZE,
+            "central_directory_sha256": sha256_file(directory_tail),
+            "archive_entries": len(archive_infos),
             "missing_images_filled": len(missing_rows),
             "official_navtrain_overlap_verified": len(overlap_rows),
-            "part_sha256": stream.actual_sha256,
+            "selected_compressed_bytes": sum(record["compressed_bytes"] for record in member_records),
+            "members": sorted(member_records, key=lambda record: record["path"]),
             "path_list_sha256": sha256_file(path_list),
         },
     )
     shutil.rmtree(staging)
+    directory_tail.unlink()
 
     present = {row["archive_relative"] for row in assets if (args.output_root / row["archive_relative"]).is_file()}
     report = {
@@ -798,7 +822,7 @@ def fetch_full_front_images(args: argparse.Namespace) -> None:
         "present": len(present),
         "missing": len(expected - present),
         "active_assets_sha256": sha256_file(args.active_assets),
-        "sources": ["NAVSIM navtrain current", "verified full-front mirror"],
+        "sources": ["NAVSIM navtrain current", "verified selective ZIP ranges"],
     }
     write_json(args.state_dir / "image_coverage_report.json", report)
     if report["missing"]:

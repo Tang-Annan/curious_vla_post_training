@@ -1,16 +1,19 @@
 from argparse import Namespace
-import hashlib
+import io
 from pathlib import Path
+import struct
+import zipfile
+import zlib
 
 import pytest
 
 from projects.dataset_v3.data_prep import (
     SftRow,
-    VerifiedPartStream,
     assign_eval_logs,
     build_cache,
     build_problem,
     choose_training_rows,
+    decode_zip_member,
 )
 
 
@@ -97,24 +100,19 @@ def test_cache_workers_must_be_positive() -> None:
         build_cache(Namespace(workers=0))
 
 
-def test_verified_part_stream_uses_parallel_resumable_download(monkeypatch, tmp_path: Path) -> None:
-    payload = b"verified multipart payload"
-    download_dir = tmp_path / "parts"
-    calls = []
+def test_decode_zip_member_checks_deflate_and_crc() -> None:
+    payload = b"verified selective ZIP payload"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("trainval/log/CAM_F0/image.jpg", payload)
+    with zipfile.ZipFile(io.BytesIO(buffer.getvalue())) as archive:
+        info = archive.getinfo("trainval/log/CAM_F0/image.jpg")
 
-    def fake_run(command, check):
-        calls.append(command)
-        download_dir.mkdir(parents=True, exist_ok=True)
-        (download_dir / "part-0000").write_bytes(payload)
+    member_range = buffer.getvalue()[info.header_offset :]
+    assert decode_zip_member(info, member_range) == payload
 
-    monkeypatch.setattr("projects.dataset_v3.data_prep.subprocess.run", fake_run)
-    stream = VerifiedPartStream(
-        [("https://example.test/part-0000", "part-0000", hashlib.sha256(payload).hexdigest())],
-        download_dir,
-    )
-
-    assert b"".join(iter(lambda: stream.read(5), b"")) == payload
-    assert calls[0][0] == "aria2c"
-    assert "--max-connection-per-server=8" in calls[0]
-    assert stream.actual_sha256["part-0000"] == hashlib.sha256(payload).hexdigest()
-    assert not (download_dir / "part-0000").exists()
+    damaged = bytearray(member_range)
+    name_length, extra_length = struct.unpack_from("<HH", damaged, 26)
+    damaged[30 + name_length + extra_length] ^= 1
+    with pytest.raises((ValueError, zlib.error)):
+        decode_zip_member(info, bytes(damaged))
