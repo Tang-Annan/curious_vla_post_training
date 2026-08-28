@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`D0R_ROUTE_FROZEN_REUSE_SFT_CONTROLLED_OVERLAP`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；尚未冻结 Dev/Final 具体分配与 Tail 几何，未生成 split、rollout 或启动训练。
+> 当前状态：`D0A_IMAGE_CACHE_ASSETS_COMPLETE / D0F_PENDING`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；图像与 metric cache 前置资产已达到 9,091/9,091，尚未冻结 Dev/Final 具体分配与 Tail 几何，未生成 rollout 或启动训练。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -666,6 +666,17 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 命名空间：D0I 的 `dataset_v3_sft_unseen` 历史证据保留原位；D0S 起正式资产使用 `dataset_v3_controlled_overlap`；
 - 状态：`COMPLETE / ROUTE_FROZEN`；本记录只冻结路线和来源边界，未生成 split、rollout、cache 或训练产物；
 - 下一唯一动作：执行 `V3-D0R-2`，在现有 118 logs / 835 scenes 内冻结 Dev/Final 具体 log 分配、Natural/Tail 定义，并同步冻结受控 GRPO train manifest 规模。
+
+### 记录 V3-005：D0A 图像/cache 前置资产完成与 ZIP Range 数据源切换
+
+- 时间：2026-08-28 17:30–17:46（Asia/Shanghai）；
+- branch / source commit / source status：`codex/grpo-v3-selector-reward@d91db6f4dd35482aa8eb447be4e4fd7d68503c27`；本地与服务器针对性测试均为 `5 passed`，服务器 source tracked status clean；
+- 切换原因：原 `WeiXiCZ/navsim-trainval-full-front` 为 148 GB 连续 `tar.zst`，AWS Xet 长连接在当前服务器出口持续降速；Hugging Face 全站候选审计后，改用 `richardyann/navsim-select@7707301e13828b4599b3a0f834b44efed57df90e` 的 `sensor_blobs/trainval.zip`，通过 ZIP64 中央目录与 HTTP Range 只读取目标成员；
+- 固定输入：远端 ZIP 为 `148,230,424,017` bytes / `735,584` entries；中央目录为 `120,860,982` bytes，SHA-256 `71c3050bac75dc5e4eac1076202e546c65877e139a5382e50341bf94cdb1f7c8`；active-assets SHA-256 `d39893ab548e4a69b7e50030b540d35d3a63a23b7627d3dbd6bfd67ccf8c6bb8`；
+- 技术门禁：精确定位并下载 `835` 张缺失图片和 `64` 张既有 NAVSIM navtrain overlap，共 `899/899` 个 ZIP members；所选成员压缩正文合计 `201,466,300` bytes；每个成员均验证 ZIP CRC/长度，64 张 overlap 均通过 SHA-256 字节一致性检查，门禁完成前未写入正式目录；
+- 完成结果：补齐 `835` 张严格 SFT-unseen CAM_F0，image coverage 为 `9,091/9,091`、metric-cache 文件数为 `9,091/9,091`，生成 `D0A_IMAGES_COMPLETE`；`selective_zip_report.json` SHA-256 `2ef2f82c760d06da525f06c0c750fe57a8029a5302f0c80ec4c81c1eab0efcea`，`image_coverage_report.json` SHA-256 `c9e3cc553bc8ad7aa4011e2404fe313a377ea38edd32ef37cb7bc5cf6ee64e82`；
+- 空间闭环：删除已替代的旧 `full_front_parts`（9.9 GiB）与旧 staging（5.7 MiB），保留运行日志和报告；正式图像为 1.9 GiB、metric cache 为 3.9 GiB，`/root/autodl-tmp` 最终可用约 65 GiB / 使用率 47%；
+- 状态：`COMPLETE / D0A_IMAGE_CACHE_ASSETS_COMPLETE`；未启动 split 后的 rollout、训练或 Dev/Final 访问；下一动作仍由 `V3-D0R-2 → V3-D0S → V3-D0F` 的冻结顺序决定。
 
 ## 9. 结论边界
 
