@@ -8,7 +8,7 @@ from projects.dataset_v3.data_prep import (
     build_cache,
     build_problem,
     choose_training_rows,
-    parse_nuplan_sensor_index,
+    parse_sha256s,
 )
 
 
@@ -95,9 +95,8 @@ def test_cache_workers_must_be_positive() -> None:
         build_cache(Namespace(workers=0))
 
 
-def test_nuplan_sensor_index_maps_logs_to_groups() -> None:
-    assert parse_nuplan_sensor_index("File group: 2\nlog-a\nlog-b\n\nFile group: 7\nlog-c\n") == {
-        "log-a": 2,
-        "log-b": 2,
-        "log-c": 7,
+def test_sha256_manifest_parser() -> None:
+    assert parse_sha256s("abc  archive/part-0000\ndef  archive/part-0001\n") == {
+        "archive/part-0000": "abc",
+        "archive/part-0001": "def",
     }

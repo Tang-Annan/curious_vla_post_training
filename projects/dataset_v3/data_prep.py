@@ -11,7 +11,6 @@ import shutil
 import subprocess
 import tarfile
 import urllib.request
-import zipfile
 from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -44,7 +43,12 @@ V3_IMAGE_PREFIX = f"{VERSION}/sensor_blobs/trainval/"
 INTENTS = ("straight", "left", "right")
 VEHICLE_DISTANCE_M = 5.0
 VRU_DISTANCE_M = 10.0
-NUPLAN_SENSOR_ROOT = "https://motional-nuplan.s3.ap-northeast-1.amazonaws.com/public/nuplan-v1.1/sensor_blobs"
+FULL_FRONT_MIRROR_REVISION = "a08a0aa345c0f0d0f12693c4bae8e2ad0d15d6cc"
+FULL_FRONT_MIRROR_ROOT = (
+    f"https://hf-mirror.com/datasets/WeiXiCZ/navsim-trainval-full-front/resolve/{FULL_FRONT_MIRROR_REVISION}"
+)
+FULL_FRONT_MIRROR_PARTS = 14
+MIRROR_OVERLAP_CHECKS = 64
 
 
 @dataclass(frozen=True)
@@ -630,110 +634,116 @@ def fetch_images(args: argparse.Namespace) -> None:
     (args.state_dir / "D0A_IMAGES_COMPLETE").touch()
 
 
-class HTTPRangeReader:
-    def __init__(self, url: str) -> None:
-        self.url = url
-        with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=30) as response:
-            self.size = int(response.headers["Content-Length"])
-        self.position = 0
+def parse_sha256s(text: str) -> dict[str, str]:
+    return {path: digest for digest, path in (line.split(maxsplit=1) for line in text.splitlines() if line.strip())}
 
-    def tell(self) -> int:
-        return self.position
 
-    def seek(self, offset: int, whence: int = 0) -> int:
-        if whence == 1:
-            offset += self.position
-        elif whence == 2:
-            offset += self.size
-        elif whence != 0:
-            raise ValueError(f"Unsupported whence: {whence}")
-        if offset < 0:
-            raise ValueError("Negative seek position")
-        self.position = offset
-        return self.position
+class VerifiedPartStream:
+    def __init__(self, parts: list[tuple[str, str, str]]) -> None:
+        self.parts = parts
+        self.index = 0
+        self.response = None
+        self.digest = None
+        self.actual_sha256: dict[str, str] = {}
 
-    def seekable(self) -> bool:
+    def readable(self) -> bool:
+        return True
+
+    def _open_next(self) -> bool:
+        if self.index >= len(self.parts):
+            return False
+        url, path, _ = self.parts[self.index]
+        self.response = urllib.request.urlopen(url, timeout=120)
+        self.digest = hashlib.sha256()
+        print(f"mirror_part_start={self.index + 1}/{len(self.parts)} path={path}", flush=True)
         return True
 
     def read(self, size: int = -1) -> bytes:
-        if self.position >= self.size:
-            return b""
-        end = self.size - 1 if size < 0 else min(self.position + size, self.size) - 1
-        request = urllib.request.Request(self.url, headers={"Range": f"bytes={self.position}-{end}"})
-        with urllib.request.urlopen(request, timeout=120) as response:
-            if response.status != 206:
-                raise OSError(f"Server did not honor byte range for {self.url}: HTTP {response.status}")
-            data = response.read()
-        self.position += len(data)
-        return data
+        size = 8 * 1024 * 1024 if size < 0 else size
+        while True:
+            if self.response is None and not self._open_next():
+                return b""
+            data = self.response.read(size)
+            if data:
+                self.digest.update(data)
+                return data
+            self.response.close()
+            _, path, expected = self.parts[self.index]
+            actual = self.digest.hexdigest()
+            if actual != expected:
+                raise ValueError(f"Mirror part hash mismatch for {path}: expected {expected}, found {actual}")
+            self.actual_sha256[path] = actual
+            print(f"mirror_part_complete={self.index + 1}/{len(self.parts)} path={path}", flush=True)
+            self.index += 1
+            self.response = None
+            self.digest = None
 
 
-def parse_nuplan_sensor_index(text: str) -> dict[str, int]:
-    result = {}
-    group = None
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.startswith("File group:"):
-            group = int(line.split(":", 1)[1])
-        elif group is None:
-            raise ValueError("nuPlan sensor index contains a log before its file group")
-        else:
-            result[line] = group
-    return result
+def fetch_full_front_images(args: argparse.Namespace) -> None:
+    import zstandard
 
-
-def fetch_nuplan_images(args: argparse.Namespace) -> None:
     assets = read_active_assets(args.active_assets)
     expected = {row["archive_relative"] for row in assets}
     missing_rows = [row for row in assets if not (args.output_root / row["archive_relative"]).is_file()]
     args.output_root.mkdir(parents=True, exist_ok=True)
     args.state_dir.mkdir(parents=True, exist_ok=True)
 
-    indexes = {}
-    for split in ("train", "val"):
-        index_url = f"{NUPLAN_SENSOR_ROOT}/{split}_set/public_set_{split}_sensor.txt"
-        with urllib.request.urlopen(index_url, timeout=30) as response:
-            indexes[split] = parse_nuplan_sensor_index(response.read().decode("utf-8"))
+    overlap_rows = sorted(
+        (row for row in assets if (args.output_root / row["archive_relative"]).is_file()), key=lambda row: row["token"]
+    )[:MIRROR_OVERLAP_CHECKS]
+    selected_rows = missing_rows + overlap_rows
+    desired = {f"sensor_blobs/trainval_full/{row['archive_relative']}" for row in selected_rows}
+    staging = args.state_dir / "full_front_mirror_staging"
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+    path_list = args.state_dir / "full_front_mirror_paths.txt"
+    path_list.write_text("\n".join(sorted(desired)) + "\n", encoding="utf-8")
 
-    grouped: dict[tuple[str, int], list[dict[str, str]]] = defaultdict(list)
-    for row in missing_rows:
-        locations = [(split, index[row["log_name"]]) for split, index in indexes.items() if row["log_name"] in index]
-        if len(locations) != 1:
-            raise ValueError(f"Expected one nuPlan sensor group for {row['log_name']}, found {locations}")
-        grouped[locations[0]].append(row)
-    print(
-        f"nuplan_range_plan images={len(missing_rows)} logs={len(set(row['log_name'] for row in missing_rows))} "
-        f"archives={len(grouped)}",
-        flush=True,
-    )
-
-    for index, ((split, group), rows) in enumerate(sorted(grouped.items()), start=1):
-        url = f"{NUPLAN_SENSOR_ROOT}/{split}_set/nuplan-v1.1_{split}_camera_{group}.zip"
-        desired = {row["archive_relative"] for row in rows}
-        with zipfile.ZipFile(HTTPRangeReader(url)) as archive:
-            members = {}
-            for info in archive.infolist():
-                relative = "/".join(PurePosixPath(info.filename).parts[-3:])
-                if relative in desired:
-                    members[relative] = info
-            if set(members) != desired:
-                raise ValueError(f"nuPlan archive {url} is missing {len(desired - set(members))} target images")
-            for relative, info in members.items():
-                destination = args.output_root / relative
-                if destination.is_file():
+    with urllib.request.urlopen(f"{FULL_FRONT_MIRROR_ROOT}/SHA256SUMS", timeout=30) as response:
+        expected_sums = parse_sha256s(response.read().decode("utf-8"))
+    part_paths = [f"archives/navsim-trainval-full-front.tar.zst.part-{index:04d}" for index in range(FULL_FRONT_MIRROR_PARTS)]
+    parts = [(f"{FULL_FRONT_MIRROR_ROOT}/{path}", path, expected_sums[path]) for path in part_paths]
+    stream = VerifiedPartStream(parts)
+    extracted = set()
+    with zstandard.ZstdDecompressor().stream_reader(stream) as decompressed:
+        with tarfile.open(fileobj=decompressed, mode="r|") as archive:
+            for member in archive:
+                if member.name not in desired:
                     continue
+                source = archive.extractfile(member)
+                if source is None:
+                    raise ValueError(f"Mirror member is not a file: {member.name}")
+                destination = staging / member.name
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                partial = destination.with_suffix(destination.suffix + ".part")
-                with archive.open(info) as source, partial.open("wb") as target:
+                with source, destination.open("wb") as target:
                     shutil.copyfileobj(source, target)
-                partial.replace(destination)
-        write_json(
-            args.state_dir / f"nuplan_{split}_{group}.json",
-            {"archive_url": url, "images": len(rows), "logs": len({row["log_name"] for row in rows})},
-        )
-        print(f"nuplan_range_archive={index}/{len(grouped)} images={len(rows)} source={split}_{group}", flush=True)
+                extracted.add(member.name)
+    if extracted != desired:
+        raise ValueError(f"Full-front mirror is missing {len(desired - extracted)} selected images")
+
+    for row in overlap_rows:
+        relative = row["archive_relative"]
+        mirror_path = staging / f"sensor_blobs/trainval_full/{relative}"
+        if sha256_file(mirror_path) != sha256_file(args.output_root / relative):
+            raise ValueError(f"Full-front mirror overlap mismatch for {relative}")
+    for row in missing_rows:
+        relative = row["archive_relative"]
+        source = staging / f"sensor_blobs/trainval_full/{relative}"
+        destination = args.output_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source.replace(destination)
+    write_json(
+        args.state_dir / "full_front_mirror_report.json",
+        {
+            "revision": FULL_FRONT_MIRROR_REVISION,
+            "missing_images_filled": len(missing_rows),
+            "official_navtrain_overlap_verified": len(overlap_rows),
+            "part_sha256": stream.actual_sha256,
+            "path_list_sha256": sha256_file(path_list),
+        },
+    )
+    shutil.rmtree(staging)
 
     present = {row["archive_relative"] for row in assets if (args.output_root / row["archive_relative"]).is_file()}
     report = {
@@ -741,7 +751,7 @@ def fetch_nuplan_images(args: argparse.Namespace) -> None:
         "present": len(present),
         "missing": len(expected - present),
         "active_assets_sha256": sha256_file(args.active_assets),
-        "sources": ["NAVSIM navtrain current", "nuPlan v1.1 public sensor byte ranges"],
+        "sources": ["NAVSIM navtrain current", "verified full-front mirror"],
     }
     write_json(args.state_dir / "image_coverage_report.json", report)
     if report["missing"]:
@@ -987,11 +997,11 @@ def parse_args() -> argparse.Namespace:
     )
     image_parser.set_defaults(run=fetch_images)
 
-    nuplan_image_parser = subparsers.add_parser("fetch-nuplan-images")
-    nuplan_image_parser.add_argument("--active-assets", type=Path, required=True)
-    nuplan_image_parser.add_argument("--output-root", type=Path, required=True)
-    nuplan_image_parser.add_argument("--state-dir", type=Path, required=True)
-    nuplan_image_parser.set_defaults(run=fetch_nuplan_images)
+    full_front_parser = subparsers.add_parser("fetch-full-front-images")
+    full_front_parser.add_argument("--active-assets", type=Path, required=True)
+    full_front_parser.add_argument("--output-root", type=Path, required=True)
+    full_front_parser.add_argument("--state-dir", type=Path, required=True)
+    full_front_parser.set_defaults(run=fetch_full_front_images)
 
     cache_parser = subparsers.add_parser("build-cache")
     cache_parser.add_argument("--active-assets", type=Path, required=True)
