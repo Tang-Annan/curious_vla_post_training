@@ -35,7 +35,6 @@ worker:
     ulysses_size: 1
     model:
       model_path: null
-      attn_implementation: sdpa
       enable_gradient_checkpointing: true
       trust_remote_code: true
       freeze_vision_tower: false
