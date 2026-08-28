@@ -18,7 +18,6 @@ data:
   filter_overlong_prompts: true
   filter_overlong_prompts_workers: 1
   token_filter_file: null
-  val_token_filter_file: null
 
 algorithm:
   adv_estimator: grpo
