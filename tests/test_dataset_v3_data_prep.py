@@ -1,4 +1,8 @@
-from projects.dataset_v3.data_prep import SftRow, assign_eval_logs, build_problem, choose_training_rows
+from argparse import Namespace
+
+import pytest
+
+from projects.dataset_v3.data_prep import SftRow, assign_eval_logs, build_cache, build_problem, choose_training_rows
 
 
 def test_training_rows_are_deterministic_and_log_disjoint() -> None:
@@ -77,3 +81,8 @@ def test_problem_uses_relative_history_and_four_second_prompt() -> None:
 
     window[3]["driving_command"] = [0, 0, 0, 1]
     assert "Current high-level intent (string): unknown" in build_problem(window, template)
+
+
+def test_cache_workers_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="workers must be at least 1"):
+        build_cache(Namespace(workers=0))

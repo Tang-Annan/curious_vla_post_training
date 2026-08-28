@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tarfile
 from collections import Counter, defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
@@ -626,12 +627,53 @@ def fetch_images(args: argparse.Namespace) -> None:
     (args.state_dir / "D0A_IMAGES_COMPLETE").touch()
 
 
-def build_cache(args: argparse.Namespace) -> None:
+def build_cache_log(
+    log_name: str,
+    log_path: Path,
+    tokens: set[str],
+    output_root: Path,
+    map_root: str,
+) -> tuple[str, int]:
     from nuplan.planning.simulation.trajectory.trajectory_sampling import TrajectorySampling
     from navsim.common.dataclasses import Scene, SensorConfig
     from navsim.planning.metric_caching.metric_cache_processor import MetricCacheProcessor
     from navsim.planning.scenario_builder.navsim_scenario import NavSimScenario
 
+    processor = MetricCacheProcessor(
+        cache_path=str(output_root),
+        force_feature_computation=False,
+        proposal_sampling=TrajectorySampling(num_poses=40, interval_length=0.1),
+    )
+    with log_path.open("rb") as handle:
+        frames = load_navsim_log(handle)
+    found = set()
+    for start in range(0, len(frames) - NUM_FRAMES + 1):
+        window = frames[start : start + NUM_FRAMES]
+        center = window[NUM_HISTORY_FRAMES - 1]
+        token = center.get("token")
+        if token not in tokens:
+            continue
+        scene = Scene.from_scene_dict_list(
+            window,
+            None,
+            num_history_frames=NUM_HISTORY_FRAMES,
+            num_future_frames=NUM_FUTURE_FRAMES,
+            sensor_config=SensorConfig.build_no_sensors(),
+        )
+        scenario = NavSimScenario(scene, map_root=map_root, map_version="nuplan-maps-v1.0")
+        if processor.compute_and_save_metric_cache(scenario) is None:
+            raise RuntimeError(f"Metric cache failed for {token}")
+        found.add(token)
+        del scenario, scene
+        gc.collect()
+    if found != tokens:
+        raise ValueError(f"Cache token mismatch for {log_name}: expected {len(tokens)}, found {len(found)}")
+    return log_name, len(found)
+
+
+def build_cache(args: argparse.Namespace) -> None:
+    if args.workers < 1:
+        raise ValueError("workers must be at least 1")
     assets = read_active_assets(args.active_assets)
     by_log: dict[str, set[str]] = defaultdict(set)
     for row in assets:
@@ -642,41 +684,26 @@ def build_cache(args: argparse.Namespace) -> None:
         raise ValueError(f"Missing {len(missing_logs)} active NAVSIM logs")
     args.output_root.mkdir(parents=True, exist_ok=True)
     args.state_dir.mkdir(parents=True, exist_ok=True)
-    processor = MetricCacheProcessor(
-        cache_path=str(args.output_root),
-        force_feature_computation=False,
-        proposal_sampling=TrajectorySampling(num_poses=40, interval_length=0.1),
-    )
-    for index, log_name in enumerate(sorted(by_log), start=1):
-        marker = args.state_dir / f"{log_name}.complete"
-        if marker.exists():
-            continue
-        with log_paths[log_name].open("rb") as handle:
-            frames = load_navsim_log(handle)
-        found = set()
-        for start in range(0, len(frames) - NUM_FRAMES + 1):
-            window = frames[start : start + NUM_FRAMES]
-            center = window[NUM_HISTORY_FRAMES - 1]
-            token = center.get("token")
-            if token not in by_log[log_name]:
-                continue
-            scene = Scene.from_scene_dict_list(
-                window,
-                None,
-                num_history_frames=NUM_HISTORY_FRAMES,
-                num_future_frames=NUM_FUTURE_FRAMES,
-                sensor_config=SensorConfig.build_no_sensors(),
-            )
-            scenario = NavSimScenario(scene, map_root=os.environ["NUPLAN_MAPS_ROOT"], map_version="nuplan-maps-v1.0")
-            if processor.compute_and_save_metric_cache(scenario) is None:
-                raise RuntimeError(f"Metric cache failed for {token}")
-            found.add(token)
-            del scenario, scene
-            gc.collect()
-        if found != by_log[log_name]:
-            raise ValueError(f"Cache token mismatch for {log_name}: expected {len(by_log[log_name])}, found {len(found)}")
-        marker.write_text(f"{len(found)}\n", encoding="utf-8")
-        print(f"cache_log={index}/{len(by_log)} tokens={len(found)} log={log_name}", flush=True)
+    pending = [
+        (log_name, log_paths[log_name], by_log[log_name], args.output_root, os.environ["NUPLAN_MAPS_ROOT"])
+        for log_name in sorted(by_log)
+        if not (args.state_dir / f"{log_name}.complete").exists()
+    ]
+    completed = len(by_log) - len(pending)
+    if args.workers == 1:
+        results = (build_cache_log(*job) for job in pending)
+        for log_name, token_count in results:
+            completed += 1
+            (args.state_dir / f"{log_name}.complete").write_text(f"{token_count}\n", encoding="utf-8")
+            print(f"cache_log={completed}/{len(by_log)} tokens={token_count} log={log_name}", flush=True)
+    else:
+        with ProcessPoolExecutor(max_workers=args.workers) as executor:
+            futures = [executor.submit(build_cache_log, *job) for job in pending]
+            for future in as_completed(futures):
+                log_name, token_count = future.result()
+                completed += 1
+                (args.state_dir / f"{log_name}.complete").write_text(f"{token_count}\n", encoding="utf-8")
+                print(f"cache_log={completed}/{len(by_log)} tokens={token_count} log={log_name}", flush=True)
 
     expected = {row["token"] for row in assets}
     present = {path.parent.name for path in args.output_root.rglob("metric_cache.pkl")}
@@ -843,6 +870,7 @@ def parse_args() -> argparse.Namespace:
     cache_parser.add_argument("--navsim-logs", type=Path, required=True)
     cache_parser.add_argument("--output-root", type=Path, required=True)
     cache_parser.add_argument("--state-dir", type=Path, required=True)
+    cache_parser.add_argument("--workers", type=int, default=1)
     cache_parser.set_defaults(run=build_cache)
 
     freeze_parser = subparsers.add_parser("freeze")
