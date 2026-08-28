@@ -10,6 +10,8 @@ import os
 import shutil
 import subprocess
 import tarfile
+import urllib.request
+import zipfile
 from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -42,6 +44,7 @@ V3_IMAGE_PREFIX = f"{VERSION}/sensor_blobs/trainval/"
 INTENTS = ("straight", "left", "right")
 VEHICLE_DISTANCE_M = 5.0
 VRU_DISTANCE_M = 10.0
+NUPLAN_SENSOR_ROOT = "https://motional-nuplan.s3.ap-northeast-1.amazonaws.com/public/nuplan-v1.1/sensor_blobs"
 
 
 @dataclass(frozen=True)
@@ -627,6 +630,125 @@ def fetch_images(args: argparse.Namespace) -> None:
     (args.state_dir / "D0A_IMAGES_COMPLETE").touch()
 
 
+class HTTPRangeReader:
+    def __init__(self, url: str) -> None:
+        self.url = url
+        with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=30) as response:
+            self.size = int(response.headers["Content-Length"])
+        self.position = 0
+
+    def tell(self) -> int:
+        return self.position
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        if whence == 1:
+            offset += self.position
+        elif whence == 2:
+            offset += self.size
+        elif whence != 0:
+            raise ValueError(f"Unsupported whence: {whence}")
+        if offset < 0:
+            raise ValueError("Negative seek position")
+        self.position = offset
+        return self.position
+
+    def seekable(self) -> bool:
+        return True
+
+    def read(self, size: int = -1) -> bytes:
+        if self.position >= self.size:
+            return b""
+        end = self.size - 1 if size < 0 else min(self.position + size, self.size) - 1
+        request = urllib.request.Request(self.url, headers={"Range": f"bytes={self.position}-{end}"})
+        with urllib.request.urlopen(request, timeout=120) as response:
+            if response.status != 206:
+                raise OSError(f"Server did not honor byte range for {self.url}: HTTP {response.status}")
+            data = response.read()
+        self.position += len(data)
+        return data
+
+
+def parse_nuplan_sensor_index(text: str) -> dict[str, int]:
+    result = {}
+    group = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("File group:"):
+            group = int(line.split(":", 1)[1])
+        elif group is None:
+            raise ValueError("nuPlan sensor index contains a log before its file group")
+        else:
+            result[line] = group
+    return result
+
+
+def fetch_nuplan_images(args: argparse.Namespace) -> None:
+    assets = read_active_assets(args.active_assets)
+    expected = {row["archive_relative"] for row in assets}
+    missing_rows = [row for row in assets if not (args.output_root / row["archive_relative"]).is_file()]
+    args.output_root.mkdir(parents=True, exist_ok=True)
+    args.state_dir.mkdir(parents=True, exist_ok=True)
+
+    indexes = {}
+    for split in ("train", "val"):
+        index_url = f"{NUPLAN_SENSOR_ROOT}/{split}_set/public_set_{split}_sensor.txt"
+        with urllib.request.urlopen(index_url, timeout=30) as response:
+            indexes[split] = parse_nuplan_sensor_index(response.read().decode("utf-8"))
+
+    grouped: dict[tuple[str, int], list[dict[str, str]]] = defaultdict(list)
+    for row in missing_rows:
+        locations = [(split, index[row["log_name"]]) for split, index in indexes.items() if row["log_name"] in index]
+        if len(locations) != 1:
+            raise ValueError(f"Expected one nuPlan sensor group for {row['log_name']}, found {locations}")
+        grouped[locations[0]].append(row)
+    print(
+        f"nuplan_range_plan images={len(missing_rows)} logs={len(set(row['log_name'] for row in missing_rows))} "
+        f"archives={len(grouped)}",
+        flush=True,
+    )
+
+    for index, ((split, group), rows) in enumerate(sorted(grouped.items()), start=1):
+        url = f"{NUPLAN_SENSOR_ROOT}/{split}_set/nuplan-v1.1_{split}_camera_{group}.zip"
+        desired = {row["archive_relative"] for row in rows}
+        with zipfile.ZipFile(HTTPRangeReader(url)) as archive:
+            members = {}
+            for info in archive.infolist():
+                relative = "/".join(PurePosixPath(info.filename).parts[-3:])
+                if relative in desired:
+                    members[relative] = info
+            if set(members) != desired:
+                raise ValueError(f"nuPlan archive {url} is missing {len(desired - set(members))} target images")
+            for relative, info in members.items():
+                destination = args.output_root / relative
+                if destination.is_file():
+                    continue
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                partial = destination.with_suffix(destination.suffix + ".part")
+                with archive.open(info) as source, partial.open("wb") as target:
+                    shutil.copyfileobj(source, target)
+                partial.replace(destination)
+        write_json(
+            args.state_dir / f"nuplan_{split}_{group}.json",
+            {"archive_url": url, "images": len(rows), "logs": len({row["log_name"] for row in rows})},
+        )
+        print(f"nuplan_range_archive={index}/{len(grouped)} images={len(rows)} source={split}_{group}", flush=True)
+
+    present = {row["archive_relative"] for row in assets if (args.output_root / row["archive_relative"]).is_file()}
+    report = {
+        "expected": len(expected),
+        "present": len(present),
+        "missing": len(expected - present),
+        "active_assets_sha256": sha256_file(args.active_assets),
+        "sources": ["NAVSIM navtrain current", "nuPlan v1.1 public sensor byte ranges"],
+    }
+    write_json(args.state_dir / "image_coverage_report.json", report)
+    if report["missing"]:
+        raise ValueError(f"Missing {report['missing']} active CAM_F0 images")
+    (args.state_dir / "D0A_IMAGES_COMPLETE").touch()
+
+
 def build_cache_log(
     log_name: str,
     log_path: Path,
@@ -864,6 +986,12 @@ def parse_args() -> argparse.Namespace:
         default="https://hf-mirror.com/datasets/OpenDriveLab/OpenScene/resolve/main/navsim/navtrain_current_{shard}.tgz",
     )
     image_parser.set_defaults(run=fetch_images)
+
+    nuplan_image_parser = subparsers.add_parser("fetch-nuplan-images")
+    nuplan_image_parser.add_argument("--active-assets", type=Path, required=True)
+    nuplan_image_parser.add_argument("--output-root", type=Path, required=True)
+    nuplan_image_parser.add_argument("--state-dir", type=Path, required=True)
+    nuplan_image_parser.set_defaults(run=fetch_nuplan_images)
 
     cache_parser = subparsers.add_parser("build-cache")
     cache_parser.add_argument("--active-assets", type=Path, required=True)
