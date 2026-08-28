@@ -8,6 +8,7 @@ RUN_ID=v3_s1_screen8000_g4_seed20260827
 RUN_ROOT="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/rollout_bank"
 RUN_DIR="$RUN_ROOT/$RUN_ID"
 DATA_ROOT="$WORKSPACE_ROOT/data/dataset_v3_controlled_overlap"
+CACHE_ROOT="$DATA_ROOT/metric_cache"
 PARQUET="$DATA_ROOT/hf/grpo_screen.parquet"
 MANIFEST="$WORKSPACE_ROOT/manifests/dataset_v3_controlled_overlap/grpo_screen_8000.txt"
 MODEL="$WORKSPACE_ROOT/models/sft_stage2"
@@ -15,7 +16,7 @@ D0F="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/data_build/v3_d0f
 EASYR1_ROOT="$PROJECT_ROOT/EasyR1"
 REWARD_PORT=8901
 
-for path in "$PYTHON" "$PARQUET" "$MANIFEST" "$MODEL" "$D0F/V3_DATA_FROZEN" "$D0F/COMPLETE"; do
+for path in "$PYTHON" "$PARQUET" "$MANIFEST" "$MODEL" "$CACHE_ROOT" "$D0F/V3_DATA_FROZEN" "$D0F/COMPLETE"; do
     [[ -e "$path" ]] || { echo "Missing required V3-S1 input: $path" >&2; exit 1; }
 done
 [[ "$(cat "$D0F/exit_code")" == 0 ]] || { echo "D0F did not exit successfully" >&2; exit 1; }
@@ -34,6 +35,26 @@ done
 [[ ! -e "$EASYR1_ROOT/checkpoints/adas/$RUN_ID" ]] || { echo "ADAS output already exists" >&2; exit 1; }
 [[ ! -e "$EASYR1_ROOT/checkpoints/debug/$RUN_ID" ]] || { echo "Debug output already exists" >&2; exit 1; }
 
+METADATA_CSV="$CACHE_ROOT/metadata/scene_metric_cache.csv"
+mkdir -p "$CACHE_ROOT/metadata"
+printf 'path\n' > "$METADATA_CSV"
+find "$CACHE_ROOT" -name metric_cache.pkl | sort >> "$METADATA_CSV"
+"$PYTHON" - "$METADATA_CSV" "$MANIFEST" <<'PY'
+import pathlib
+import sys
+
+csv_path, manifest_path = map(pathlib.Path, sys.argv[1:])
+rows = csv_path.read_text(encoding="utf-8").splitlines()[1:]
+keys = [path.split("/")[-2] for path in rows]
+if len(rows) != len(set(keys)):
+    raise SystemExit("Cache metadata has duplicate scene keys")
+tokens = [line.strip() for line in manifest_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+missing = sorted(set(tokens) - set(keys))
+if missing:
+    raise SystemExit(f"Cache metadata missing {len(missing)} manifest tokens")
+print(f"cache_metadata_ok rows={len(rows)} unique={len(set(keys))} tokens_covered={len(tokens)}")
+PY
+
 mkdir -p "$RUN_DIR"
 touch "$RUN_DIR/RUNNING"
 SOURCE_COMMIT=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
@@ -41,7 +62,7 @@ printf '%s\n' "$SOURCE_COMMIT" > "$RUN_DIR/source_commit.txt"
 git -C "$PROJECT_ROOT" status --porcelain > "$RUN_DIR/source_status.txt"
 printf 'run_id=%s\nsource_commit=%s\nmodel=%s\nparquet=%s\nmanifest=%s\nrollout_n=4\nseed=20260827\ntemperature=1.0\ntop_p=1.0\n' \
     "$RUN_ID" "$SOURCE_COMMIT" "$MODEL" "$PARQUET" "$MANIFEST" > "$RUN_DIR/run.env"
-sha256sum "$PARQUET" "$MANIFEST" "$D0F/dataset_card.json" > "$RUN_DIR/input_sha256.txt"
+sha256sum "$PARQUET" "$MANIFEST" "$D0F/dataset_card.json" "$METADATA_CSV" > "$RUN_DIR/input_sha256.txt"
 cp "$PROJECT_ROOT/EasyR1/examples/config_v3_s1_single_gpu.yaml" "$RUN_DIR/resolved_source_config.yaml"
 
 cleanup() {
@@ -78,7 +99,7 @@ GPU_MONITOR_PID=$!
     export OPENSCENE_DATA_ROOT="$DATA_ROOT"
     export NUPLAN_MAPS_ROOT="$DATA_ROOT/maps"
     export NAVSIM_EXP_ROOT="$WORKSPACE_ROOT/exp_root"
-    export CACHE_PATH="$DATA_ROOT/../dataset_v3_controlled_overlap/metric_cache"
+    export CACHE_PATH="$CACHE_ROOT"
     cd "$PROJECT_ROOT/navsim_eval"
     exec "$WORKSPACE_ROOT/envs/navsim/bin/gunicorn" \
         navsim.planning.script.run_gunicorn_server:app \
