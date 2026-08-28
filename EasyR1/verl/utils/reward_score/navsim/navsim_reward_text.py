@@ -160,9 +160,9 @@ def compute_score_fast(reward_inputs: List[Dict[str, Any]], format_weight: float
         token = ground_truth["token"]
         
         # poses = parse_text_waypoint(response)
-        poses = parse_fn(response)
-        # print(f"Parsed poses for token {token}: {poses}")
-        poses = denormalize(poses)
+        normalized_poses = parse_fn(response)
+        parsed_ok = normalized_poses is not None and len(normalized_poses) == 8
+        poses = denormalize(normalized_poses) if parsed_ok else []
         # print(f"Denormalized poses for token {token}: {poses}")
         
         pdms, scaled_pdms = simulator_reward(token, poses, False)
@@ -179,6 +179,9 @@ def compute_score_fast(reward_inputs: List[Dict[str, Any]], format_weight: float
         save_dict["pdms"] = pdms
         save_dict["pdms_scaled"] = scaled_pdms
         save_dict["format_score"] = format_score
+        save_dict["parsed_ok"] = parsed_ok
+        save_dict["raw_response"] = response
+        save_dict["response_chars"] = len(response)
         # save_dict["overall_score"] =(1 - format_weight) * pdms + format_weight * format_score
         save_dict["overall_score"] = scaled_pdms
         log_to_jsonl(save_dict, log_file_path)

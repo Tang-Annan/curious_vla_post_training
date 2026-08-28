@@ -1,0 +1,96 @@
+data:
+  train_files: ""
+  val_files: ""
+  prompt_key: problem
+  answer_key: answer
+  image_key: images
+  image_dir: null
+  max_prompt_length: 3072
+  max_response_length: 512
+  rollout_batch_size: 4
+  mini_rollout_batch_size: 4
+  val_batch_size: 4
+  format_prompt: null
+  shuffle: false
+  seed: 20260827
+  min_pixels: 65536
+  max_pixels: 262144
+  filter_overlong_prompts: true
+  filter_overlong_prompts_workers: 1
+  token_filter_file: null
+  val_token_filter_file: null
+
+algorithm:
+  adv_estimator: grpo
+  disable_kl: true
+  use_kl_loss: false
+  online_filtering: false
+
+worker:
+  actor:
+    global_batch_size: 4
+    micro_batch_size_per_device_for_update: 1
+    micro_batch_size_per_device_for_experience: 1
+    padding_free: false
+    dynamic_batching: true
+    ulysses_size: 1
+    model:
+      model_path: null
+      attn_implementation: sdpa
+      enable_gradient_checkpointing: true
+      trust_remote_code: true
+      freeze_vision_tower: false
+      lora:
+        rank: 8
+        alpha: 16
+        target_modules: q_proj,k_proj,v_proj,o_proj
+        exclude_modules: .*visual.*
+    fsdp:
+      enable_full_shard: false
+      enable_cpu_offload: false
+      enable_rank0_init: true
+    offload:
+      offload_params: true
+      offload_optimizer: true
+
+  rollout:
+    n: 4
+    temperature: 1.0
+    top_p: 1.0
+    seed: 20260827
+    limit_images: 1
+    gpu_memory_utilization: 0.55
+    enforce_eager: false
+    enable_chunked_prefill: false
+    tensor_parallel_size: 1
+    max_num_batched_tokens: 4608
+    disable_tqdm: true
+
+  ref:
+    fsdp:
+      enable_full_shard: true
+      enable_cpu_offload: true
+      enable_rank0_init: true
+    offload:
+      offload_params: true
+
+  reward:
+    reward_function: ./verl/utils/reward_score/navsim/navsim_reward_text.py:compute_score_fast
+
+trainer:
+  total_epochs: 1
+  project_name: dataset_v3_controlled_overlap
+  experiment_name: v3_s1_screen8000_g4_seed20260827
+  logger: ["file"]
+  nnodes: 1
+  n_gpus_per_node: 1
+  val_freq: -1
+  val_before_train: false
+  val_only: false
+  val_generations_to_log: 0
+  save_freq: -1
+  save_limit: 1
+  save_model_only: false
+  save_checkpoint_path: null
+  load_checkpoint_path: null
+  find_last_checkpoint: false
