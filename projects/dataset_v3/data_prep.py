@@ -10,7 +10,6 @@ import os
 import shutil
 import subprocess
 import tarfile
-import urllib.request
 from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -47,8 +46,23 @@ FULL_FRONT_MIRROR_REVISION = "a08a0aa345c0f0d0f12693c4bae8e2ad0d15d6cc"
 FULL_FRONT_MIRROR_ROOT = (
     f"https://hf-mirror.com/datasets/WeiXiCZ/navsim-trainval-full-front/resolve/{FULL_FRONT_MIRROR_REVISION}"
 )
-FULL_FRONT_MIRROR_PARTS = 14
 MIRROR_OVERLAP_CHECKS = 64
+FULL_FRONT_PART_SHA256 = (
+    "c9d4a65a80da570733176bb7d2d62c60ac8aecd29759e1c00ac6ddd695b2ea3a",
+    "d6c9318d90cf7b49c0885056b0befc0fe1c607dd42f3a2429a5ab20f8aef63fe",
+    "77b21a79292eb26223c36ce1a49413b08a566fc418f0b8edf0743256930188a5",
+    "48d17d48e438a581001b4c774f27cc66e3da77a6834f24cd237c51ebae109ecd",
+    "0e9038c978b1fadd9b092ae4f605468821d391daf145d57fcac7b32635f3f7a1",
+    "62ab2a491358c0d06bfb2cf15c60fbd444cba2fcc184a4caf77b9a8cad8524ec",
+    "37ab2f92ef5aaf4430f780547df837bb934fa0fb7efab08164c5b367b1b64dc2",
+    "7d61d17e80511945e5bb5290ec0dfcb8001bc837e514bb7013aa9256f0bd29d6",
+    "9753f5629766e6ddc7d36da7d6717deef34f46b50c327b06d01d734359eb735e",
+    "6a7f194b2f5d9e944bb0667c24c628386169b3f2077dd0b25f9f4aa856f15a77",
+    "3a612b36dc4c21d3a4d919c44988f890488d9f849f2fdac9d261cf7c72972b67",
+    "833bedbb0e5b39c44238e88bad1d8cdfec58292ef2de8d99322defc4f90d1e5a",
+    "4aa76fa173e799f163e23407385bbfdca3c8ed079d3da6f58c1744fb18d41793",
+    "76d8035c73a7a2ec6a9a5c7a28242d0e4466d9f4d8ce9ff2fe598d7349246be1",
+)
 
 
 @dataclass(frozen=True)
@@ -634,10 +648,6 @@ def fetch_images(args: argparse.Namespace) -> None:
     (args.state_dir / "D0A_IMAGES_COMPLETE").touch()
 
 
-def parse_sha256s(text: str) -> dict[str, str]:
-    return {path: digest for digest, path in (line.split(maxsplit=1) for line in text.splitlines() if line.strip())}
-
-
 class VerifiedPartStream:
     def __init__(self, parts: list[tuple[str, str, str]]) -> None:
         self.parts = parts
@@ -709,10 +719,14 @@ def fetch_full_front_images(args: argparse.Namespace) -> None:
     path_list = args.state_dir / "full_front_mirror_paths.txt"
     path_list.write_text("\n".join(sorted(desired)) + "\n", encoding="utf-8")
 
-    with urllib.request.urlopen(f"{FULL_FRONT_MIRROR_ROOT}/SHA256SUMS", timeout=30) as response:
-        expected_sums = parse_sha256s(response.read().decode("utf-8"))
-    part_paths = [f"archives/navsim-trainval-full-front.tar.zst.part-{index:04d}" for index in range(FULL_FRONT_MIRROR_PARTS)]
-    parts = [(f"{FULL_FRONT_MIRROR_ROOT}/{path}", path, expected_sums[path]) for path in part_paths]
+    part_paths = [
+        f"archives/navsim-trainval-full-front.tar.zst.part-{index:04d}"
+        for index in range(len(FULL_FRONT_PART_SHA256))
+    ]
+    parts = [
+        (f"{FULL_FRONT_MIRROR_ROOT}/{path}", path, FULL_FRONT_PART_SHA256[index])
+        for index, path in enumerate(part_paths)
+    ]
     stream = VerifiedPartStream(parts)
     extracted = set()
     with zstandard.ZstdDecompressor().stream_reader(stream) as decompressed:
