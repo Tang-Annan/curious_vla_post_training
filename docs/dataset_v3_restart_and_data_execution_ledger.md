@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`S1_COMPLETE / SELECTORS_FROZEN / R0_COMPLETE / H0_PROTOCOL_FROZEN`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix 各 2,000-token manifest/parquet、唯一 CDT `R_task` 公式及 H0 train-only pilot 协议均已冻结并验收，尚未启动正式四格 optimizer training 或访问 Final。
+> 当前状态：`S1_COMPLETE / SELECTORS_FROZEN / R0_COMPLETE / H0_COMPLETE / M0_COMPLETE / E0_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix 各 2,000-token manifest/parquet、唯一 CDT `R_task`、正式 H0 训练配置以及 M0 评价/晋级协议均已冻结并验收，尚未启动正式四格 optimizer training 或访问 Final。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -340,7 +340,7 @@ Random、TailMix 和后续 selector 共用同一份资产。不得按 selector �
 
 | ID | Selector | Reward | 主要作用 | 当前状态 |
 | --- | --- | --- | --- | --- |
-| `V3-E0-SFT` | 无训练 | 无 | 零更新锚点 | `BLOCKED_BY_M0` |
+| `V3-E0-SFT` | 无训练 | 无 | 零更新锚点 | `READY` |
 | `V3-RR` | Random | Raw-PDMS | primary GRPO baseline | `BLOCKED_BY_E0` |
 | `V3-TR` | TailMix | Raw-PDMS | selector 主效应 | `BLOCKED_BY_E0` |
 | `V3-RC` | Random | CDT scalar reward | reward 主效应 | `BLOCKED_BY_E0` |
@@ -564,15 +564,15 @@ Tail Dev/Final 至少报告：
 | selector 启动门槛 | Random 与 TailMix mixed-tier coverage | `FROZEN: Random/TailMix 2,000-token manifests` |
 | CDT tier 是否沿用 V2 | 新 evaluator 字段和值域审计 | `FROZEN: canonical L0-L3, invalid separate` |
 | CDT reward 区间和质量项 | train-only reward geometry | `FROZEN: R_task=(2L+Q_task)/7` |
-| 主安全指标 | Tail Dev 事件数量和统计功效 | `TBD_AFTER_D0` |
-| Natural non-inferiority margin | 历史 evaluator 方差、D0F split 规模和预期实际容忍度；不读取 V3 treatment dev | `TBD_AFTER_D0` |
-| 训练步数和 train rollout `G` | manifest 规模、显存和 pilot 成本 | `TBD_AFTER_D0` |
-| training group/rollout budget 与 LR | V3 manifest 规模和 H0 train-monitor 曲线 | `PILOT_PROTOCOL_FROZEN: 512 groups / 2,048 queries; LR pending` |
-| advantage estimator | R0 low-nonzero geometry；std-floor 不处理 exact-zero | `TBD_AFTER_D0` |
-| groups/update | H0 梯度方差与 compute-matched pilot | `TBD_AFTER_D0` |
-| LoRA / KL | H0 policy movement 与平台化证据 | 默认 rank 8 attention-only / KL `0.01`，有证据才改 |
-| 主效应确认 seeds | discovery 结果和计算成本 | `TBD_AFTER_D0` |
-| interaction 确认 | 四格 discovery 结果和 matched-seed 成本 | `TBD_AFTER_D0`；正式结论固定三组 matched seeds |
+| 主安全指标 | Tail Dev 事件数量和统计功效 | `FROZEN: Tail StrictClear rate (canonical L3)` |
+| Natural non-inferiority margin | 历史 evaluator 方差、D0F split 规模和预期实际容忍度；不读取 V3 treatment dev | `FROZEN: -0.01 absolute PDMS-scaled` |
+| 训练步数和 train rollout `G` | manifest 规模、显存和 pilot 成本 | `FROZEN: G=4; 2,000 groups / 8,000 queries / 500 updates` |
+| training group/rollout budget 与 LR | V3 manifest 规模和 H0 train-monitor 曲线 | `FROZEN: 2,000 groups / 8,000 queries / 500 updates; LR=1e-6` |
+| advantage estimator | R0 low-nonzero geometry；std-floor 不处理 exact-zero | `FROZEN: standard GRPO` |
+| groups/update | H0 梯度方差与 compute-matched pilot | `FROZEN: 4; batch-8 trigger false` |
+| LoRA / KL | H0 policy movement 与平台化证据 | `FROZEN: rank 8 attention-only / KL 0.01 low_var_kl` |
+| 主效应确认 seeds | discovery 结果和计算成本 | `FROZEN: discovery 20260827; conditional matched-pair 20260828/20260829` |
+| interaction 确认 | 四格 discovery 结果和 matched-seed 成本 | `FROZEN: only if required, all four cells on all three matched seeds` |
 
 `split 精确规模`、`TAIL_EVAL_ROUTE`、`Screen Pool 与 train manifest 规模` 在 D0R-2 冻结并由 D0S/D0F 验证；其余项目在 D0F 后按 S1、R0、H0、M0 对应门控逐项回填。未冻结前不得启动正式方法训练。
 
@@ -612,9 +612,9 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 | 10 | `V3-D0F` | 数据验收、hash 与 freeze | 0 | `COMPLETE / RETRY1` |
 | 11 | `V3-S1` | SFT shared rollout bank、Confirm 与 selector manifests | 1 | `COMPLETE / SELECTORS_FROZEN` |
 | 12 | `V3-R0` | 四格 reward/advantage geometry 与 CDT reward freeze | 0 | `COMPLETE / R_TASK_FROZEN` |
-| 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | 1 | `IN_PROGRESS / PROTOCOL_FROZEN` |
-| 14 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `BLOCKED_BY_H0` |
-| 15 | `V3-E0-SFT` | 在冻结 V3 dev 上生成零更新锚点 | `TBD` | `BLOCKED_BY_M0` |
+| 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | 1 | `COMPLETE / CONFIG_FROZEN` |
+| 14 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `COMPLETE / PROTOCOL_FROZEN` |
+| 15 | `V3-E0-SFT` | 在冻结 V3 dev 上生成零更新锚点 | 1 | `READY` |
 | 16 | `V3-RR/TC/TR/RC` | 按 `RR → TC → TR → RC` 执行最小 2×2 discovery，并按门控补齐 matched-seed 确认 | `TBD` | `BLOCKED_BY_E0` |
 
 不增加与当前主问题无关的算法分支。数据制作完成前的唯一执行路线为 `A0 → B0 → B1 → S0 → D0I → D0R-1 → D0R-2 → D0S → D0A → D0F`。
@@ -803,6 +803,30 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 产物路径：`experiments/dataset_v3_controlled_overlap/hparam_freeze/v3_h0_protocol_20260829/`；
 - 状态：`COMPLETE / H0_PROTOCOL_FROZEN / LR_PILOTS_READY`；
 - 下一唯一动作：顺序执行 H0-LR1 与 H0-LR3；两次均从原始 Stage-2 初始化并只读同一 `hparam_train/train_monitor`，完成后机械应用上述 LR gate。
+
+### 记录 V3-013：H0 pilots 完成、正式训练配置冻结与 full actor 清理
+
+- 时间：2026-08-29（Asia/Shanghai）；
+- branch / source commit / source status：pilots 使用 `160c2e9` 系列冻结入口，最终 freeze source 为 `a433d17`；远端 focused tests 7 项通过，冻结时 source clean；
+- 输入与 hash：沿用记录 V3-012 的 `hparam_train=512` groups、`train_monitor=256` tokens、`G=4` 与冻结门槛；LR decision hash=`f8a0caa392d96f337a1495fc574bc7c5ea189777625705943413dcbd97d233a8`，estimator decision hash=`b46999b1877a85b9db4bbd40cad5f7308972067ed907a53ccc1645f58bd0cdea`；
+- 技术结果：LR=`1e-6` standard GRPO 的 final/mean PDMS gain=`+0.0046671512/+0.0015431523`；LR=`3e-6` standard GRPO 为 `+0.0000244115/+0.0036413106`，未达到升级门槛；LR=`1e-6` std-floor GRPO 为 `+0.0040840822/+0.0028957397`，未达到替换 standard GRPO 的门槛；三次 pilot 均 `COMPLETE/exit_code=0`，parse=1、clip=0、non-finite=0；
+- 科学结果：正式配置冻结为 LR `1e-6`、standard GRPO、`G=4`、4 groups/update、PPO epoch 1、LoRA rank 8 attention-only、KL `0.01/low_var_kl`、shuffle true；每个正式 cell 为 2,000 groups / 8,000 rollout queries / 500 updates，monitor checkpoints 固定为 step `0/100/200/300/400/500`；batch-8 三个预注册触发项均为 false（grad-norm CV=`0.2374730649`、mean clip fraction=`0`、grad-norm≥0.99 update rate=`0`）；
+- 空间闭环：在验证每次 pilot 的 COMPLETE marker、exit code、H0 report、raw rollouts、result hash、experiment log、checkpoint tracker、LoRA adapter 与 TensorBoard 后，删除三个 full actor state：`v3_h0_lr1_random_raw_g4_b4_seed20260829/checkpoints/global_step_128/actor/model_world_size_1_rank_0.pt`、`v3_h0_lr3_random_raw_g4_b4_seed20260829/checkpoints/global_step_128/actor/model_world_size_1_rank_0.pt`、`v3_h0_std_floor_lr1_random_raw_g4_b4_seed20260829/checkpoints/global_step_128/actor/model_world_size_1_rank_0.pt`；每个 `8,144,550,392` bytes，共释放 `24,433,651,176` bytes，删除 epoch=`1788004882`，删除后可用空间 `68,236,619,776` bytes；该删除不可恢复；
+- 关键 hash 与产物路径：H0 final freeze=`7f91a2863e48bf5e8632e26fb36517d67e66bd0efcda16f4b70426ea4314605e`，位于 `experiments/dataset_v3_controlled_overlap/hparam_freeze/v3_h0_final_freeze_20260829/results/h0_freeze.json`；std-floor H0 report=`f4015cc...bd97`；
+- 状态：`COMPLETE / H0_CONFIG_FROZEN / M0_READY`；
+- 下一唯一动作：执行 M0，冻结 Natural/Tail 指标、paired log-cluster bootstrap、discovery promotion 与 conditional confirmation 规则。
+
+### 记录 V3-014：M0 四格评价与晋级协议冻结
+
+- 时间：2026-08-29（Asia/Shanghai）；
+- branch / source commit / source status：`3276c5cf0e299a2e421cc011385b77fb05aa166e`，本地与远端完整测试各 35 项通过，source clean；
+- 输入与 hash：dataset card=`53ff...990b`，D0R-2=`7d94...a306`，selector report=`b446...3425`，reward protocol=`9b8a...69eb7`，H0 final freeze=`7f91...605e`；协议验证 118 个 unseen logs / 835 scenes、Dev/Final lock、Random/TailMix 各 2,000 counts/quota/caps/overlap、唯一 CDT reward、正式 H0 配置与预算一致；
+- 评价冻结：Natural primary=`pdms_scaled`；Tail primary=`strict_clear_rate`，定义为 parsed-ok 且 canonical L3，等价于 Collision=`1`、DAC=`1`、TTC=`1`；Natural non-inferiority margin=`-0.01`；所有区间使用 20,000 次 paired log-cluster bootstrap；
+- discovery 冻结：seed=`20260827`，执行优先级 `RR → TC → TR → RC`；主要 contrasts 为 `RR-SFT`、`TC-RR`、`TR-RR`、`RC-RR` 与 interaction `(TC-TR)-(RC-RR)`；promotion 要求 Tail point delta≥`0.01`、Tail CI upper>`0`、Natural point delta≥`-0.01`、Natural CI lower>`-0.03`、任一 safety component drop≤`0.005`；该门槛仅为计算成本 gate，不构成稳定性结论；
+- confirmation/final 冻结：候选仅补 matched seeds `20260828/20260829`，要求 3/3 Tail delta 为正、mean Tail delta≥`0.01`、two-level Tail CI lower>`0`、two-level Natural CI lower>`-0.01`、mean safety drop≤`0.005`；简单 contrast 只补对应 matched pair；interaction 只有四格全部三组 matched seeds 才允许正式声明；若 discovery 无通过项，则不补 seeds，未晋级 post-training model 不访问 Final；Final 在方法和 seed 冻结后只访问一次，并同时评价 SFT 与所有 confirmed candidates；
+- 关键 hash 与产物路径：M0 protocol=`0543ea1c6eaf7d08426691b6148358c60dcd398848916aeb0c6189b10be30aba`，位于 `experiments/dataset_v3_controlled_overlap/protocol_freeze/v3_m0_matrix_protocol_20260829/results/m0_protocol.json`；冻结时 `dev_accessed=false`、`final_accessed=false`；
+- 状态：`COMPLETE / M0_PROTOCOL_FROZEN / E0_READY`；
+- 下一唯一动作：在冻结 Dev 416 scenes 上执行 `V3-E0-SFT`，生成零更新锚点和唯一可复用的 SFT paired baseline。
 
 ## 9. 结论边界
 
