@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`S1_COMPLETE / SELECTORS_FROZEN / R0_COMPLETE / H0_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix 各 2,000-token manifest/parquet 与唯一 CDT `R_task` 公式均已冻结并验收，尚未启动正式四格 optimizer training 或访问 Final。
+> 当前状态：`S1_COMPLETE / SELECTORS_FROZEN / R0_COMPLETE / H0_PROTOCOL_FROZEN`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix 各 2,000-token manifest/parquet、唯一 CDT `R_task` 公式及 H0 train-only pilot 协议均已冻结并验收，尚未启动正式四格 optimizer training 或访问 Final。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -521,7 +521,7 @@ H0 使用从冻结 Random manifest 确定性截取的 `hparam_train` 做 optimiz
 6. 只有仍有梯度方差证据时，才追加 batch 4 vs 8 的 compute-matched pilot；
 7. 不同时测试 LR、estimator、batch、LoRA 和 KL，不根据 monitor 结果开启连续参数 sweep。
 
-H0 的 training group budget、monitor 数量和 promotion gate 为 `TBD_AFTER_D0:HPARAM_PILOT`，但候选顺序和不访问 dev/final 的边界从现在起固定。
+H0 已在任何 optimizer pilot 前冻结：`hparam_train=512` groups、独立 `train_monitor=256` tokens、`G=4`、4 groups/update；LR pilot 各处理 512 groups / 2,048 rollout queries，并在 step `0/26/51/77/102/128`（最近似 0/20/40/60/80/100% 的整 update 边界）评估同一 monitor。LR/estimator health 与 promotion gate 见记录 V3-012 及其冻结 protocol；不访问 dev/final 的边界不变。
 
 ## 6. 评价框架与待冻结门控
 
@@ -567,7 +567,7 @@ Tail Dev/Final 至少报告：
 | 主安全指标 | Tail Dev 事件数量和统计功效 | `TBD_AFTER_D0` |
 | Natural non-inferiority margin | 历史 evaluator 方差、D0F split 规模和预期实际容忍度；不读取 V3 treatment dev | `TBD_AFTER_D0` |
 | 训练步数和 train rollout `G` | manifest 规模、显存和 pilot 成本 | `TBD_AFTER_D0` |
-| training group/rollout budget 与 LR | V3 manifest 规模和 H0 train-monitor 曲线 | `TBD_AFTER_D0` |
+| training group/rollout budget 与 LR | V3 manifest 规模和 H0 train-monitor 曲线 | `PILOT_PROTOCOL_FROZEN: 512 groups / 2,048 queries; LR pending` |
 | advantage estimator | R0 low-nonzero geometry；std-floor 不处理 exact-zero | `TBD_AFTER_D0` |
 | groups/update | H0 梯度方差与 compute-matched pilot | `TBD_AFTER_D0` |
 | LoRA / KL | H0 policy movement 与平台化证据 | 默认 rank 8 attention-only / KL `0.01`，有证据才改 |
@@ -612,7 +612,7 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 | 10 | `V3-D0F` | 数据验收、hash 与 freeze | 0 | `COMPLETE / RETRY1` |
 | 11 | `V3-S1` | SFT shared rollout bank、Confirm 与 selector manifests | 1 | `COMPLETE / SELECTORS_FROZEN` |
 | 12 | `V3-R0` | 四格 reward/advantage geometry 与 CDT reward freeze | 0 | `COMPLETE / R_TASK_FROZEN` |
-| 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | `TBD` | `READY` |
+| 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | 1 | `IN_PROGRESS / PROTOCOL_FROZEN` |
 | 14 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `BLOCKED_BY_H0` |
 | 15 | `V3-E0-SFT` | 在冻结 V3 dev 上生成零更新锚点 | `TBD` | `BLOCKED_BY_M0` |
 | 16 | `V3-RR/TC/TR/RC` | 按 `RR → TC → TR → RC` 执行最小 2×2 discovery，并按门控补齐 matched-seed 确认 | `TBD` | `BLOCKED_BY_E0` |
@@ -787,6 +787,22 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 产物路径：`experiments/dataset_v3_controlled_overlap/reward_freeze/v3_r0_geometry_candidates_20260829{,_retry1}/` 与 `reward_freeze/v3_r0_cdt_task_freeze_20260829/`；
 - 状态：`COMPLETE / R_TASK_CDT_V3_FROZEN / H0_READY`；
 - 下一唯一动作：只用 Random-Raw 与 train-side `hparam_train/train_monitor` 执行 H0，先冻结 training-group budget 和 LR；R0 的高 low-nonzero rate 已触发在选定 LR 上追加 `grpo` vs `std_floor_grpo`，不得同时改 batch、LoRA 或 KL。
+
+### 记录 V3-012：H0 train-only pilot 数据、预算与晋级门槛预冻结
+
+- 时间：2026-08-29 11:22:13–11:22:15（Asia/Shanghai）；
+- branch / source commit / source status：`75f1c480be034883534451db56f2e2ce3a184a01`，source status 为空；
+- 数据冻结：从冻结 Random 2,000-token manifest 按 stable hash 与原分布确定性截取 512 个 `hparam_train` groups，intent straight/left/right=`341/111/60`；独立沿用 256-token `train_monitor`，optimizer/monitor token overlap=`0`，两者均为 SFT-seen train-side 且不接触 Dev/Final；
+- 预算冻结：LR 与 estimator pilot 均固定 `G=4`、4 groups/update、128 updates、512 processed groups、2,048 train rollout queries；monitor 使用 `n=1`，在 step `0/26/51/77/102/128` 评估，对应 processed groups `0/104/204/308/408/512`；batch 8 只有预注册梯度方差门槛触发时才以 64 updates / 512 groups compute-match；
+- 参数边界：首轮仅比较 LR `1e-6` / `3e-6`，其余固定为 standard GRPO、PPO epoch 1、LoRA rank 8 attention-only、KL loss `0.01` / `low_var_kl`、shuffle true、seed `20260829`；R0 low-nonzero gate 已触发，选定 LR 后只追加 `grpo` / `std_floor_grpo(floor=0.05)`；
+- LR 门槛：候选需满足 final parse≥0.99、clip≤0.01、三项 safety 相对 step0 降幅均≤0.01、`|ppo_kl|≤0.05`、mean clip fraction≤0.05、max grad norm≤5；两者均 admissible 时，只有 `3e-6` 的 final PDMS gain 比 `1e-6` 高至少 0.005 且 post-baseline mean gain 高至少 0.002 才升级，否则保守冻结 `1e-6`；
+- estimator 门槛：只有 std-floor admissible、相对 GRPO 的 final/mean PDMS gain 分别≥0.003/0.001，且每项 final safety 不低超过 0.005，才冻结 std-floor；否则保持 standard GRPO；exact-zero group 在两种实现中均为零 advantage；
+- batch 8 触发：选定 estimator 仅在 grad-norm CV>0.5、mean clip fraction>0.02 或至少 5% updates 的 grad norm≥0.99 时追加 compute-matched batch 8；否则固定 batch 4；
+- 技术结果：远端 23 项 focused tests 通过；std-floor 独立张量测试对 exact-zero group 输出 `[0,0,0,0]`，对 `[0,.01,.02,.03]` 在 floor 0.05 下输出约 `[-.3,-.1,.1,.3]`；protocol `COMPLETE/exit_code=0`；
+- 关键 hash：H0 protocol=`f78701f4e5a273784174a19bdd4f77759773522d9ffa62be944c24af48301a07`，hparam manifest/parquet=`f005502fa76b0880ae777e070a9c831088c3381bafa10f5b32d131b64c1c5b6e` / `64e22bd164db3fd5ebf2d04f632de85fb606607397d3d80e19fd0f7e4ae5de4c`，monitor manifest/parquet=`1d02bfae05d8b749ad9a1cc9da9d94147728ee8831ae539fef5290be096c2752` / `967136155d1e3ffa36726c217f75efd8c92d75cf5b12320520905464b16b51a2`；
+- 产物路径：`experiments/dataset_v3_controlled_overlap/hparam_freeze/v3_h0_protocol_20260829/`；
+- 状态：`COMPLETE / H0_PROTOCOL_FROZEN / LR_PILOTS_READY`；
+- 下一唯一动作：顺序执行 H0-LR1 与 H0-LR3；两次均从原始 Stage-2 初始化并只读同一 `hparam_train/train_monitor`，完成后机械应用上述 LR gate。
 
 ## 9. 结论边界
 
