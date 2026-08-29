@@ -342,6 +342,143 @@ def build_candidate(args: argparse.Namespace) -> None:
     (args.output_dir / "COMPLETE").touch()
 
 
+def block_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    tiers = [candidate_tier(row) for row in rows]
+    valid_tiers = [tier for tier in tiers if tier is not None]
+    scores = [float(row["pdms_scaled"]) for row in rows]
+    severe_count = sum(tier in {"L0", "L1"} for tier in valid_tiers)
+    near_risk_count = sum(tier == "L2" for tier in valid_tiers)
+    strict_clear_count = sum(tier == "L3" for tier in valid_tiers)
+    return {
+        "tiers": "|".join(tier or "invalid" for tier in tiers),
+        "valid_rollouts": len(valid_tiers),
+        "severe_count": severe_count,
+        "near_risk_count": near_risk_count,
+        "strict_clear_count": strict_clear_count,
+        "mixed_recoverable": int(
+            strict_clear_count > 0
+            and severe_count + near_risk_count > 0
+            and len(set(valid_tiers)) >= 2
+        ),
+        "pdms_scaled_mean": statistics.fmean(scores),
+        "headroom": max(scores) - statistics.fmean(scores),
+    }
+
+
+def classify_stability(
+    screen: dict[str, Any], confirm: dict[str, Any] | None
+) -> tuple[str, tuple[str, ...]]:
+    if confirm is None:
+        return "random_anchor", ()
+    raw_flags = []
+    if int(screen["severe_count"]) > 0 and int(confirm["severe_count"]) > 0:
+        raw_flags.append("stable_severe")
+    if bool(screen["mixed_recoverable"]) and bool(confirm["mixed_recoverable"]):
+        raw_flags.append("stable_mixed_recoverable")
+    if int(screen["near_risk_count"]) > 0 and int(confirm["near_risk_count"]) > 0:
+        raw_flags.append("stable_near_risk")
+    for category in ("stable_severe", "stable_mixed_recoverable", "stable_near_risk"):
+        if category in raw_flags:
+            return category, tuple(raw_flags)
+    return "random_anchor", tuple(raw_flags)
+
+
+def audit_stability(args: argparse.Namespace) -> None:
+    if args.output_dir.exists():
+        raise FileExistsError(f"Output directory already exists: {args.output_dir}")
+    screen_tokens = read_manifest(args.screen_manifest)
+    candidate_tokens = read_manifest(args.candidate_manifest)
+    if not set(candidate_tokens) < set(screen_tokens):
+        raise ValueError("Candidate manifest must be a strict subset of Screen")
+    screen_groups = group_rows(read_jsonl(args.screen_rollouts), screen_tokens)
+    confirm_groups = group_rows(read_jsonl(args.confirm_rollouts), candidate_tokens)
+    with args.master_index.open(encoding="utf-8-sig", newline="") as handle:
+        master = {row["token"]: row for row in csv.DictReader(handle)}
+    if any(master[token]["source_universe"] != "sft_seen" for token in screen_tokens):
+        raise ValueError("Screen contains a non-SFT-seen token")
+    if any(master[token]["split"] != "grpo_screen" for token in screen_tokens):
+        raise ValueError("Screen token is outside the frozen grpo_screen split")
+
+    rows = []
+    raw_flag_counts: Counter[str] = Counter()
+    raw_overlap_counts: Counter[str] = Counter()
+    for token in screen_tokens:
+        screen = block_features(screen_groups[token])
+        confirm = block_features(confirm_groups[token]) if token in confirm_groups else None
+        category, raw_flags = classify_stability(screen, confirm)
+        raw_flag_counts.update(raw_flags)
+        raw_overlap_counts["|".join(raw_flags) if raw_flags else "none"] += 1
+        rows.append(
+            {
+                "token": token,
+                "log_name": master[token]["log_name"],
+                "intent": master[token]["intent"],
+                "category": category,
+                "candidate": int(confirm is not None),
+                "raw_stability_flags": "|".join(raw_flags),
+                **{f"screen_{key}": value for key, value in screen.items()},
+                **{
+                    f"confirm_{key}": "" if confirm is None else confirm[key]
+                    for key in screen
+                },
+            }
+        )
+
+    categories = ("stable_severe", "stable_mixed_recoverable", "stable_near_risk", "random_anchor")
+    category_counts = Counter(row["category"] for row in rows)
+    by_intent = {
+        category: dict(sorted(Counter(row["intent"] for row in rows if row["category"] == category).items()))
+        for category in categories
+    }
+    category_logs = {
+        category: len({row["log_name"] for row in rows if row["category"] == category})
+        for category in categories
+    }
+    category_max_per_log = {
+        category: max(Counter(row["log_name"] for row in rows if row["category"] == category).values(), default=0)
+        for category in categories
+    }
+
+    args.output_dir.mkdir(parents=True)
+    with (args.output_dir / "stability_capacity.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    report = {
+        "screen_groups": len(screen_tokens),
+        "candidate_groups": len(candidate_tokens),
+        "confirm_groups": len(confirm_groups),
+        "rollouts_per_block": 4,
+        "classification_priority": list(categories[:3]),
+        "classification_rules": {
+            "stable_severe": "at least one L0/L1 occurrence in each independent G4 block",
+            "stable_mixed_recoverable": "each block contains L3 and at least one L0-L2 with at least two valid tiers; excludes higher-priority stable_severe",
+            "stable_near_risk": "at least one L2 occurrence in each block; excludes higher-priority stable_severe and stable_mixed_recoverable",
+            "random_anchor": "all remaining frozen Screen tokens",
+        },
+        "category_counts": {category: category_counts[category] for category in categories},
+        "category_intent_counts": by_intent,
+        "category_unique_logs": category_logs,
+        "category_max_per_log_before_select": category_max_per_log,
+        "raw_stability_flag_counts": dict(sorted(raw_flag_counts.items())),
+        "raw_stability_overlap_counts": dict(sorted(raw_overlap_counts.items())),
+        "screen_parse_failures": sum(not bool(row["parsed_ok"]) for group in screen_groups.values() for row in group),
+        "confirm_parse_failures": sum(not bool(row["parsed_ok"]) for group in confirm_groups.values() for row in group),
+        "screen_rollouts_sha256": sha256_file(args.screen_rollouts),
+        "confirm_rollouts_sha256": sha256_file(args.confirm_rollouts),
+        "screen_manifest_sha256": sha256_file(args.screen_manifest),
+        "candidate_manifest_sha256": sha256_file(args.candidate_manifest),
+        "master_index_sha256": sha256_file(args.master_index),
+        "dev_accessed": False,
+        "final_accessed": False,
+    }
+    (args.output_dir / "stability_capacity_report.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (args.output_dir / "exit_code").write_text("0\n", encoding="utf-8")
+    (args.output_dir / "COMPLETE").touch()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
@@ -373,6 +510,15 @@ def build_parser() -> argparse.ArgumentParser:
     candidate.add_argument("--high-headroom-fraction", type=float, default=0.10)
     candidate.add_argument("--batch-size", type=int, default=4)
     candidate.set_defaults(function=build_candidate)
+
+    stability = commands.add_parser("audit-stability")
+    stability.add_argument("--screen-rollouts", type=Path, required=True)
+    stability.add_argument("--screen-manifest", type=Path, required=True)
+    stability.add_argument("--confirm-rollouts", type=Path, required=True)
+    stability.add_argument("--candidate-manifest", type=Path, required=True)
+    stability.add_argument("--master-index", type=Path, required=True)
+    stability.add_argument("--output-dir", type=Path, required=True)
+    stability.set_defaults(function=audit_stability)
     return parser
 
 

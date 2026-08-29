@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`S1_SCREEN_COMPLETE / S1_CANDIDATE_FROZEN / S1_CONFIRM_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；9,091/9,091 图像与 metric cache、Dev/Final 分配、模型无关 Tail 几何和训练规模均已冻结，8,000-scene SFT Screen 与 CPU metric replay 已完成，908-scene Confirm 候选及协议已在 Confirm 前冻结，尚未启动 optimizer training 或访问 Final。
+> 当前状态：`S1_CONFIRM_COMPLETE / STABILITY_CLASSIFIER_FROZEN / CAPACITY_AUDIT_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；9,091/9,091 图像与 metric cache、Dev/Final 分配、模型无关 Tail 几何和训练规模均已冻结，8,000-scene Screen、908-scene Confirm 及两个 block 的技术验收已完成，稳定类别判定规则已在容量审计前冻结，尚未生成 TailMix optimizer manifest、启动 optimizer training 或访问 Final。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -403,7 +403,14 @@ selector 只能读取 train-side SFT Rollout Bank，不读取 dev/final。FALS �
 5. 从确认 bank 构建 TailMix manifest；
 6. Random 与 TailMix 复用同一 Master Pool 和 Rollout Bank。
 
-确认 rollout 的总 `G`、独立 block 数、`P(risk)`/出现次数阈值、四类比例、mixed-tier 稳定性要求和不足类别的处理规则均为 `TBD_AFTER_D0:TAILMIX`。这些规则必须在 Select 前冻结；在看到 dev 结果后不得修改。
+Confirm 固定为 Screen seed `20260827` 与 Confirm seed `20260828` 两个独立 `G=4` block，总 `G=8`。稳定类别必须在两个 block 均至少出现一次对应事件，按以下互斥优先级归类：
+
+1. `stable_severe`：两个 block 均至少有一个 L0/L1；
+2. `stable_mixed_recoverable`：两个 block 均同时含 L3 与至少一个 L0–L2，且各自至少含两个 valid tiers；排除已归入 `stable_severe` 的 token；
+3. `stable_near_risk`：两个 block 均至少有一个 L2；排除前两类；
+4. `random_anchor`：其余冻结 Screen tokens。
+
+四类精确比例和不足类别处理规则仍为 `TBD_AFTER_S1_CAPACITY_AUDIT`：只能根据上述规则产生的 train-side 容量在 Select 前一次性冻结；不得读取 dev/final 或根据下游训练结果修改。
 
 ### 5.5 Reward
 
@@ -585,7 +592,7 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 | 8 | `V3-D0S` | 生成 split、Master Index 和基础 manifests | 0 | `COMPLETE / RETRY2` |
 | 9 | `V3-D0A` | 生成/链接 image 与 metric cache | 0 | `COMPLETE` |
 | 10 | `V3-D0F` | 数据验收、hash 与 freeze | 0 | `COMPLETE / RETRY1` |
-| 11 | `V3-S1` | SFT shared rollout bank、Confirm 与 selector manifests | 1 | `SCREEN_COMPLETE / CANDIDATE_FROZEN / CONFIRM_READY` |
+| 11 | `V3-S1` | SFT shared rollout bank、Confirm 与 selector manifests | 1 | `CONFIRM_COMPLETE / CLASSIFIER_FROZEN / CAPACITY_AUDIT_READY` |
 | 12 | `V3-R0` | 四格 reward/advantage geometry 与 CDT reward freeze | 0 | `BLOCKED_BY_S1_CONFIRM_SELECT` |
 | 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | `TBD` | `BLOCKED_BY_R0` |
 | 14 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `BLOCKED_BY_H0` |
@@ -707,6 +714,20 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 科学边界：本阶段只冻结 train-side Candidate/Confirm sampling；L0–L3 仍是待 R0 对照的候选安全分层，不能称为已冻结 CDT scalar reward；Screen/Confirm rollout 不是严格 unseen 评估，任何模型结论仍须由冻结的 SFT-unseen Dev/Final 提供；
 - 状态：`SCREEN_COMPLETE / METRIC_REPLAY_COMPLETE / CANDIDATE_FROZEN / CONFIRM_READY`；
 - 下一唯一动作：按已冻结协议启动 908-scene、G=4、seed `20260828` 的 S1 Confirm；终态验收后先冻结 TailMix 四类容量与配额，再生成 Random/TailMix 各 2,000-token selector manifests。
+
+### 记录 V3-008：S1 Confirm 完成与稳定类别判定冻结
+
+- 时间：2026-08-29 09:27:33–10:08:31（Asia/Shanghai）；
+- branch / source commit / source status：Confirm source 为 `adeb2edace9739ee13d0b34265c0f7e5780cbd04`，source status 为空；稳定类别 classifier 由本记录对应的下一提交冻结，必须先提交再做容量审计；
+- 输入与 hash：Candidate 908 unique tokens、`G=4`、seed `20260828`，manifest/parquet SHA-256 分别为 `e0437722e19dbb0b8370c553b63bcc31f84d82ed6a6b8492e1a20175c0b48600` / `2b88eca0eef76ee8eb7b6b6a160ce40d5ea3fbd6de943acf46ce1036da02b8af`；input/model hash records 均验收通过；
+- 技术结果：总耗时 2,458 秒；`COMPLETE`、`exit_code=0`，无 `RUNNING/FAILED`；3,632 rollouts、908 tokens、每 token 精确 4 条，manifest membership 精确一致；parse success rate `0.9983480176211453`，解析失败 6，clipping 0，必需字段齐全且非 finite 数值为 0；ADAS 为 3,632 data rows，与 rollout token/score 多重集合一致；
+- result hash：`rollouts.jsonl=db03e6131be43ee144b3f9c257cc38bed81092819d0f1544341683a3f046b8f9`，`diagnosis.json=32349c6636f94f288c15bc5c94eaecb29e99284383f49eb08235c0747a551f5a`，`adas_scores.csv=43e7d40ee8585f17bf5c013cc594e0c3e4d00c7c943032efb8c9d9171eb633a0`；
+- 稳定性规则冻结：两个独立 block 总 `G=8`；对应事件必须在 Screen 与 Confirm 各至少出现一次；互斥优先级固定为 `stable_severe → stable_mixed_recoverable → stable_near_risk → random_anchor`，精确定义见第 5.4 节；invalid rollout 不计入任何 L0–L3 occurrence；
+- 科学边界：本记录在看到稳定类别容量前冻结 classifier，但没有预设四类配额；配额只能在随后一次 train-side capacity audit 后、Select 前冻结；没有读取 Dev/Final，也没有 optimizer update；
+- 错误与资源：run/reward/launcher 日志未发现 OOM、Traceback、RuntimeError、HTTP 5xx 或 reward error；main_adas、Ray、Gunicorn、8901 均清理，GPU 0 MiB / 0%，磁盘约 64 GiB 可用；
+- 产物路径：`experiments/dataset_v3_controlled_overlap/rollout_bank/v3_s1_confirm908_g4_seed20260828/`；
+- 状态：`COMPLETE / STABILITY_CLASSIFIER_FROZEN`；
+- 下一唯一动作：只读取 Screen、Confirm、Candidate 与 train-side Master Index 执行稳定类别容量审计；据此在 Select 前冻结四类 × intent 精确配额和不足类别处理规则。
 
 ## 9. 结论边界
 

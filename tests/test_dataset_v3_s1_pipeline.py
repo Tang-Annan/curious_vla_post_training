@@ -1,6 +1,13 @@
 import pytest
 
-from projects.dataset_v3.s1_pipeline import candidate_tier, group_rows, replay_group, select_candidate_tokens
+from projects.dataset_v3.s1_pipeline import (
+    block_features,
+    candidate_tier,
+    classify_stability,
+    group_rows,
+    replay_group,
+    select_candidate_tokens,
+)
 
 
 def rollout(token: str, parsed_ok: bool = True) -> dict:
@@ -98,3 +105,39 @@ def test_candidate_selection_includes_risk_and_closes_batch() -> None:
     assert "token-11" in selected
     assert len(selected) == 4
     assert report["batch_closure_additions"] == 2
+
+
+def test_stability_categories_are_exclusive_by_frozen_priority() -> None:
+    severe_mixed = {
+        "severe_count": 1,
+        "near_risk_count": 0,
+        "mixed_recoverable": 1,
+    }
+    category, raw_flags = classify_stability(severe_mixed, severe_mixed)
+    assert category == "stable_severe"
+    assert raw_flags == ("stable_severe", "stable_mixed_recoverable")
+
+    near_mixed = {
+        "severe_count": 0,
+        "near_risk_count": 1,
+        "mixed_recoverable": 1,
+    }
+    category, raw_flags = classify_stability(near_mixed, near_mixed)
+    assert category == "stable_mixed_recoverable"
+    assert raw_flags == ("stable_mixed_recoverable", "stable_near_risk")
+
+
+def test_block_features_requires_risk_and_clear_for_recoverable_mix() -> None:
+    rows = []
+    for collision, ttc in ((1.0, 1.0), (1.0, 0.0), (1.0, 1.0), (1.0, 1.0)):
+        row = rollout("token")
+        row.update(
+            no_at_fault_collisions=collision,
+            drivable_area_compliance=1.0,
+            time_to_collision_within_bound=ttc,
+        )
+        rows.append(row)
+    features = block_features(rows)
+    assert features["near_risk_count"] == 1
+    assert features["strict_clear_count"] == 3
+    assert features["mixed_recoverable"] == 1
