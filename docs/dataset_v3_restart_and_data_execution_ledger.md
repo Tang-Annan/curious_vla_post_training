@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`S1_CAPACITY_AUDIT_COMPLETE / TAILMIX_QUOTAS_FROZEN / SELECT_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；9,091/9,091 图像与 metric cache、Dev/Final 分配、模型无关 Tail 几何和训练规模均已冻结，8,000-scene Screen、908-scene Confirm、稳定类别容量审计和 TailMix class×intent 配额均已在 Select 前冻结，尚未生成 TailMix optimizer manifest、启动 optimizer training 或访问 Final。
+> 当前状态：`S1_COMPLETE / SELECTORS_FROZEN / R0_CANDIDATE_GEOMETRY_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix 各 2,000-token manifest/parquet 已冻结并验收，当前只允许在共享 train-side bank 上执行 R0 CPU reward geometry，尚未启动 optimizer training 或访问 Final。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -459,6 +459,14 @@ R_{task}=k(L)+\beta Q_{task}
 
 其中 `Q_task` 只能由 evaluator 中未被 CDT tier 重复表达的任务质量项构成；可用分项、定义和值域由 D0/R0 审计。如果无法得到语义完整的 `Q_task`，必须如实报告 PDMS 的 safety double-count，而不是临时拼接新指标。R0 只根据 train-side geometry 冻结唯一公式，正式 2×2 不同时训练两个 CDT reward 版本。
 
+R0 候选审计在执行前固定为相同的不重叠区间：`L0/L1/L2/L3` 分别位于 `[0,1/7]`、`[2/7,3/7]`、`[4/7,5/7]`、`[6/7,1]`，即 `k(L)=2L/7`、`beta=1/7`。`R_PDMS` 使用 `q=clip(pdms,0,1)`；`R_task` 使用生产 PDMS 在移除 Collision、DAC、TTC 后的完整剩余项：
+
+\[
+Q_{task}=\frac{5\,ego\_progress+2\,history\_comfort}{7}.
+\]
+
+决策门槛预先固定为：若两项 task metric 对全部 valid rollout 均完整、finite 且位于 `[0,1]`，`R_task` 的 empirical cross-tier inversion/tie 为 0、within-tier quality inversion/tie 为 0，且 Random/TailMix 的 EffectiveGroupRate 均不低于对应 Raw-PDMS，则冻结 `R_task`；若仅 task metric 语义完整性失败才允许退回 `R_PDMS` 并显式报告 safety double-count；任一排序或 finite 技术门禁失败则关闭 R0，不启动训练。
+
 ### 5.6 公平比较不变量
 
 - 所有 GRPO run 从同一 SFT checkpoint hash 初始化；
@@ -602,8 +610,8 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 | 8 | `V3-D0S` | 生成 split、Master Index 和基础 manifests | 0 | `COMPLETE / RETRY2` |
 | 9 | `V3-D0A` | 生成/链接 image 与 metric cache | 0 | `COMPLETE` |
 | 10 | `V3-D0F` | 数据验收、hash 与 freeze | 0 | `COMPLETE / RETRY1` |
-| 11 | `V3-S1` | SFT shared rollout bank、Confirm 与 selector manifests | 1 | `CAPACITY_AUDIT_COMPLETE / QUOTAS_FROZEN / SELECT_READY` |
-| 12 | `V3-R0` | 四格 reward/advantage geometry 与 CDT reward freeze | 0 | `BLOCKED_BY_S1_CONFIRM_SELECT` |
+| 11 | `V3-S1` | SFT shared rollout bank、Confirm 与 selector manifests | 1 | `COMPLETE / SELECTORS_FROZEN` |
+| 12 | `V3-R0` | 四格 reward/advantage geometry 与 CDT reward freeze | 0 | `READY / CANDIDATES_PRE_REGISTERED` |
 | 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | `TBD` | `BLOCKED_BY_R0` |
 | 14 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `BLOCKED_BY_H0` |
 | 15 | `V3-E0-SFT` | 在冻结 V3 dev 上生成零更新锚点 | `TBD` | `BLOCKED_BY_M0` |
@@ -751,6 +759,19 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 产物路径：`experiments/dataset_v3_controlled_overlap/rollout_bank/v3_s1_stability_capacity_audit_20260829/`；
 - 状态：`COMPLETE / TAILMIX_QUOTAS_FROZEN / SELECT_READY`；
 - 下一唯一动作：在硬编码容量与 class×intent 矩阵门禁下生成 Random/TailMix 各 2,000-token manifest/parquet 和分布报告；随后执行 R0 CPU geometry。
+
+### 记录 V3-010：S1 Random/TailMix selector 冻结完成
+
+- 时间：2026-08-29 10:36:25–10:36:27（Asia/Shanghai）；
+- branch / source commit / source status：selector freeze source `33569a25da87c8db8b09cc71d5ee9894a46967bb`，source status 为空；
+- 实际数量：Random/TailMix 均为 2,000 unique tokens，均精确满足 straight/left/right=`1,333/434/233`；TailMix 为 severe/mixed/near/anchor=`578/68/7/1,347`；Random/TailMix 分别覆盖 944/897 个 logs，per-log max 为 6/7，均低于 cap 8；
+- 对比分布：token overlap 493，log overlap 806；intent JS divergence `0`、month `0.0033802894523274262`、log-name `0.20235151597661913`；SFT-seen Master 的 `map_location` 为空且无经审计的 train-side `route_type` 字段，因此 region/route-type 标记为 unavailable，未把 intent 重命名为 route type；该缺口留给 M0 判定弱分布门槛，不反向重选 selector；
+- 边界与 overlap：两个 selector 均为 Screen 的 25% 且 2,000/2,000 为预注册 SFT overlap；与 train_monitor、Dev、Final 的 token/log overlap 均为 0；没有读取 Dev/Final；
+- 关键 hash：Random/TailMix manifest=`1b2dd1fa05e6c46f08d6a65d15a02dc1c9c3762819597efba65a059ee84f54ed` / `8844ac3589dcdad5c36b6c26684ea038d6f319955c5c9045e1a41107947fa21e`；Random/TailMix parquet=`24f55669474206ce1fa0c051ec8a0e40b25b5244ce7296370a7040a31f6a7537` / `fc29439921be16ac81e0f6a3d8274de69ae03b4a46ecf5c820e5e9fc11f0a339`；membership/report=`e350b7769b1c3d1973b9749a0d2d5abd587b998a4ab4e1de80e42b700b275342` / `b44616c8893e83e9c7d7f17bfd3ac2fbad66e9957e6f2a108247895dbd413425`；
+- 技术结果：input/result hash 全部复验，manifest 各 2,000 行，source clean，证据目录约 1.9 MiB，数据盘仍约 64 GiB 可用；
+- 产物路径：`experiments/dataset_v3_controlled_overlap/selector_freeze/v3_s1_selector_freeze_20260829/`；
+- 状态：`COMPLETE / S1_SELECTORS_FROZEN`；
+- 下一唯一动作：按第 5.5 节预注册的 `Raw-PDMS / R_PDMS / R_task` 公式执行 R0 CPU geometry；在 R0 决策前不实现正式 CDT reward 入口或启动训练。
 
 ## 9. 结论边界
 
