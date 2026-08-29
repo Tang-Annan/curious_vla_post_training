@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`S1_COMPLETE / SELECTORS_FROZEN / R0_COMPLETE / H0_COMPLETE / M0_COMPLETE / E0_COMPLETE / RR_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix 各 2,000-token manifest/parquet、唯一 CDT `R_task`、正式 H0 训练配置、M0 评价/晋级协议及 416-scene SFT Dev anchor 均已冻结并验收，尚未启动正式四格 optimizer training 或访问 Final。
+> 当前状态：`S1_COMPLETE / R0_COMPLETE / H0_COMPLETE / M0_COMPLETE / E0_COMPLETE / RR_COMPLETE_GATE_CLOSED / TC_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix manifests、CDT `R_task`、正式训练配置、M0 协议及 SFT Dev anchor 均已冻结；RR discovery 已完成但 `RR-SFT` Tail gain 未达到晋级阈值，不补 RR seeds，正式矩阵继续执行 TC，Final 仍未访问。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -341,10 +341,10 @@ Random、TailMix 和后续 selector 共用同一份资产。不得按 selector �
 | ID | Selector | Reward | 主要作用 | 当前状态 |
 | --- | --- | --- | --- | --- |
 | `V3-E0-SFT` | 无训练 | 无 | 零更新锚点 | `COMPLETE / BASELINE_FROZEN` |
-| `V3-RR` | Random | Raw-PDMS | primary GRPO baseline | `READY` |
-| `V3-TR` | TailMix | Raw-PDMS | selector 主效应 | `BLOCKED_BY_E0` |
-| `V3-RC` | Random | CDT scalar reward | reward 主效应 | `BLOCKED_BY_E0` |
-| `V3-TC` | TailMix | CDT scalar reward | selector × reward 协同 | `BLOCKED_BY_E0` |
+| `V3-RR` | Random | Raw-PDMS | primary GRPO baseline | `COMPLETE / DISCOVERY_GATE_CLOSED` |
+| `V3-TR` | TailMix | Raw-PDMS | selector 主效应 | `BLOCKED_BY_PRIORITY` |
+| `V3-RC` | Random | CDT scalar reward | reward 主效应 | `BLOCKED_BY_PRIORITY` |
+| `V3-TC` | TailMix | CDT scalar reward | selector × reward 协同 | `READY` |
 
 直接 contrast：
 
@@ -615,7 +615,7 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 | 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | 1 | `COMPLETE / CONFIG_FROZEN` |
 | 14 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `COMPLETE / PROTOCOL_FROZEN` |
 | 15 | `V3-E0-SFT` | 在冻结 V3 dev 上生成零更新锚点 | 1 | `COMPLETE / BASELINE_FROZEN` |
-| 16 | `V3-RR/TC/TR/RC` | 按 `RR → TC → TR → RC` 执行最小 2×2 discovery，并按门控补齐 matched-seed 确认 | 1 | `RR_READY / TC_TR_RC_BLOCKED_BY_PRIORITY` |
+| 16 | `V3-RR/TC/TR/RC` | 按 `RR → TC → TR → RC` 执行最小 2×2 discovery，并按门控补齐 matched-seed 确认 | 1 | `RR_COMPLETE_GATE_CLOSED / TC_READY` |
 
 不增加与当前主问题无关的算法分支。数据制作完成前的唯一执行路线为 `A0 → B0 → B1 → S0 → D0I → D0R-1 → D0R-2 → D0S → D0A → D0F`。
 
@@ -839,6 +839,20 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 产物路径：`experiments/dataset_v3_controlled_overlap/dev_evaluation/v3_e0_sft_dev_seed20260827/`；Dev access record 为 `experiments/dataset_v3_controlled_overlap/access/dev/v3_e0_sft_dev_seed20260827.json` 且 `final_accessed=false`；没有生成 Final access record；
 - 状态：`COMPLETE / E0_BASELINE_FROZEN / RR_READY`；
 - 下一唯一动作：按 M0 priority 以 discovery seed `20260827` 执行 `V3-RR` 2,000 groups / 8,000 queries / 500 updates，完成后在同一 Dev 416 scenes 上生成 paired contrast `RR-SFT`。
+
+### 记录 V3-016：RR discovery 训练、Dev paired gate 与空间闭环
+
+- 时间：训练 2026-08-29 23:20:48 至 2026-08-30 06:56:46（Asia/Shanghai），墙钟 7 小时 35 分 58 秒；成功 Dev retry 12 分 59 秒；
+- branch / source commit / source status：训练 source=`fafda8a771753653a098582b15cce7b17f603037`；Dev model-only loader fix/retry source=`59c59f4bdc7fa03397c873476acdc682dc3fd119`；远端 36 项 Dataset V3 tests 通过，执行前后 source clean；
+- 训练输入与动作：`V3-RR`、Random selector、Raw-PDMS、seed=`20260827`，严格使用 M0/H0 冻结的 LR `1e-6`、standard GRPO、`G=4`、4 groups/update、500 updates、2,000 groups / 8,000 queries、PPO epoch 1、rank-8 attention-only LoRA、KL `0.01/low_var_kl`；
+- 技术结果：`COMPLETE/exit_code=0`，training report `COMPLETE`、resolved-config checks 全 true；train=8,000 rows / 2,000 unique tokens / 每 token 4，monitor=1,536 rows / 256 unique / steps `0/100/200/300/400/500` 各 256；train parse=`0.999375`（5 invalid）、monitor parse=`1`，clip=0、non-finite=0；峰值显存 21,266 MiB；
+- 训练侧证据：training reward mean/std=`0.9084263/0.1894531`；tier L0/L1/L2/L3/invalid=`32/259/35/7669/5`；EffectiveGroupRate=`0.712`、exact-zero=`0.288`、low-nonzero=`0.551`、mixed-tier=`0.0945`；monitor Raw-PDMS step 0→500=`0.941023→0.933292`，各 checkpoint parse=1、clip=0；actor KL mean=`0.0001253`，clipfrac higher/lower=0；
+- Dev retry 记录：首次 `v3_rr_random_raw_g4_b4_seed20260827_dev` 在 0 rollout 时 `FAILED/exit_code=1`，原因是 inference loader 对 model-only checkpoint 错误请求不存在的 optimizer state；保留失败日志和 access record。最小修复仅令 `main_adas` 调用 `load_model_only=True`，训练 resume 默认行为不变；retry1 成功，416/416、Natural 210/Tail 206、parse=1、clip=0、invalid/non-finite=0，且 `final_accessed=false`；
+- 科学结果：RR Natural PDMS/PDMS-scaled=`0.8045766095/0.7931188413`；Tail PDMS=`0.7334577835`，StrictClear=`154/206=0.7475728155`。相对 SFT 的 paired point delta：Natural PDMS-scaled=`+0.0048060315`，Tail StrictClear=`+0.0048543689`；20,000 次 log-cluster bootstrap CI 分别为 `[-0.0140037024,+0.0182221628]` 与 `[-0.0117647059,+0.0220994475]`；Natural point/CI、Tail CI-upper 与 safety-component gates 均通过，但 Tail point `<+0.01`，机械状态=`CLOSED_BY_DISCOVERY_GATE`，不补 RR 的 seeds `20260828/20260829`；完整 2×2 仍继续 TC；
+- 关键 hash：RR scene metrics=`4e3eaf156393ccfb804bad8a119dfa2e8f3abf05c296c6f5d708598ac5945690`，paired comparison=`fa489e2a30e46cf7ef297df2cf79b210170b357cf2b00873227929eb5ba2e727`，LoRA adapter=`7836880df0b5b36de80f05fa133136df875218720bfef74c5024e325ebe7132e`；
+- 空间闭环：在训练、retry1 Dev、paired comparison、LoRA 与结果 hashes 全部验证后，删除 `formal_runs/v3_rr_random_raw_g4_b4_seed20260827/checkpoints/global_step_500/actor/model_world_size_1_rank_0.pt`，大小 `8,144,550,392` bytes，删除 epoch=`1788047158`；删除不可恢复，LoRA/曲线/rollouts/reports/失败证据均保留；删除后可用 `67,120,177,152` bytes；
+- 状态：`COMPLETE / RR_DISCOVERY_GATE_CLOSED / TC_READY / FINAL_UNACCESSED`；
+- 下一唯一动作：按 priority 执行 `V3-TC` discovery seed `20260827`，完成后以 RR 同 seed Dev rows 作为 paired baseline 计算 `TC-RR`。
 
 ## 9. 结论边界
 
