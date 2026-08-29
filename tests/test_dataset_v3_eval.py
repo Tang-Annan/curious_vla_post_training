@@ -87,5 +87,8 @@ def test_dev_eval_requires_exact_unseen_coverage_and_summarizes_tail(tmp_path: P
 def test_adas_runner_propagates_evaluation_evidence_phase() -> None:
     root = Path(__file__).parents[1]
     source = (root / "EasyR1/verl/trainer/main_adas.py").read_text(encoding="utf-8")
+    checkpoint = (root / "EasyR1/verl/utils/checkpoint/fsdp_checkpoint_manager.py").read_text(encoding="utf-8")
     assert 'os.environ.get("EVIDENCE_PHASE")' in source
     assert 'batch.non_tensor_batch["evidence_phase"]' in source
+    assert "actor_wg.load_checkpoint(actor_path, load_model_only=True)" in source
+    assert "set_model_state_dict(self.model, model_state_dict" in checkpoint

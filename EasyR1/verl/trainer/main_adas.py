@@ -90,7 +90,7 @@ class AdasRunner:
         if load_path is not None:
             actor_path = os.path.join(load_path, "actor")
             print(f"Loading checkpoint: {actor_path}")
-            actor_wg.load_checkpoint(actor_path)
+            actor_wg.load_checkpoint(actor_path, load_model_only=True)
 
         # --- Reward function ---
         RemoteRewardManager = ray.remote(AutoRewardManager).options(num_cpus=config.worker.reward.num_cpus)

@@ -26,6 +26,7 @@ from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     get_model_state_dict,
     get_state_dict,
+    set_model_state_dict,
     set_state_dict,
 )
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -58,7 +59,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
     ):
         super().__init__(model, optimizer, lr_scheduler, processing_class)
 
-    def load_checkpoint(self, path: Optional[str] = None):
+    def load_checkpoint(self, path: Optional[str] = None, load_model_only: bool = False):
         if path is None:
             return
 
@@ -67,13 +68,16 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         optim_path = os.path.join(path, f"optim_world_size_{self.world_size}_rank_{self.rank}.pt")
         extra_path = os.path.join(path, f"extra_state_world_size_{self.world_size}_rank_{self.rank}.pt")
         print(f"[rank-{self.rank}]: Loading model from {os.path.abspath(model_path)}.")
+        model_state_dict = torch.load(model_path, weights_only=False)
+        state_dict_options = StateDictOptions(cpu_offload=True)
+        if load_model_only:
+            set_model_state_dict(self.model, model_state_dict, options=state_dict_options)
+            return
+
         print(f"[rank-{self.rank}]: Loading optimizer from {os.path.abspath(optim_path)}.")
         print(f"[rank-{self.rank}]: Loading extra_state from {os.path.abspath(extra_path)}.")
-        model_state_dict = torch.load(model_path, weights_only=False)
         optim_state_dict = torch.load(optim_path, weights_only=False)
         extra_state_dict = torch.load(extra_path, weights_only=False)
-
-        state_dict_options = StateDictOptions(cpu_offload=True)
         set_state_dict(
             model=self.model,
             optimizers=self.optimizer,
