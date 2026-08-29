@@ -14,6 +14,7 @@ from verl.utils.reward_score.navsim.helper import (
     get_trajectory_parser,
 )
 from verl.utils.reward_score.navsim.pdms_logger import BatchJsonlLogger
+from verl.utils.reward_score.navsim.cdt_scalar_reward import cdt_task_reward, raw_pdms_reward
 
 import logging
 from datetime import datetime
@@ -157,9 +158,11 @@ def format_reward(parsed):
     return score
 
 
-def compute_score_fast(reward_inputs: List[Dict[str, Any]], format_weight: float = 0.1) -> List[Dict[str, float]]:
+def _compute_scores(reward_inputs: List[Dict[str, Any]], reward_mode: str) -> List[Dict[str, float]]:
     if not isinstance(reward_inputs, list):
         raise ValueError("Please use `reward_type=batch` for pdms reward function.")
+    if reward_mode not in {"scaled_pdms", "raw_pdms", "cdt_task"}:
+        raise ValueError(f"Unknown reward mode: {reward_mode}")
 
     parse_fn = get_trajectory_parser()
     
@@ -184,6 +187,12 @@ def compute_score_fast(reward_inputs: List[Dict[str, Any]], format_weight: float
             pdms = 0.0
         if scaled_pdms is None:
             scaled_pdms = 0.0
+        if reward_mode == "scaled_pdms":
+            training_reward, cdt_tier = scaled_pdms, None
+        elif reward_mode == "raw_pdms":
+            training_reward, cdt_tier = raw_pdms_reward(metrics), None
+        else:
+            training_reward, cdt_tier = cdt_task_reward(parsed_ok, metrics)
             
         save_dict = {}
         save_dict['poses'] = poses
@@ -195,15 +204,18 @@ def compute_score_fast(reward_inputs: List[Dict[str, Any]], format_weight: float
         save_dict["raw_response"] = response
         save_dict["response_chars"] = len(response)
         save_dict["response_length"] = int(reward_input["response_length"])
+        save_dict["reward_mode"] = reward_mode
+        save_dict["cdt_tier"] = cdt_tier
+        save_dict["training_reward"] = training_reward
         save_dict.update(metrics)
         # save_dict["overall_score"] =(1 - format_weight) * pdms + format_weight * format_score
-        save_dict["overall_score"] = scaled_pdms
+        save_dict["overall_score"] = training_reward
         log_to_jsonl(save_dict, log_file_path)
         # batch_logger.write(save_dict)
         
         return {
             # "overall": (1 - format_weight) * pdms + format_weight * format_score,
-            "overall": scaled_pdms,
+            "overall": training_reward,
             "format": format_score,
             "accuracy": scaled_pdms,
             "pdms": pdms
@@ -229,3 +241,15 @@ def compute_score_fast(reward_inputs: List[Dict[str, Any]], format_weight: float
                 print(f"Error processing input {idx}: {str(e)}")
     
     return scores
+
+
+def compute_score_fast(reward_inputs: List[Dict[str, Any]], format_weight: float = 0.1) -> List[Dict[str, float]]:
+    return _compute_scores(reward_inputs, "scaled_pdms")
+
+
+def compute_score_raw_pdms(reward_inputs: List[Dict[str, Any]], format_weight: float = 0.1) -> List[Dict[str, float]]:
+    return _compute_scores(reward_inputs, "raw_pdms")
+
+
+def compute_score_cdt_task(reward_inputs: List[Dict[str, Any]], format_weight: float = 0.1) -> List[Dict[str, float]]:
+    return _compute_scores(reward_inputs, "cdt_task")
