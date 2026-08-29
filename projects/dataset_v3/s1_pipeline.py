@@ -27,6 +27,20 @@ METRIC_FIELDS = (
     "pdms_scaled",
 )
 TIERS = ("L0", "L1", "L2", "L3")
+INTENTS = ("straight", "left", "right")
+STABILITY_CATEGORIES = ("stable_severe", "stable_mixed_recoverable", "stable_near_risk", "random_anchor")
+FROZEN_TAILMIX_QUOTAS = {
+    "stable_severe": {"straight": 258, "left": 159, "right": 161},
+    "stable_mixed_recoverable": {"straight": 29, "left": 35, "right": 4},
+    "stable_near_risk": {"straight": 1, "left": 6, "right": 0},
+    "random_anchor": {"straight": 1045, "left": 234, "right": 68},
+}
+FROZEN_STABILITY_CAPACITY = {
+    "stable_severe": 578,
+    "stable_mixed_recoverable": 68,
+    "stable_near_risk": 7,
+    "random_anchor": 7347,
+}
 
 
 def sha256_file(path: Path) -> str:
@@ -479,6 +493,192 @@ def audit_stability(args: argparse.Namespace) -> None:
     (args.output_dir / "COMPLETE").touch()
 
 
+def select_tailmix_tokens(
+    rows: list[dict[str, str]],
+    quotas: dict[str, dict[str, int]],
+    seed: int,
+) -> list[str]:
+    selected = []
+    for category in STABILITY_CATEGORIES:
+        for intent in INTENTS:
+            quota = quotas[category][intent]
+            candidates = sorted(
+                (
+                    row
+                    for row in rows
+                    if row["category"] == category and row["intent"] == intent
+                ),
+                key=lambda row: stable_key(seed, f"tailmix-{category}-{intent}", row["token"]),
+            )
+            if len(candidates) < quota:
+                raise ValueError(
+                    f"Insufficient {category}/{intent} capacity: {len(candidates)} < {quota}"
+                )
+            selected.extend(row["token"] for row in candidates[:quota])
+    if len(selected) != len(set(selected)):
+        raise ValueError("TailMix selection contains duplicate tokens")
+    return sorted(selected, key=lambda token: stable_key(seed, "tailmix-order", token))
+
+
+def jensen_shannon_divergence(left: Counter[str], right: Counter[str]) -> float:
+    keys = set(left) | set(right)
+    left_total = sum(left.values())
+    right_total = sum(right.values())
+    if not left_total or not right_total:
+        raise ValueError("Cannot compare an empty distribution")
+    divergence = 0.0
+    for key in keys:
+        p = left[key] / left_total
+        q = right[key] / right_total
+        midpoint = (p + q) / 2
+        if p:
+            divergence += 0.5 * p * math.log2(p / midpoint)
+        if q:
+            divergence += 0.5 * q * math.log2(q / midpoint)
+    return divergence
+
+
+def _count_quantiles(counts: Counter[str]) -> dict[str, float]:
+    values = sorted(counts.values())
+    return {
+        "unique": len(values),
+        "max": max(values),
+        **_quantiles([float(value) for value in values]),
+    }
+
+
+def build_selectors(args: argparse.Namespace) -> None:
+    if args.output_dir.exists():
+        raise FileExistsError(f"Output directory already exists: {args.output_dir}")
+    with args.stability_capacity.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    screen_tokens = [row["token"] for row in rows]
+    if len(screen_tokens) != 8000 or len(set(screen_tokens)) != 8000:
+        raise ValueError("Stability capacity is not the frozen 8,000-token Screen")
+    observed_capacity = Counter(row["category"] for row in rows)
+    if dict(observed_capacity) != FROZEN_STABILITY_CAPACITY:
+        raise ValueError(f"Stability capacity drifted: {dict(observed_capacity)}")
+    with args.master_index.open(encoding="utf-8-sig", newline="") as handle:
+        master = {row["token"]: row for row in csv.DictReader(handle)}
+    if any(master[token]["split"] != "grpo_screen" for token in screen_tokens):
+        raise ValueError("Selector input escaped the frozen grpo_screen split")
+    if any(master[token]["source_universe"] != "sft_seen" for token in screen_tokens):
+        raise ValueError("Selector input escaped the SFT-seen universe")
+
+    random_tokens = read_manifest(args.random_manifest)
+    if len(random_tokens) != 2000 or not set(random_tokens) <= set(screen_tokens):
+        raise ValueError("Random manifest is not a 2,000-token Screen subset")
+    tailmix_tokens = select_tailmix_tokens(rows, FROZEN_TAILMIX_QUOTAS, args.seed)
+    if len(tailmix_tokens) != 2000:
+        raise ValueError("TailMix manifest is not 2,000 tokens")
+
+    row_by_token = {row["token"]: row for row in rows}
+    frozen_intent_quota = {"straight": 1333, "left": 434, "right": 233}
+    random_intents = Counter(master[token]["intent"] for token in random_tokens)
+    tailmix_intents = Counter(master[token]["intent"] for token in tailmix_tokens)
+    if dict(random_intents) != frozen_intent_quota or dict(tailmix_intents) != frozen_intent_quota:
+        raise ValueError("Random/TailMix intent quota mismatch")
+    random_logs = Counter(master[token]["log_name"] for token in random_tokens)
+    tailmix_logs = Counter(master[token]["log_name"] for token in tailmix_tokens)
+    if max(random_logs.values()) > 8 or max(tailmix_logs.values()) > 8:
+        raise ValueError("Selector per-log cap exceeds 8")
+    selected_categories = Counter(row_by_token[token]["category"] for token in tailmix_tokens)
+    frozen_category_quota = {
+        category: sum(FROZEN_TAILMIX_QUOTAS[category].values()) for category in STABILITY_CATEGORIES
+    }
+    if dict(selected_categories) != frozen_category_quota:
+        raise ValueError("TailMix category quota mismatch")
+
+    table = pq.read_table(args.screen_parquet)
+    parquet_tokens = [str(answer["token"]) for answer in table.column("answer").to_pylist()]
+    if parquet_tokens != screen_tokens:
+        raise ValueError("Screen parquet order does not match stability capacity")
+    index_by_token = {token: index for index, token in enumerate(parquet_tokens)}
+    args.output_dir.mkdir(parents=True)
+    random_output = args.output_dir / "random_train_2000.txt"
+    random_output.write_bytes(args.random_manifest.read_bytes())
+    tailmix_output = args.output_dir / "tailmix_train_2000.txt"
+    tailmix_output.write_text("".join(f"{token}\n" for token in tailmix_tokens), encoding="utf-8")
+    pq.write_table(
+        table.take(pa.array([index_by_token[token] for token in random_tokens])),
+        args.output_dir / "random_train_2000.parquet",
+    )
+    pq.write_table(
+        table.take(pa.array([index_by_token[token] for token in tailmix_tokens])),
+        args.output_dir / "tailmix_train_2000.parquet",
+    )
+
+    random_token_set = set(random_tokens)
+    tailmix_token_set = set(tailmix_tokens)
+    union_tokens = sorted(random_token_set | tailmix_token_set)
+    with (args.output_dir / "selector_membership.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=("token", "log_name", "intent", "category", "random", "tailmix"),
+        )
+        writer.writeheader()
+        for token in union_tokens:
+            writer.writerow(
+                {
+                    "token": token,
+                    "log_name": master[token]["log_name"],
+                    "intent": master[token]["intent"],
+                    "category": row_by_token[token]["category"],
+                    "random": int(token in random_token_set),
+                    "tailmix": int(token in tailmix_token_set),
+                }
+            )
+
+    def distribution(tokens: list[str], field: str) -> Counter[str]:
+        return Counter(master[token][field] for token in tokens)
+
+    report = {
+        "seed": args.seed,
+        "screen_tokens": len(screen_tokens),
+        "tokens_per_selector": 2000,
+        "screen_to_selector_rate": 0.25,
+        "intent_quota": frozen_intent_quota,
+        "tailmix_class_intent_quota": FROZEN_TAILMIX_QUOTAS,
+        "tailmix_category_counts": dict(selected_categories),
+        "tailmix_policy": "retain every dual-block stable severe/mixed-recoverable/near-risk token; fill the exact intent remainder with stable-hash random anchors",
+        "shortage_policy": "no duplication, no upsampling, no category relaxation; all stable capacity is exhausted and only random anchors fill the remainder",
+        "random_unique_logs": len(random_logs),
+        "tailmix_unique_logs": len(tailmix_logs),
+        "random_per_log": _count_quantiles(random_logs),
+        "tailmix_per_log": _count_quantiles(tailmix_logs),
+        "random_tailmix_token_overlap": len(random_token_set & tailmix_token_set),
+        "random_tailmix_log_overlap": len(set(random_logs) & set(tailmix_logs)),
+        "distribution_js_divergence": {
+            field: jensen_shannon_divergence(distribution(random_tokens, field), distribution(tailmix_tokens, field))
+            for field in ("intent", "month", "log_name")
+        },
+        "distribution_field_availability": {
+            "intent": "available; frozen matched quota",
+            "month": "available from log_name",
+            "log_name": "available",
+            "region": "unavailable: map_location is blank for SFT-seen Master rows",
+            "route_type": "unavailable: no audited train-side route_type field; intent is reported separately and is not relabeled",
+        },
+        "random_manifest_sha256": sha256_file(random_output),
+        "tailmix_manifest_sha256": sha256_file(tailmix_output),
+        "stability_capacity_sha256": sha256_file(args.stability_capacity),
+        "stability_report_sha256": sha256_file(args.stability_report),
+        "master_index_sha256": sha256_file(args.master_index),
+        "screen_parquet_sha256": sha256_file(args.screen_parquet),
+        "train_monitor_overlap": 0,
+        "dev_overlap": 0,
+        "final_overlap": 0,
+        "sft_overlap_tokens_per_selector": 2000,
+        "dev_accessed": False,
+        "final_accessed": False,
+    }
+    (args.output_dir / "selector_freeze_report.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (args.output_dir / "exit_code").write_text("0\n", encoding="utf-8")
+    (args.output_dir / "COMPLETE").touch()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
@@ -519,6 +719,16 @@ def build_parser() -> argparse.ArgumentParser:
     stability.add_argument("--master-index", type=Path, required=True)
     stability.add_argument("--output-dir", type=Path, required=True)
     stability.set_defaults(function=audit_stability)
+
+    selectors = commands.add_parser("build-selectors")
+    selectors.add_argument("--stability-capacity", type=Path, required=True)
+    selectors.add_argument("--stability-report", type=Path, required=True)
+    selectors.add_argument("--screen-parquet", type=Path, required=True)
+    selectors.add_argument("--random-manifest", type=Path, required=True)
+    selectors.add_argument("--master-index", type=Path, required=True)
+    selectors.add_argument("--output-dir", type=Path, required=True)
+    selectors.add_argument("--seed", type=int, default=20260827)
+    selectors.set_defaults(function=build_selectors)
     return parser
 
 

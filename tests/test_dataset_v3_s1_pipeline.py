@@ -1,3 +1,5 @@
+from collections import Counter
+
 import pytest
 
 from projects.dataset_v3.s1_pipeline import (
@@ -5,8 +7,10 @@ from projects.dataset_v3.s1_pipeline import (
     candidate_tier,
     classify_stability,
     group_rows,
+    jensen_shannon_divergence,
     replay_group,
     select_candidate_tokens,
+    select_tailmix_tokens,
 )
 
 
@@ -141,3 +145,23 @@ def test_block_features_requires_risk_and_clear_for_recoverable_mix() -> None:
     assert features["near_risk_count"] == 1
     assert features["strict_clear_count"] == 3
     assert features["mixed_recoverable"] == 1
+
+
+def test_tailmix_selection_obeys_class_intent_quota() -> None:
+    rows = [
+        {"token": f"{category}-{intent}-{index}", "category": category, "intent": intent}
+        for category in ("stable_severe", "stable_mixed_recoverable", "stable_near_risk", "random_anchor")
+        for intent in ("straight", "left", "right")
+        for index in range(2)
+    ]
+    quotas = {
+        category: {intent: 1 for intent in ("straight", "left", "right")}
+        for category in ("stable_severe", "stable_mixed_recoverable", "stable_near_risk", "random_anchor")
+    }
+    selected = select_tailmix_tokens(rows, quotas, seed=3)
+    assert len(selected) == 12
+    assert len(set(selected)) == 12
+
+
+def test_js_divergence_is_zero_for_equal_distributions() -> None:
+    assert jensen_shannon_divergence(Counter(a=2, b=1), Counter(a=4, b=2)) == pytest.approx(0.0)

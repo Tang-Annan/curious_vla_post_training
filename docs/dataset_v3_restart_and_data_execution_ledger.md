@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`S1_CONFIRM_COMPLETE / STABILITY_CLASSIFIER_FROZEN / CAPACITY_AUDIT_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；9,091/9,091 图像与 metric cache、Dev/Final 分配、模型无关 Tail 几何和训练规模均已冻结，8,000-scene Screen、908-scene Confirm 及两个 block 的技术验收已完成，稳定类别判定规则已在容量审计前冻结，尚未生成 TailMix optimizer manifest、启动 optimizer training 或访问 Final。
+> 当前状态：`S1_CAPACITY_AUDIT_COMPLETE / TAILMIX_QUOTAS_FROZEN / SELECT_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；9,091/9,091 图像与 metric cache、Dev/Final 分配、模型无关 Tail 几何和训练规模均已冻结，8,000-scene Screen、908-scene Confirm、稳定类别容量审计和 TailMix class×intent 配额均已在 Select 前冻结，尚未生成 TailMix optimizer manifest、启动 optimizer training 或访问 Final。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -410,7 +410,17 @@ Confirm 固定为 Screen seed `20260827` 与 Confirm seed `20260828` 两个独�
 3. `stable_near_risk`：两个 block 均至少有一个 L2；排除前两类；
 4. `random_anchor`：其余冻结 Screen tokens。
 
-四类精确比例和不足类别处理规则仍为 `TBD_AFTER_S1_CAPACITY_AUDIT`：只能根据上述规则产生的 train-side 容量在 Select 前一次性冻结；不得读取 dev/final 或根据下游训练结果修改。
+容量审计后冻结 TailMix class×intent 精确配额如下；列顺序为 straight/left/right：
+
+| 类别 | straight | left | right | 合计 |
+| --- | ---: | ---: | ---: | ---: |
+| `stable_severe` | 258 | 159 | 161 | 578 |
+| `stable_mixed_recoverable` | 29 | 35 | 4 | 68 |
+| `stable_near_risk` | 1 | 6 | 0 | 7 |
+| `random_anchor` | 1,045 | 234 | 68 | 1,347 |
+| 合计 | 1,333 | 434 | 233 | 2,000 |
+
+不足类别处理规则冻结为：保留全部 653 个双 block 稳定事件，不重复、不上采样、不放宽类别定义；只用按 seed `20260827` 稳定哈希选择的 `random_anchor` 补足各 intent 缺口。若任一稳定类别容量与审计值不同，Select 硬失败而非重新分配。
 
 ### 5.5 Reward
 
@@ -592,7 +602,7 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 | 8 | `V3-D0S` | 生成 split、Master Index 和基础 manifests | 0 | `COMPLETE / RETRY2` |
 | 9 | `V3-D0A` | 生成/链接 image 与 metric cache | 0 | `COMPLETE` |
 | 10 | `V3-D0F` | 数据验收、hash 与 freeze | 0 | `COMPLETE / RETRY1` |
-| 11 | `V3-S1` | SFT shared rollout bank、Confirm 与 selector manifests | 1 | `CONFIRM_COMPLETE / CLASSIFIER_FROZEN / CAPACITY_AUDIT_READY` |
+| 11 | `V3-S1` | SFT shared rollout bank、Confirm 与 selector manifests | 1 | `CAPACITY_AUDIT_COMPLETE / QUOTAS_FROZEN / SELECT_READY` |
 | 12 | `V3-R0` | 四格 reward/advantage geometry 与 CDT reward freeze | 0 | `BLOCKED_BY_S1_CONFIRM_SELECT` |
 | 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | `TBD` | `BLOCKED_BY_R0` |
 | 14 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `BLOCKED_BY_H0` |
@@ -728,6 +738,19 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 产物路径：`experiments/dataset_v3_controlled_overlap/rollout_bank/v3_s1_confirm908_g4_seed20260828/`；
 - 状态：`COMPLETE / STABILITY_CLASSIFIER_FROZEN`；
 - 下一唯一动作：只读取 Screen、Confirm、Candidate 与 train-side Master Index 执行稳定类别容量审计；据此在 Select 前冻结四类 × intent 精确配额和不足类别处理规则。
+
+### 记录 V3-009：稳定类别容量审计与 TailMix 配额冻结
+
+- 时间：2026-08-29 10:27:03–10:27:07（Asia/Shanghai）；
+- branch / source commit / source status：capacity audit source `0b5bbaecd1ebea8a02bce9fd6754410cbf29e7f6`，source status 为空；
+- 输入与 hash：仅使用 Screen enriched rollouts、Confirm rollouts、Candidate manifest 与 train-side Master Index；Screen/Confirm rollout SHA-256 分别为 `6f9aefb8fb3124fd7db331c4d34e114e4c956c557d6542a53ab9db6ef0866277` / `db03e6131be43ee144b3f9c257cc38bed81092819d0f1544341683a3f046b8f9`；Master Index 为 `40b3a1fb4a9c12a7a4cce26497aa0058128c7370870477033a2a7e523a90280b`；
+- 容量结果：互斥类别为 `stable_severe=578`、`stable_mixed_recoverable=68`、`stable_near_risk=7`、`random_anchor=7,347`；对应 intent straight/left/right 容量分别为 `258/159/161`、`29/35/4`、`1/6/0`、`5,045/1,535/767`；稳定三类覆盖 653 tokens；
+- 配额冻结：保留全部 653 个稳定事件，anchor 精确补 `1,045/234/68`，最终四类×intent 矩阵见第 5.4 节；该方案精确得到 2,000 tokens 与总 intent `1,333/434/233`，不丢弃稳定事件，也不以重复/上采样伪造 near-risk 容量；
+- 技术结果：8,001-line capacity CSV（含 header）与 JSON report 均通过 input/result hash 复验；capacity CSV SHA-256 `ebb90ea58bc7e8605f00eaa85ab4247a8f6264b027deb176af2a5a89fe254f41`，report `7937480a27c4308e20aab589f52058172b56a81a98e574dce668b6aa7f735e3c`；
+- 科学边界：类别比例完全由预先冻结 classifier 的 train-side 容量决定；没有读取 Dev/Final，没有模型更新，没有按下游结果调节；
+- 产物路径：`experiments/dataset_v3_controlled_overlap/rollout_bank/v3_s1_stability_capacity_audit_20260829/`；
+- 状态：`COMPLETE / TAILMIX_QUOTAS_FROZEN / SELECT_READY`；
+- 下一唯一动作：在硬编码容量与 class×intent 矩阵门禁下生成 Random/TailMix 各 2,000-token manifest/parquet 和分布报告；随后执行 R0 CPU geometry。
 
 ## 9. 结论边界
 
