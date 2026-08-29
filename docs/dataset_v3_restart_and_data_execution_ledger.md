@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`S1_COMPLETE / SELECTORS_FROZEN / R0_CANDIDATE_GEOMETRY_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix 各 2,000-token manifest/parquet 已冻结并验收，当前只允许在共享 train-side bank 上执行 R0 CPU reward geometry，尚未启动 optimizer training 或访问 Final。
+> 当前状态：`S1_COMPLETE / SELECTORS_FROZEN / R0_COMPLETE / H0_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix 各 2,000-token manifest/parquet 与唯一 CDT `R_task` 公式均已冻结并验收，尚未启动正式四格 optimizer training 或访问 Final。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -445,7 +445,7 @@ CDT scalar reward 只保留以下结构性约束：
 R_{CDT}=k(L)+\beta q,\qquad k(L0)<k(L1)<k(L2)<k(L3)
 \]
 
-是否严格使用不重叠区间、`q` 使用 raw-PDMS 还是剔除安全项后的任务质量、`\beta` 和 tier 间距，全部记为 `TBD_AFTER_D0:CDT_REWARD`。冻结前只允许在 train-side Rollout Bank 做 CPU geometry replay，不使用 dev 调参。
+R0 已在 train-side Rollout Bank 完成 CPU geometry replay，并冻结严格不重叠区间、`Q_task` 质量项、`\beta=1/7` 与 tier 间距；没有使用 dev 调参。正式协议与证据见记录 V3-011。
 
 为避免 safety 重复计分，CPU replay 至少比较但不正式训练两种候选：
 
@@ -560,10 +560,10 @@ Tail Dev/Final 至少报告：
 | split 精确规模 | 118 unseen logs 的 intent、Tail 字段和事件去重容量 | `FROZEN: Dev 416 / Final 419 scenes` |
 | `TAIL_EVAL_ROUTE` | 模型无关场景/evaluator/cache 字段；必要时单独定义 SFT-challenge | `FROZEN: POLICY_INDEPENDENT_GT_ACTOR_PROXIMITY` |
 | Screen Pool 与 train manifest 规模 | 1,192 SFT-seen logs / 103,288 tokens 的受控容量和 rollout 成本 | `FROZEN: Screen 8,000 / Monitor 256 / each cell 2,000` |
-| TailMix 四类比例 | G4/G-confirm tier、headroom 与稳定性 | `TBD_AFTER_D0` |
-| selector 启动门槛 | Random 与 TailMix mixed-tier coverage | `TBD_AFTER_D0` |
-| CDT tier 是否沿用 V2 | 新 evaluator 字段和值域审计 | `TBD_AFTER_D0` |
-| CDT reward 区间和质量项 | train-only reward geometry | `TBD_AFTER_D0` |
+| TailMix 四类比例 | G4/G-confirm tier、headroom 与稳定性 | `FROZEN: 578/68/7/1,347` |
+| selector 启动门槛 | Random 与 TailMix mixed-tier coverage | `FROZEN: Random/TailMix 2,000-token manifests` |
+| CDT tier 是否沿用 V2 | 新 evaluator 字段和值域审计 | `FROZEN: canonical L0-L3, invalid separate` |
+| CDT reward 区间和质量项 | train-only reward geometry | `FROZEN: R_task=(2L+Q_task)/7` |
 | 主安全指标 | Tail Dev 事件数量和统计功效 | `TBD_AFTER_D0` |
 | Natural non-inferiority margin | 历史 evaluator 方差、D0F split 规模和预期实际容忍度；不读取 V3 treatment dev | `TBD_AFTER_D0` |
 | 训练步数和 train rollout `G` | manifest 规模、显存和 pilot 成本 | `TBD_AFTER_D0` |
@@ -611,8 +611,8 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 | 9 | `V3-D0A` | 生成/链接 image 与 metric cache | 0 | `COMPLETE` |
 | 10 | `V3-D0F` | 数据验收、hash 与 freeze | 0 | `COMPLETE / RETRY1` |
 | 11 | `V3-S1` | SFT shared rollout bank、Confirm 与 selector manifests | 1 | `COMPLETE / SELECTORS_FROZEN` |
-| 12 | `V3-R0` | 四格 reward/advantage geometry 与 CDT reward freeze | 0 | `READY / CANDIDATES_PRE_REGISTERED` |
-| 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | `TBD` | `BLOCKED_BY_R0` |
+| 12 | `V3-R0` | 四格 reward/advantage geometry 与 CDT reward freeze | 0 | `COMPLETE / R_TASK_FROZEN` |
+| 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | `TBD` | `READY` |
 | 14 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `BLOCKED_BY_H0` |
 | 15 | `V3-E0-SFT` | 在冻结 V3 dev 上生成零更新锚点 | `TBD` | `BLOCKED_BY_M0` |
 | 16 | `V3-RR/TC/TR/RC` | 按 `RR → TC → TR → RC` 执行最小 2×2 discovery，并按门控补齐 matched-seed 确认 | `TBD` | `BLOCKED_BY_E0` |
@@ -772,6 +772,21 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 产物路径：`experiments/dataset_v3_controlled_overlap/selector_freeze/v3_s1_selector_freeze_20260829/`；
 - 状态：`COMPLETE / S1_SELECTORS_FROZEN`；
 - 下一唯一动作：按第 5.5 节预注册的 `Raw-PDMS / R_PDMS / R_task` 公式执行 R0 CPU geometry；在 R0 决策前不实现正式 CDT reward 入口或启动训练。
+
+### 记录 V3-011：R0 reward geometry 与唯一 CDT reward 冻结
+
+- 时间：2026-08-29 10:52–11:02（Asia/Shanghai）；
+- branch / source commit / source status：候选 geometry retry1 source `62df3af48c29cec7cc67158e4ba3092ebbe14912`；正式协议 source `26d65d0d2e4c4a648a8e55a1636e4bb5f15c7974`；两者 source status 均为空；
+- 执行边界：只读取冻结的 8,000-group train-side shared bank 与 Random/TailMix manifests；逐 completion 比较 Raw-PDMS、`R_PDMS=(2L+pdms)/7`、`R_task=(2L+Q_task)/7`，其中 `Q_task=(5*ego_progress+2*history_comfort)/7`；没有 optimizer update，没有读取 Dev/Final；
+- 技术过程：首次候选 run 因脚本直接执行模块导致 `ModuleNotFoundError: projects`，按技术失败保留原目录；唯一修复为改用 `python -m projects.dataset_v3.r0_geometry`，retry1 在 3 秒内 `COMPLETE/exit_code=0`；正式 reward 入口在真实 EasyR1 环境及固定 `NAVSIM_STAT_PATH` 下导入成功，18 项本地/远端 focused tests 通过；
+- Random geometry：Raw/CDT-task EffectiveGroupRate=`0.7125/0.715`，exact-zero=`0.2875/0.285`，low-nonzero=`0.5495/0.6235`；CDT-task 的 cross-tier inversion/tie=`0/0`、within-tier inversion/tie=`0`；
+- TailMix geometry：Raw/CDT-task EffectiveGroupRate=`0.758/0.768`，exact-zero=`0.242/0.232`，low-nonzero=`0.39/0.4455`；CDT-task 的 cross-tier inversion/tie=`0/0`、within-tier inversion/tie=`0`；
+- 科学决策：两项 task metric 对 valid rollout 完整、finite 且值域通过；`R_task` 在两个 selector 上通过全部预注册排序与 EffectiveGroupRate 门槛，因此冻结为唯一 CDT scalar reward；不选 `R_PDMS`，避免将 Collision/DAC/TTC safety 语义在 tier 与连续项中重复计分；invalid 保持在 L0-L3 之外并取得技术零；
+- 生产入口：CDT 为 `navsim_reward_text.py:compute_score_cdt_task`，Raw control 为 `navsim_reward_text.py:compute_score_raw_pdms`；旧 `compute_score_fast` 继续返回 scaled-PDMS，只服务已完成的兼容路径，不作为 V3 Raw 正式对照；
+- 关键 hash：geometry group CSV=`6d22dad1262857a943f4025bb18f10538c671daef59f527194bff2b3525248cc`，geometry report=`58d5e3693201c26181c85153eddc8b507c2b2009223ba637febdc96d8386bdc9`，正式 reward protocol=`9b8ab3ab21d214406785af428ea761c5a5980c9c43049b30f2a991da68369eb7`；
+- 产物路径：`experiments/dataset_v3_controlled_overlap/reward_freeze/v3_r0_geometry_candidates_20260829{,_retry1}/` 与 `reward_freeze/v3_r0_cdt_task_freeze_20260829/`；
+- 状态：`COMPLETE / R_TASK_CDT_V3_FROZEN / H0_READY`；
+- 下一唯一动作：只用 Random-Raw 与 train-side `hparam_train/train_monitor` 执行 H0，先冻结 training-group budget 和 LR；R0 的高 low-nonzero rate 已触发在选定 LR 上追加 `grpo` vs `std_floor_grpo`，不得同时改 batch、LoRA 或 KL。
 
 ## 9. 结论边界
 
