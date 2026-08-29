@@ -13,6 +13,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+
 
 METRIC_FIELDS = (
     "no_at_fault_collisions",
@@ -238,6 +241,107 @@ def summarize_screen(args: argparse.Namespace) -> None:
     )
 
 
+def stable_key(seed: int, namespace: str, token: str) -> str:
+    return hashlib.sha256(f"{seed}:{namespace}:{token}".encode()).hexdigest()
+
+
+def select_candidate_tokens(
+    rows: list[dict[str, str]],
+    seed: int,
+    high_headroom_fraction: float = 0.10,
+    batch_size: int = 4,
+) -> tuple[list[str], dict[str, Any]]:
+    risk = {
+        row["token"]
+        for row in rows
+        if int(row["severe_count"]) + int(row["near_risk_count"]) > 0
+    }
+    high_headroom_count = math.ceil(len(rows) * high_headroom_fraction)
+    ranked = sorted(
+        rows,
+        key=lambda row: (-float(row["headroom"]), stable_key(seed, "candidate-headroom", row["token"])),
+    )
+    high_headroom = {row["token"] for row in ranked[:high_headroom_count]}
+    selected = risk | high_headroom
+    target_size = math.ceil(len(selected) / batch_size) * batch_size
+    if len(selected) < target_size:
+        for row in ranked:
+            selected.add(row["token"])
+            if len(selected) == target_size:
+                break
+    ordered = [row["token"] for row in rows if row["token"] in selected]
+    report = {
+        "screen_groups": len(rows),
+        "risk_groups": len(risk),
+        "high_headroom_fraction": high_headroom_fraction,
+        "high_headroom_groups": len(high_headroom),
+        "risk_high_headroom_overlap": len(risk & high_headroom),
+        "batch_size": batch_size,
+        "candidate_groups": len(ordered),
+        "batch_closure_additions": len(selected - (risk | high_headroom)),
+        "minimum_selected_headroom": min(float(row["headroom"]) for row in rows if row["token"] in selected),
+    }
+    return ordered, report
+
+
+def build_candidate(args: argparse.Namespace) -> None:
+    if args.output_dir.exists():
+        raise FileExistsError(f"Output directory already exists: {args.output_dir}")
+    with args.geometry.open(encoding="utf-8", newline="") as handle:
+        geometry = list(csv.DictReader(handle))
+    manifest_tokens = read_manifest(args.manifest)
+    if [row["token"] for row in geometry] != manifest_tokens:
+        raise ValueError("Geometry order does not match the screen manifest")
+
+    candidates, report = select_candidate_tokens(
+        geometry,
+        seed=args.seed,
+        high_headroom_fraction=args.high_headroom_fraction,
+        batch_size=args.batch_size,
+    )
+    args.output_dir.mkdir(parents=True)
+    candidate_manifest = args.output_dir / "candidate_908.txt"
+    candidate_manifest.write_text("".join(f"{token}\n" for token in candidates), encoding="utf-8")
+
+    table = pq.read_table(args.parquet)
+    parquet_tokens = [str(value["token"]) for value in table.column("answer").to_pylist()]
+    index_by_token = {token: index for index, token in enumerate(parquet_tokens)}
+    if set(index_by_token) != set(manifest_tokens):
+        raise ValueError("Screen parquet tokens do not match the manifest")
+    candidate_table = table.take(pa.array([index_by_token[token] for token in candidates]))
+    candidate_parquet = args.output_dir / "candidate_908.parquet"
+    pq.write_table(candidate_table, candidate_parquet)
+
+    with args.master_index.open(encoding="utf-8-sig", newline="") as handle:
+        master = {row["token"]: row for row in csv.DictReader(handle)}
+    logs = Counter(master[token]["log_name"] for token in candidates)
+    report.update(
+        {
+            "candidate_intent_counts": dict(sorted(Counter(master[token]["intent"] for token in candidates).items())),
+            "candidate_unique_logs": len(logs),
+            "candidate_max_per_log": max(logs.values()),
+            "candidate_rule": "all groups with any L0-L2 candidate tier UNION screen top-10% headroom; add next headroom rank only to close batch-of-4",
+            "confirm_protocol": {
+                "blocks": 2,
+                "screen_seed": 20260827,
+                "confirm_seed": 20260828,
+                "rollouts_per_block": 4,
+                "total_rollouts_per_candidate": 8,
+                "classification": "requires occurrence in both independent blocks; exact category ratios freeze after confirm capacity audit and before Select",
+            },
+            "geometry_sha256": sha256_file(args.geometry),
+            "screen_manifest_sha256": sha256_file(args.manifest),
+            "candidate_manifest_sha256": sha256_file(candidate_manifest),
+            "candidate_parquet_sha256": sha256_file(candidate_parquet),
+        }
+    )
+    (args.output_dir / "candidate_freeze_report.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (args.output_dir / "exit_code").write_text("0\n", encoding="utf-8")
+    (args.output_dir / "COMPLETE").touch()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
@@ -258,6 +362,17 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--manifest", type=Path, required=True)
     summarize.add_argument("--output-dir", type=Path, required=True)
     summarize.set_defaults(function=summarize_screen)
+
+    candidate = commands.add_parser("build-candidate")
+    candidate.add_argument("--geometry", type=Path, required=True)
+    candidate.add_argument("--manifest", type=Path, required=True)
+    candidate.add_argument("--parquet", type=Path, required=True)
+    candidate.add_argument("--master-index", type=Path, required=True)
+    candidate.add_argument("--output-dir", type=Path, required=True)
+    candidate.add_argument("--seed", type=int, default=20260827)
+    candidate.add_argument("--high-headroom-fraction", type=float, default=0.10)
+    candidate.add_argument("--batch-size", type=int, default=4)
+    candidate.set_defaults(function=build_candidate)
     return parser
 
 

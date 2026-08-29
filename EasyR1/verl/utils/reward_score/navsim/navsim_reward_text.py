@@ -70,6 +70,16 @@ headers = {"Content-Type": "application/json"}
 retries = 3
 timeout = 120
 
+SAVED_METRICS = (
+    "no_at_fault_collisions",
+    "drivable_area_compliance",
+    "ego_progress",
+    "time_to_collision_within_bound",
+    "history_comfort",
+    "pdms",
+    "pdms_scaled",
+)
+
 EXPECTED_FIELDS = {
     "critical_objects": dict,
     "explanation": str,
@@ -80,7 +90,7 @@ EXPECTED_FIELDS = {
 
 def simulator_reward(token: str, poses: list[list[float]], verbose: bool):
     if len(poses) != 8:
-        return 0.0, 0.0
+        return {field: 0.0 for field in SAVED_METRICS}
     
     payload = {
         "token": token,
@@ -95,14 +105,14 @@ def simulator_reward(token: str, poses: list[list[float]], verbose: bool):
                 resp = client.post(random.choice(url_pool), content=json.dumps(payload), headers=headers)
             if resp.status_code == 200:
                 data = resp.json()
-                pdms = data["pdms"]
-                scaled_pdms = data["pdms_scaled"]
-                return pdms, scaled_pdms
+                return {field: float(data[field]) for field in SAVED_METRICS}
             else:
                 logger.warning(f"[WARN] server error code: {resp.status_code}, try again {attempt}/{retries}")
         except httpx.HTTPError as e:
             print(f"[ERROR] request error {e}, after tries {attempt}/{retries}")
-            if attempt == retries: return 0.0, 0.0
+            if attempt == retries:
+                return {field: 0.0 for field in SAVED_METRICS}
+    return {field: 0.0 for field in SAVED_METRICS}
 
 def step_length_reward(indices, ground_truth):
     return int(len(indices) == len(ground_truth))
@@ -165,7 +175,9 @@ def compute_score_fast(reward_inputs: List[Dict[str, Any]], format_weight: float
         poses = denormalize(normalized_poses) if parsed_ok else []
         # print(f"Denormalized poses for token {token}: {poses}")
         
-        pdms, scaled_pdms = simulator_reward(token, poses, False)
+        metrics = simulator_reward(token, poses, False)
+        pdms = metrics["pdms"]
+        scaled_pdms = metrics["pdms_scaled"]
         # format_score = format_reward(parsed_dict)
         format_score = 1.0 # 格式奖励已经舍弃，不会参与计算
         if pdms is None:
@@ -182,6 +194,8 @@ def compute_score_fast(reward_inputs: List[Dict[str, Any]], format_weight: float
         save_dict["parsed_ok"] = parsed_ok
         save_dict["raw_response"] = response
         save_dict["response_chars"] = len(response)
+        save_dict["response_length"] = int(reward_input["response_length"])
+        save_dict.update(metrics)
         # save_dict["overall_score"] =(1 - format_weight) * pdms + format_weight * format_score
         save_dict["overall_score"] = scaled_pdms
         log_to_jsonl(save_dict, log_file_path)

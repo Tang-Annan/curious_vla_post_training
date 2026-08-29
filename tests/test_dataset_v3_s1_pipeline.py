@@ -1,8 +1,6 @@
-from pathlib import Path
-
 import pytest
 
-from projects.dataset_v3.s1_pipeline import candidate_tier, group_rows, replay_group
+from projects.dataset_v3.s1_pipeline import candidate_tier, group_rows, replay_group, select_candidate_tokens
 
 
 def rollout(token: str, parsed_ok: bool = True) -> dict:
@@ -82,3 +80,21 @@ def test_group_rows_requires_exact_manifest_coverage() -> None:
     assert set(group_rows(rows, ["a"])) == {"a"}
     with pytest.raises(ValueError, match="manifest"):
         group_rows(rows, ["b"])
+
+
+def test_candidate_selection_includes_risk_and_closes_batch() -> None:
+    rows = [
+        {
+            "token": f"token-{index}",
+            "severe_count": "1" if index == 11 else "0",
+            "near_risk_count": "0",
+            "headroom": str(index / 100),
+        }
+        for index in range(12)
+    ]
+
+    selected, report = select_candidate_tokens(rows, seed=7, high_headroom_fraction=0.10, batch_size=4)
+
+    assert "token-11" in selected
+    assert len(selected) == 4
+    assert report["batch_closure_additions"] == 2
