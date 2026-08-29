@@ -204,6 +204,9 @@ def _compute_scores(reward_inputs: List[Dict[str, Any]], reward_mode: str) -> Li
         save_dict["raw_response"] = response
         save_dict["response_chars"] = len(response)
         save_dict["response_length"] = int(reward_input["response_length"])
+        save_dict["evidence_phase"] = str(reward_input.get("evidence_phase", "train"))
+        evidence_step = reward_input.get("evidence_step")
+        save_dict["evidence_step"] = int(evidence_step) if evidence_step is not None else None
         save_dict["reward_mode"] = reward_mode
         save_dict["cdt_tier"] = cdt_tier
         save_dict["training_reward"] = training_reward
@@ -218,7 +221,15 @@ def _compute_scores(reward_inputs: List[Dict[str, Any]], reward_mode: str) -> Li
             "overall": training_reward,
             "format": format_score,
             "accuracy": scaled_pdms,
-            "pdms": pdms
+            "pdms": pdms,
+            "pdms_scaled": scaled_pdms,
+            "parsed_ok": float(parsed_ok),
+            "no_at_fault_collisions": metrics["no_at_fault_collisions"],
+            "drivable_area_compliance": metrics["drivable_area_compliance"],
+            "ego_progress": metrics["ego_progress"],
+            "time_to_collision_within_bound": metrics["time_to_collision_within_bound"],
+            "history_comfort": metrics["history_comfort"],
+            "response_length": float(reward_input["response_length"]),
         }
     
     # 多线程并发处理，保持结果顺序与输入一致

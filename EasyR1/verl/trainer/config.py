@@ -72,6 +72,8 @@ class AlgorithmConfig:
     """lambda value for ppo gae advantage estimator"""
     adv_estimator: str = "grpo"
     """advantage estimator, support `gae`, `grpo`, `reinforce_plus_plus`, `remax`, `rloo`"""
+    std_floor: float = 0.05
+    """minimum non-zero group std used by `std_floor_grpo`"""
     disable_kl: bool = False
     """disable reference model"""
     use_kl_loss: bool = False
@@ -118,6 +120,8 @@ class TrainerConfig:
     """critic warmup steps"""
     val_freq: int = -1
     """validation frequency, -1 means no validation"""
+    val_steps: Tuple[int, ...] = ()
+    """explicit processed-update checkpoints for validation"""
     val_before_train: bool = True
     """validate before training"""
     val_only: bool = False

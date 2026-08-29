@@ -134,7 +134,13 @@ def apply_kl_penalty(data: DataProto, kl_ctrl: KLController, kl_penalty="kl"):
     return data, metrics
 
 
-def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma: float = 1.0, lam: float = 1.0):
+def compute_advantage(
+    data: DataProto,
+    adv_estimator: AdvantageEstimator,
+    gamma: float = 1.0,
+    lam: float = 1.0,
+    std_floor: float = 0.05,
+):
     """Compute advantage estimates for policy optimization."""
     adv_inputs = {
         "token_level_rewards": data.batch["token_level_rewards"],
@@ -142,6 +148,7 @@ def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma:
         "index": data.non_tensor_batch["uid"],
         "gamma": gamma,
         "lam": lam,
+        "std_floor": std_floor,
     }
     if "values" in data.batch:
         adv_inputs["values"] = data.batch["values"]
@@ -246,6 +253,13 @@ class RayPPOTrainer:
 
         config.worker.actor.optim.training_steps = self.training_steps
         config.worker.critic.optim.training_steps = self.training_steps
+        invalid_val_steps = [
+            step
+            for step in config.trainer.val_steps
+            if step <= 0 or step > self.training_steps
+        ]
+        if invalid_val_steps or len(set(config.trainer.val_steps)) != len(config.trainer.val_steps):
+            raise ValueError(f"Invalid trainer.val_steps: {config.trainer.val_steps}")
         print(f"Total training steps: {self.training_steps}")
 
     def init_workers(self) -> None:
@@ -429,6 +443,8 @@ class RayPPOTrainer:
             # repeat to align with repeated responses in rollout
             test_batch = test_batch.repeat(repeat_times=repeat_times, interleave=True)
             test_batch = test_batch.union(test_output_gen_batch)
+            test_batch.non_tensor_batch["evidence_phase"] = np.full(len(test_batch), "train_monitor", dtype=object)
+            test_batch.non_tensor_batch["evidence_step"] = np.full(len(test_batch), self.global_step, dtype=object)
 
             # evaluate using reward_function
             reward_tensor, reward_metrics = ray.get(self.val_reward_fn.compute_reward.remote(test_batch))
@@ -581,6 +597,7 @@ class RayPPOTrainer:
         self.global_step = 0
         main_tqdm = tqdm(range(self.training_steps), desc="Running step", position=0)
         val_metrics: Optional[dict[str, Any]] = None
+        last_validation_step: Optional[int] = None
 
         # load checkpoint before doing anything
         self._load_checkpoint()
@@ -591,6 +608,7 @@ class RayPPOTrainer:
         if self.val_reward_fn is not None and self.config.trainer.val_before_train:
             val_metrics = self._validate()
             self.logger.log(data=val_metrics, step=self.global_step)
+            last_validation_step = self.global_step
             if self.config.trainer.val_only:
                 return
 
@@ -658,6 +676,7 @@ class RayPPOTrainer:
                         adv_estimator=self.config.algorithm.adv_estimator,
                         gamma=self.config.algorithm.gamma,
                         lam=self.config.algorithm.lam,
+                        std_floor=self.config.algorithm.std_floor,
                     )
 
                 # update critic
@@ -677,15 +696,16 @@ class RayPPOTrainer:
                     metrics.update(actor_metrics)
 
                 # validate
-                if (
-                    self.val_reward_fn is not None
-                    and self.config.trainer.val_freq > 0
+                scheduled_validation = (
+                    self.config.trainer.val_freq > 0
                     and self.global_step % self.config.trainer.val_freq == 0
-                ):
+                ) or self.global_step in self.config.trainer.val_steps
+                if self.val_reward_fn is not None and scheduled_validation:
                     with timer("validation", timing_raw):
                         val_metrics = self._validate()
 
                     metrics.update(val_metrics)
+                    last_validation_step = self.global_step
 
                 if self.config.trainer.save_freq > 0 and self.global_step % self.config.trainer.save_freq == 0:
                     with timer("save_checkpoint", timing_raw):
@@ -702,11 +722,7 @@ class RayPPOTrainer:
 
         # perform validation after training
         if self.val_reward_fn is not None:
-            if (
-                val_metrics is None
-                or self.config.trainer.val_freq <= 0
-                or self.global_step % self.config.trainer.val_freq != 0
-            ):
+            if last_validation_step != self.global_step:
                 val_metrics = self._validate()
                 self.logger.log(data=val_metrics, step=self.global_step)
 

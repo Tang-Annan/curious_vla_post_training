@@ -84,13 +84,15 @@ class BatchFunctionRewardManagerMixin:
             response_str = self.tokenizer.decode(
                 valid_response_ids, skip_special_tokens=self.config.skip_special_tokens
             )
-            reward_inputs.append(
-                {
-                    "response": response_str,
-                    "response_length": cur_response_length,
-                    "ground_truth": data.non_tensor_batch["ground_truth"][i],
-                }
-            )
+            reward_input = {
+                "response": response_str,
+                "response_length": cur_response_length,
+                "ground_truth": data.non_tensor_batch["ground_truth"][i],
+            }
+            for evidence_key in ("evidence_phase", "evidence_step"):
+                if evidence_key in data.non_tensor_batch:
+                    reward_input[evidence_key] = data.non_tensor_batch[evidence_key][i]
+            reward_inputs.append(reward_input)
 
         scores = self.reward_fn(reward_inputs)
         reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
