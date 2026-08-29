@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`D0F_COMPLETE / V3_DATA_FROZEN / S1_REQUIRES_GPU`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；9,091/9,091 图像与 metric cache、Dev/Final 分配、模型无关 Tail 几何和训练规模均已冻结，尚未生成 rollout 或启动训练。
+> 当前状态：`S1_SCREEN_COMPLETE / S1_CANDIDATE_FROZEN / S1_CONFIRM_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；9,091/9,091 图像与 metric cache、Dev/Final 分配、模型无关 Tail 几何和训练规模均已冻结，8,000-scene SFT Screen 与 CPU metric replay 已完成，908-scene Confirm 候选及协议已在 Confirm 前冻结，尚未启动 optimizer training 或访问 Final。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -38,7 +38,7 @@ Dev/Final 具体 log 分配、Natural/Tail 几何和每格 2,000-token 训练规
 | 历史证据分支 | `codex/grpo-g4-execution` | 保留，不清空、不改写历史 |
 | 历史封存 commit | `def56881179618efbbef0cadb92f14916feca6c2` | 已推送 `post-training/codex/grpo-g4-execution` |
 | 干净代码基线 | `93937eb01905aa5f3983a6a3600fa970ba50ad8b` | `origin/main` 已不再发布；已按完整 SHA 从 origin 重新 fetch 并验证 object |
-| V3 执行分支 | `codex/grpo-v3-selector-reward` | D0F source 为 `b46ffdf`；本地与服务器一致，GitHub `post-training` 暂停在 `108c609`，当前 ahead 2 |
+| V3 执行分支 | `codex/grpo-v3-selector-reward` | D0F source 为 `b46ffdf`；S1 Candidate/Confirm 协议 source 为 `a9ea2c5`；本地、服务器与 `post-training` 在该协议提交上一致 |
 | 可写远端 | `post-training` | 新分支只推送到该远端 |
 | V3 数据命名空间 | `dataset_v3_controlled_overlap` | 正式命名；明确训练侧受控复用 SFT-seen 数据 |
 | V3 实验命名空间 | `experiments/dataset_v3_controlled_overlap/` | 固定名称 |
@@ -585,8 +585,8 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 | 8 | `V3-D0S` | 生成 split、Master Index 和基础 manifests | 0 | `COMPLETE / RETRY2` |
 | 9 | `V3-D0A` | 生成/链接 image 与 metric cache | 0 | `COMPLETE` |
 | 10 | `V3-D0F` | 数据验收、hash 与 freeze | 0 | `COMPLETE / RETRY1` |
-| 11 | `V3-S1` | SFT shared rollout bank、Confirm 与 selector manifests | 1 | `READY / RESTART_GPU` |
-| 12 | `V3-R0` | 四格 reward/advantage geometry 与 CDT reward freeze | 0 | `BLOCKED_BY_S1` |
+| 11 | `V3-S1` | SFT shared rollout bank、Confirm 与 selector manifests | 1 | `SCREEN_COMPLETE / CANDIDATE_FROZEN / CONFIRM_READY` |
+| 12 | `V3-R0` | 四格 reward/advantage geometry 与 CDT reward freeze | 0 | `BLOCKED_BY_S1_CONFIRM_SELECT` |
 | 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | `TBD` | `BLOCKED_BY_R0` |
 | 14 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `BLOCKED_BY_H0` |
 | 15 | `V3-E0-SFT` | 在冻结 V3 dev 上生成零更新锚点 | `TBD` | `BLOCKED_BY_M0` |
@@ -692,6 +692,21 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 产物路径：服务器 `experiments/dataset_v3_controlled_overlap/data_build/v3_d0s_20260828_retry2/` 与 `experiments/dataset_v3_controlled_overlap/data_build/v3_d0f_20260828_retry1/`；未创建 `rollout_bank`，未运行 SFT/GRPO inference 或训练；
 - 空间闭环：删除两次重跑的精确临时目录与测试目录；D0S 证据 56 KiB、D0F 证据 2.8 MiB、正式图像 1.9 GiB、metric cache 3.9 GiB；数据盘仍为 120 GiB / 65 GiB available / 47% used；
 - 状态：`COMPLETE / V3_DATA_FROZEN`；无卡模式下能完成的数据准备已全部完成；下一唯一动作是将服务器重启到 GPU 模式后执行 `V3-S1` 的 SFT shared rollout bank，当前不得在 0.5 vCPU 无卡模式启动该阶段。
+
+### 记录 V3-007：S1 Screen、metric replay 与 Candidate/Confirm 协议冻结
+
+- 时间：2026-08-28 19:05–2026-08-29 06:16（Asia/Shanghai）；
+- branch / source commit / source status：Screen 使用 `22f2cc5`，CPU metric replay 使用 `c049c59`，Candidate/Confirm 协议冻结使用 `a9ea2c51`；各阶段启动和终态审计时服务器 tracked source 均 clean，协议提交已推送 `post-training/codex/grpo-v3-selector-reward`；
+- 输入与边界：只读取 D0F 冻结的 8,000-scene `grpo_screen` 与 SFT Stage-2；`seed=20260827`、`G=4`，共 32,000 rollouts；没有读取 118 个 SFT-unseen logs、Dev 或 Final，也没有创建 optimizer manifest 或执行参数更新；Screen manifest SHA-256 `0df963cae11d6b0847948c016ce1fc47fa13f694b8a2cc6b18cf797d66b05835`；
+- Screen 技术结果：正式 run `v3_s1_screen8000_g4_seed20260827` 于 2026-08-29 04:21 完成，8,000/8,000 tokens 均精确生成 4 条，共 32,000 条；raw response 与 poses 缺失均为 0，解析失败 11 条，parse success rate `0.99965625`，数值有限；GPU、Ray、Gunicorn 和端口均在终态清理，数据盘仍有约 64 GiB 可用；
+- metric replay：因为原 Screen bank 只保存 `pdms/pdms_scaled`，在不重新生成文本和轨迹的前提下，以 CPU 对 32,000 条 rollout 回放冻结 evaluator；run `v3_s1_metric_replay_20260829` 在 5,589 秒内完成，`31,989/32,000` 条成功回放，11 条与原解析失败精确对应；新增保存 `no_at_fault_collisions`、`DAC`、`ego_progress`、`TTC`、`history_comfort`、`pdms` 与 `pdms_scaled`，并补齐 model/input/source/result hash；
+- Screen geometry：按 V2 候选 L0–L3 evaluator safety 语义在 V3 上重新审计，而非提前冻结 R0 reward；8,000 个组中 exact-zero std 为 2,384，std `<0.05` 的 low-nonzero 为 3,951；candidate tier 行计数为 L0/L1/L2/L3=`180/1,053/149/30,607`，另有 invalid=`11`；含任一 L0–L2 的组为 833，mixed-tier groups 为 788；风险 rollout 数为 0/1/2/3/4 的组分别为 `7,167/489/189/105/50`；headroom 的 q90/q95 为 `0.136532/0.25`；
+- Candidate 冻结：Confirm 候选固定为“所有含任一 L0–L2 的 833 个组”并集“按稳定 token tie-break 排序的 Screen top-10% headroom 800 个组”，两者重叠 727 个；并集后仅按下一 headroom rank 增加 2 个以闭合 batch-4，最终精确 908 unique tokens；intent 为 straight/left/right=`420/269/219`，覆盖 546 个 SFT-seen logs，单 log 最大 6；禁止在 Confirm 结果后改写 Candidate membership；
+- Confirm 协议冻结：Confirm run 固定为 `v3_s1_confirm908_g4_seed20260828`，`seed=20260828`、`G=4`；Screen 与 Confirm 构成两个独立 block，总 `G=8`；stable severe、stable near-risk 与 stable mixed-recoverable 均必须在两个 block 同时满足各自语义，四类精确配额只允许在 Confirm 后先做容量审计、再于 Select 前一次性冻结，不能按下游训练或 Dev 结果调节；
+- 关键产物与 hash：Candidate manifest `e0437722e19dbb8370c553b63bcc31f84d82ed6a6b8492e1a20175c0b48600`，Candidate parquet `2b88eca0eef76ee8eb7b6b6a160ce40d5ea3fbd6de943acf46ce1036da02b8af`，Candidate freeze report `2382941ab1de5b133da4be5654b864144bb7be40988cd863a4383acd2e6d6262`，S1 geometry report `cfc8166b`（本记录为短 SHA，完整值保存在服务器 hash manifest）；产物路径为 `experiments/dataset_v3_controlled_overlap/rollout_bank/v3_s1_{screen8000_g4_seed20260827,metric_replay_20260829,candidate_freeze_20260829}/`；
+- 科学边界：本阶段只冻结 train-side Candidate/Confirm sampling；L0–L3 仍是待 R0 对照的候选安全分层，不能称为已冻结 CDT scalar reward；Screen/Confirm rollout 不是严格 unseen 评估，任何模型结论仍须由冻结的 SFT-unseen Dev/Final 提供；
+- 状态：`SCREEN_COMPLETE / METRIC_REPLAY_COMPLETE / CANDIDATE_FROZEN / CONFIRM_READY`；
+- 下一唯一动作：按已冻结协议启动 908-scene、G=4、seed `20260828` 的 S1 Confirm；终态验收后先冻结 TailMix 四类容量与配额，再生成 Random/TailMix 各 2,000-token selector manifests。
 
 ## 9. 结论边界
 
