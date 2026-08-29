@@ -6,7 +6,7 @@ PROJECT_ROOT="$WORKSPACE_ROOT/src/curious_vla_v3"
 PYTHON="$WORKSPACE_ROOT/envs/curious/bin/python"
 SCREEN_DIR="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/rollout_bank/v3_s1_metric_replay_20260829"
 SELECTOR_DIR="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/selector_freeze/v3_s1_selector_freeze_20260829"
-RUN_DIR="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/reward_freeze/v3_r0_geometry_candidates_20260829"
+RUN_DIR="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/reward_freeze/v3_r0_geometry_candidates_20260829_retry1"
 SCREEN_MANIFEST="$WORKSPACE_ROOT/manifests/dataset_v3_controlled_overlap/grpo_screen_8000.txt"
 
 for path in "$PYTHON" "$SCREEN_DIR/COMPLETE" "$SCREEN_DIR/screen_rollouts_enriched.jsonl" \
@@ -39,7 +39,8 @@ cleanup() {
 trap cleanup EXIT
 exec > "$RUN_DIR/run.log" 2>&1
 
-"$PYTHON" "$PROJECT_ROOT/projects/dataset_v3/r0_geometry.py" \
+cd "$PROJECT_ROOT"
+"$PYTHON" -m projects.dataset_v3.r0_geometry \
     --rollouts "$SCREEN_DIR/screen_rollouts_enriched.jsonl" \
     --screen-manifest "$SCREEN_MANIFEST" \
     --random-manifest "$SELECTOR_DIR/results/random_train_2000.txt" \
