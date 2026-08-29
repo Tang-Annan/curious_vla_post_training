@@ -22,6 +22,7 @@ import csv
 import json
 import os
 
+import numpy as np
 import ray
 from omegaconf import OmegaConf
 from ray.experimental.tqdm_ray import tqdm
@@ -134,6 +135,12 @@ class AdasRunner:
 
                 batch = batch.repeat(repeat_times=n, interleave=True)
                 batch = batch.union(gen_output)
+                evidence_phase = os.environ.get("EVIDENCE_PHASE")
+                if evidence_phase:
+                    batch.non_tensor_batch["evidence_phase"] = np.full(len(batch), evidence_phase, dtype=object)
+                evidence_step = os.environ.get("EVIDENCE_STEP")
+                if evidence_step is not None:
+                    batch.non_tensor_batch["evidence_step"] = np.full(len(batch), int(evidence_step), dtype=object)
 
                 reward_tensor, reward_metrics = ray.get(reward_fn.compute_reward.remote(batch))
 
