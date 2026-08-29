@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`S1_COMPLETE / SELECTORS_FROZEN / R0_COMPLETE / H0_COMPLETE / M0_COMPLETE / E0_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix 各 2,000-token manifest/parquet、唯一 CDT `R_task`、正式 H0 训练配置以及 M0 评价/晋级协议均已冻结并验收，尚未启动正式四格 optimizer training 或访问 Final。
+> 当前状态：`S1_COMPLETE / SELECTORS_FROZEN / R0_COMPLETE / H0_COMPLETE / M0_COMPLETE / E0_COMPLETE / RR_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix 各 2,000-token manifest/parquet、唯一 CDT `R_task`、正式 H0 训练配置、M0 评价/晋级协议及 416-scene SFT Dev anchor 均已冻结并验收，尚未启动正式四格 optimizer training 或访问 Final。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -340,8 +340,8 @@ Random、TailMix 和后续 selector 共用同一份资产。不得按 selector �
 
 | ID | Selector | Reward | 主要作用 | 当前状态 |
 | --- | --- | --- | --- | --- |
-| `V3-E0-SFT` | 无训练 | 无 | 零更新锚点 | `READY` |
-| `V3-RR` | Random | Raw-PDMS | primary GRPO baseline | `BLOCKED_BY_E0` |
+| `V3-E0-SFT` | 无训练 | 无 | 零更新锚点 | `COMPLETE / BASELINE_FROZEN` |
+| `V3-RR` | Random | Raw-PDMS | primary GRPO baseline | `READY` |
 | `V3-TR` | TailMix | Raw-PDMS | selector 主效应 | `BLOCKED_BY_E0` |
 | `V3-RC` | Random | CDT scalar reward | reward 主效应 | `BLOCKED_BY_E0` |
 | `V3-TC` | TailMix | CDT scalar reward | selector × reward 协同 | `BLOCKED_BY_E0` |
@@ -614,8 +614,8 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 | 12 | `V3-R0` | 四格 reward/advantage geometry 与 CDT reward freeze | 0 | `COMPLETE / R_TASK_FROZEN` |
 | 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | 1 | `COMPLETE / CONFIG_FROZEN` |
 | 14 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `COMPLETE / PROTOCOL_FROZEN` |
-| 15 | `V3-E0-SFT` | 在冻结 V3 dev 上生成零更新锚点 | 1 | `READY` |
-| 16 | `V3-RR/TC/TR/RC` | 按 `RR → TC → TR → RC` 执行最小 2×2 discovery，并按门控补齐 matched-seed 确认 | `TBD` | `BLOCKED_BY_E0` |
+| 15 | `V3-E0-SFT` | 在冻结 V3 dev 上生成零更新锚点 | 1 | `COMPLETE / BASELINE_FROZEN` |
+| 16 | `V3-RR/TC/TR/RC` | 按 `RR → TC → TR → RC` 执行最小 2×2 discovery，并按门控补齐 matched-seed 确认 | 1 | `RR_READY / TC_TR_RC_BLOCKED_BY_PRIORITY` |
 
 不增加与当前主问题无关的算法分支。数据制作完成前的唯一执行路线为 `A0 → B0 → B1 → S0 → D0I → D0R-1 → D0R-2 → D0S → D0A → D0F`。
 
@@ -827,6 +827,18 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 关键 hash 与产物路径：M0 protocol=`0543ea1c6eaf7d08426691b6148358c60dcd398848916aeb0c6189b10be30aba`，位于 `experiments/dataset_v3_controlled_overlap/protocol_freeze/v3_m0_matrix_protocol_20260829/results/m0_protocol.json`；冻结时 `dev_accessed=false`、`final_accessed=false`；
 - 状态：`COMPLETE / M0_PROTOCOL_FROZEN / E0_READY`；
 - 下一唯一动作：在冻结 Dev 416 scenes 上执行 `V3-E0-SFT`，生成零更新锚点和唯一可复用的 SFT paired baseline。
+
+### 记录 V3-015：E0-SFT 严格 unseen Dev baseline 完成
+
+- 时间：2026-08-29 22:50:12–23:05:07（Asia/Shanghai），墙钟 14 分 55 秒；
+- branch / source commit / source status：`c05d7b15d57bfa57357aa870ff392318839f74cd`，远端 35 项 Dataset V3 tests 与 shell syntax 通过，执行前后 source clean；
+- 输入与边界：只读保留的 `models/sft_stage2`，固定 Dev 416 scenes（Natural 210 / Tail 206）、evaluation seed=`20260827`、`n=1`、temperature=`0.6`、top-p=`0.95`、max response length=`512`；不运行 optimizer，不读取 Final；
+- 技术结果：`COMPLETE/exit_code=0`，416/416 unique tokens，rollouts/ADAS/scene metrics 均 416 rows，parse=416/416、clip=0、non-finite=0；峰值显存 20,360 MiB，GPU/reward server/Ray/Gunicorn 均已回收，结束时磁盘可用约 64 GiB；
+- 科学结果：Combined PDMS/PDMS-scaled/StrictClear=`0.7647148667/0.7531767379/0.78125`；Natural=`0.8026757681/0.7883128098/172/210=0.8190476190`；Tail=`0.7260168605/0.7173584121/153/206=0.7427184466`；该输出是全部 discovery 与 conditional confirmation 共用的唯一 SFT paired baseline；
+- 关键 hash：rollouts=`0de46e54d6b23a39534d2570f4eee6b5c7c07833e0ae37c4cb733394d8bfb28e`，ADAS=`5e1cda45a0499144d8bca1713877e29f84c37cc54ee38306edfdb3cb9c66db51`，scene metrics=`95734bd6957211d85d021e7c78f8da7b917834a96e7a4e0771280c6d3625f00f`，summary=`bd90d9e2a89c506f7991d31b1decb12b72487da7b71774e750c31c36359f186a`，representative examples=`9cbb1bd72efd30342c3eb0919be13391daa2bd92fcf530228dcd02d98e8e8614`；
+- 产物路径：`experiments/dataset_v3_controlled_overlap/dev_evaluation/v3_e0_sft_dev_seed20260827/`；Dev access record 为 `experiments/dataset_v3_controlled_overlap/access/dev/v3_e0_sft_dev_seed20260827.json` 且 `final_accessed=false`；没有生成 Final access record；
+- 状态：`COMPLETE / E0_BASELINE_FROZEN / RR_READY`；
+- 下一唯一动作：按 M0 priority 以 discovery seed `20260827` 执行 `V3-RR` 2,000 groups / 8,000 queries / 500 updates，完成后在同一 Dev 416 scenes 上生成 paired contrast `RR-SFT`。
 
 ## 9. 结论边界
 
