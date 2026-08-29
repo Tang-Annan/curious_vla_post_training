@@ -379,6 +379,80 @@ def choose_estimator(args: argparse.Namespace) -> None:
     args.output.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def freeze_h0(args: argparse.Namespace) -> None:
+    protocol = json.loads(args.protocol.read_text(encoding="utf-8"))
+    lr_decision = json.loads(args.lr_decision.read_text(encoding="utf-8"))
+    estimator_decision = json.loads(args.estimator_decision.read_text(encoding="utf-8"))
+    report = json.loads(args.selected_report.read_text(encoding="utf-8"))
+    selected_lr = float(lr_decision["selected_lr"])
+    selected_estimator = estimator_decision["selected_estimator"]
+    if lr_decision["status"] != "LR_FROZEN" or estimator_decision["status"] != "ESTIMATOR_FROZEN":
+        raise ValueError("H0 decisions are not frozen")
+    if not math.isclose(float(report["lr"]), selected_lr, rel_tol=0, abs_tol=1e-15):
+        raise ValueError("Selected H0 report does not match the frozen LR")
+    if report["estimator"] != selected_estimator or report["groups_per_update"] != 4:
+        raise ValueError("Selected H0 report does not match the frozen estimator/batch")
+
+    log_rows = [
+        json.loads(line)
+        for line in args.selected_experiment_log.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    grad_norms = []
+    for row in log_rows:
+        if int(row["step"]) <= 0:
+            continue
+        flat: dict[str, Any] = {}
+        _flatten("", row, flat)
+        grad_norms.append(float(flat["actor/grad_norm"]))
+    if len(grad_norms) != H0_GROUPS // 4 or any(not math.isfinite(value) for value in grad_norms):
+        raise ValueError("Selected H0 experiment log has incomplete grad-norm evidence")
+
+    metrics = report["training_metrics"]
+    grad_cv = float(metrics["actor/grad_norm"]["cv_abs"])
+    mean_clip = float(metrics["actor/pg_clipfrac_higher"]["mean"]) + float(
+        metrics["actor/pg_clipfrac_lower"]["mean"]
+    )
+    high_grad_rate = statistics.fmean(value >= 0.99 for value in grad_norms)
+    batch8_gates = {
+        "grad_norm_cv_gt_0_5": grad_cv > 0.5,
+        "mean_clip_fraction_gt_0_02": mean_clip > 0.02,
+        "grad_norm_ge_0_99_rate_ge_0_05": high_grad_rate >= 0.05,
+    }
+    batch8_required = any(batch8_gates.values())
+    groups_per_update = None if batch8_required else 4
+    formal_groups = 2000
+    output = {
+        "status": "BATCH8_PILOT_REQUIRED" if batch8_required else "H0_FROZEN",
+        "selected_lr": selected_lr,
+        "selected_estimator": selected_estimator,
+        "group_size": 4,
+        "groups_per_update": groups_per_update,
+        "formal_training_groups": formal_groups,
+        "formal_rollout_queries": formal_groups * 4,
+        "formal_max_steps": None if groups_per_update is None else formal_groups // groups_per_update,
+        "formal_train_monitor_steps": None
+        if groups_per_update is None
+        else [0, 100, 200, 300, 400, 500],
+        "batch8_trigger": {
+            "required": batch8_required,
+            "gates": batch8_gates,
+            "grad_norm_cv": grad_cv,
+            "mean_clip_fraction": mean_clip,
+            "grad_norm_ge_0_99_rate": high_grad_rate,
+        },
+        "fixed_optimization": protocol["fixed_optimization"],
+        "lr_decision_sha256": sha256_file(args.lr_decision),
+        "estimator_decision_sha256": sha256_file(args.estimator_decision),
+        "selected_report_sha256": sha256_file(args.selected_report),
+        "selected_experiment_log_sha256": sha256_file(args.selected_experiment_log),
+        "protocol_sha256": sha256_file(args.protocol),
+        "dev_accessed": False,
+        "final_accessed": False,
+    }
+    args.output.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -410,6 +484,15 @@ def main() -> None:
         decision_parser.add_argument("--reports", type=Path, nargs=2, required=True)
         decision_parser.add_argument("--output", type=Path, required=True)
         decision_parser.set_defaults(func=function)
+
+    freeze_parser = subparsers.add_parser("freeze")
+    freeze_parser.add_argument("--protocol", type=Path, required=True)
+    freeze_parser.add_argument("--lr-decision", type=Path, required=True)
+    freeze_parser.add_argument("--estimator-decision", type=Path, required=True)
+    freeze_parser.add_argument("--selected-report", type=Path, required=True)
+    freeze_parser.add_argument("--selected-experiment-log", type=Path, required=True)
+    freeze_parser.add_argument("--output", type=Path, required=True)
+    freeze_parser.set_defaults(func=freeze_h0)
 
     args = parser.parse_args()
     args.func(args)

@@ -6,6 +6,7 @@ from projects.dataset_v3.h0_pipeline import (
     H0_INTENT_QUOTA,
     choose_estimator,
     choose_lr,
+    freeze_h0,
     select_hparam_tokens,
 )
 
@@ -89,6 +90,80 @@ def test_estimator_gate_requires_monitor_and_safety_margins(tmp_path: Path) -> N
     output = tmp_path / "decision.json"
     choose_estimator(SimpleNamespace(reports=paths, output=output))
     assert json.loads(output.read_text())["selected_estimator"] == "std_floor_grpo"
+
+
+def test_h0_freeze_keeps_batch4_when_trigger_is_clear(tmp_path: Path) -> None:
+    protocol = tmp_path / "protocol.json"
+    protocol.write_text(json.dumps({"fixed_optimization": {"ppo_epochs": 1}}), encoding="utf-8")
+    lr_decision = tmp_path / "lr.json"
+    lr_decision.write_text(json.dumps({"status": "LR_FROZEN", "selected_lr": 1e-6}), encoding="utf-8")
+    estimator_decision = tmp_path / "estimator.json"
+    estimator_decision.write_text(
+        json.dumps({"status": "ESTIMATOR_FROZEN", "selected_estimator": "grpo"}), encoding="utf-8"
+    )
+    report = pilot_report(1e-6, "grpo", 0.01, 0.005)
+    report["groups_per_update"] = 4
+    report["training_metrics"]["actor/grad_norm"]["cv_abs"] = 0.25
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    experiment_log = tmp_path / "experiment_log.jsonl"
+    experiment_log.write_text(
+        "".join(json.dumps({"step": step, "actor": {"grad_norm": 0.1}}) + "\n" for step in range(129)),
+        encoding="utf-8",
+    )
+    output = tmp_path / "freeze.json"
+    freeze_h0(
+        SimpleNamespace(
+            protocol=protocol,
+            lr_decision=lr_decision,
+            estimator_decision=estimator_decision,
+            selected_report=report_path,
+            selected_experiment_log=experiment_log,
+            output=output,
+        )
+    )
+    frozen = json.loads(output.read_text())
+    assert frozen["status"] == "H0_FROZEN"
+    assert frozen["groups_per_update"] == 4
+    assert frozen["formal_max_steps"] == 500
+    assert frozen["batch8_trigger"]["required"] is False
+
+
+def test_h0_freeze_requires_batch8_pilot_when_high_grad_rate_triggers(tmp_path: Path) -> None:
+    protocol = tmp_path / "protocol.json"
+    protocol.write_text(json.dumps({"fixed_optimization": {}}), encoding="utf-8")
+    lr_decision = tmp_path / "lr.json"
+    lr_decision.write_text(json.dumps({"status": "LR_FROZEN", "selected_lr": 1e-6}), encoding="utf-8")
+    estimator_decision = tmp_path / "estimator.json"
+    estimator_decision.write_text(
+        json.dumps({"status": "ESTIMATOR_FROZEN", "selected_estimator": "grpo"}), encoding="utf-8"
+    )
+    report = pilot_report(1e-6, "grpo", 0.01, 0.005)
+    report["groups_per_update"] = 4
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    experiment_log = tmp_path / "experiment_log.jsonl"
+    experiment_log.write_text(
+        "".join(
+            json.dumps({"step": step, "actor": {"grad_norm": 1.0 if 1 <= step <= 7 else 0.1}}) + "\n"
+            for step in range(129)
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "freeze.json"
+    freeze_h0(
+        SimpleNamespace(
+            protocol=protocol,
+            lr_decision=lr_decision,
+            estimator_decision=estimator_decision,
+            selected_report=report_path,
+            selected_experiment_log=experiment_log,
+            output=output,
+        )
+    )
+    frozen = json.loads(output.read_text())
+    assert frozen["status"] == "BATCH8_PILOT_REQUIRED"
+    assert frozen["groups_per_update"] is None
 
 
 def test_h0_infrastructure_records_step_aware_monitor_evidence() -> None:
