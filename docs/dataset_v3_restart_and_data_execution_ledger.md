@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`S1_COMPLETE / R0_COMPLETE / H0_COMPLETE / M0_COMPLETE / E0_COMPLETE / RR_COMPLETE_GATE_CLOSED / TC_READY`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix manifests、CDT `R_task`、正式训练配置、M0 协议及 SFT Dev anchor 均已冻结；RR discovery 已完成但 `RR-SFT` Tail gain 未达到晋级阈值，不补 RR seeds，正式矩阵继续执行 TC，Final 仍未访问。
+> 当前状态：`S1_COMPLETE / R0_COMPLETE / H0_COMPLETE / M0_COMPLETE / E0_COMPLETE / RR_COMPLETE_GATE_CLOSED / TC_COMPLETE_GATE_CLOSED / TR_TERMINAL_RECORD_PENDING / RC_SKIPPED_BY_USER / TC_PPO2_PREP_READY / FINAL_UNACCESSED`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix manifests、CDT `R_task`、原 PPO-epoch-1 配置、M0 协议及 SFT Dev anchor 均已冻结；RR/TC discovery 均未通过晋级门槛，TR 的服务器终态结果仍须独立补记；2026-08-31 用户决定跳过 RC、终止完整 2×2 interaction 路线，并将最后一次方法尝试切换为从 SFT Stage-2 重启的 `TailMix + CDT + ppo_epochs=2`。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -23,7 +23,7 @@
 - 旧 CDT L0–L3 定义、validity 边界和统计方法可以作为 V3 候选定义，但必须在新数据上重新审计；
 - primary Tail Dev/Final 必须优先由模型无关的场景或 evaluator/cache 属性定义，不能直接按 SFT rollout 失败挑选；
 - Random 与 TailMix 必须使用完全相同的 driving-intent quota；
-- 正式 interaction 结论必须来自 RR/TR/RC/TC 四格完全一致的 matched seeds；
+- 正式 interaction 结论必须来自 RR/TR/RC/TC 四格完全一致的 matched seeds；2026-08-31 路线变更明确跳过 RC，因此本轮不再满足该条件，也不再形成 selector × reward interaction 或独立 reward 主效应结论；
 - V3 不直接继承 V2 的训练超参数；在新数据、selector 和 reward geometry 冻结后，先用 train-only monitor 校准一套四格共用配置；
 - 不从旧分支搬运实验处理逻辑，不删除或覆盖旧证据。
 
@@ -342,9 +342,10 @@ Random、TailMix 和后续 selector 共用同一份资产。不得按 selector �
 | --- | --- | --- | --- | --- |
 | `V3-E0-SFT` | 无训练 | 无 | 零更新锚点 | `COMPLETE / BASELINE_FROZEN` |
 | `V3-RR` | Random | Raw-PDMS | primary GRPO baseline | `COMPLETE / DISCOVERY_GATE_CLOSED` |
-| `V3-TR` | TailMix | Raw-PDMS | selector 主效应 | `BLOCKED_BY_PRIORITY` |
-| `V3-RC` | Random | CDT scalar reward | reward 主效应 | `BLOCKED_BY_PRIORITY` |
-| `V3-TC` | TailMix | CDT scalar reward | selector × reward 协同 | `READY` |
+| `V3-TR` | TailMix | Raw-PDMS | selector 主效应 | `TERMINAL_RECORD_PENDING` |
+| `V3-RC` | Random | CDT scalar reward | reward 主效应 | `SKIPPED_BY_USER / NOT_RUN` |
+| `V3-TC` | TailMix | CDT scalar reward | 原完整方法端点 | `COMPLETE / DISCOVERY_GATE_CLOSED` |
+| `V3-TC-PPO2` | TailMix | CDT scalar reward | 最后一次下游优化强度尝试 | `PREP_READY / NOT_STARTED` |
 
 直接 contrast：
 
@@ -369,6 +370,8 @@ seed 协议固定为两阶段：
 3. 如果正式声称 selector × reward interaction，四格必须全部补齐完全相同的三个 matched seeds；计划 seed 为 `20260827/20260828/20260829`；
 4. interaction 必须先在每个 matched seed 内计算，再汇总 seed 间结果；不得用不同 seed 集合的 cell 均值相减；
 5. 未补齐四格 matched seeds 时，interaction 只能标记为 exploratory，不得形成正式协同结论。
+
+2026-08-31 路线变更由记录 V3-018 接管后续执行：上述四格公式和 matched-seed 要求只保留为原 M0 历史协议；`V3-RC` 不再运行，`Delta_reward` 与 `Delta_interaction` 均不再计算或声明，已有 `TC-RR` 与待补记的 `TR-RR` 只能作为各自 discovery pair。后续唯一新增训练为 `V3-TC-PPO2`，它不是缺失的第四格，也不得用于拼接 interaction。
 
 ### 5.3 Random selector
 
@@ -572,7 +575,8 @@ Tail Dev/Final 至少报告：
 | groups/update | H0 梯度方差与 compute-matched pilot | `FROZEN: 4; batch-8 trigger false` |
 | LoRA / KL | H0 policy movement 与平台化证据 | `FROZEN: rank 8 attention-only / KL 0.01 low_var_kl` |
 | 主效应确认 seeds | discovery 结果和计算成本 | `FROZEN: discovery 20260827; conditional matched-pair 20260828/20260829` |
-| interaction 确认 | 四格 discovery 结果和 matched-seed 成本 | `FROZEN: only if required, all four cells on all three matched seeds` |
+| interaction 确认 | 四格 discovery 结果和 matched-seed 成本 | `CLOSED_BY_ROUTE_CHANGE: RC skipped; no interaction claim` |
+| 最后一次 optimizer 尝试 | RR/TC 的退化 PPO ratio/KL/clip 诊断与用户路线变更 | `FROZEN: TC-PPO2; only ppo_epochs 1→2` |
 
 `split 精确规模`、`TAIL_EVAL_ROUTE`、`Screen Pool 与 train manifest 规模` 在 D0R-2 冻结并由 D0S/D0F 验证；其余项目在 D0F 后按 S1、R0、H0、M0 对应门控逐项回填。未冻结前不得启动正式方法训练。
 
@@ -615,7 +619,8 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 | 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | 1 | `COMPLETE / CONFIG_FROZEN` |
 | 14 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `COMPLETE / PROTOCOL_FROZEN` |
 | 15 | `V3-E0-SFT` | 在冻结 V3 dev 上生成零更新锚点 | 1 | `COMPLETE / BASELINE_FROZEN` |
-| 16 | `V3-RR/TC/TR/RC` | 按 `RR → TC → TR → RC` 执行最小 2×2 discovery，并按门控补齐 matched-seed 确认 | 1 | `RR_COMPLETE_GATE_CLOSED / TC_READY` |
+| 16 | `V3-RR/TC/TR/RC` | 原最小 2×2 discovery 路线 | 1 | `RR/TC_COMPLETE_GATE_CLOSED / TR_RECORD_PENDING / RC_SKIPPED` |
+| 17 | `V3-TC-PPO2` | 修复 multi-epoch iterator、通过两轮更新 smoke 后，从 SFT Stage-2 执行 TailMix + CDT + PPO epoch 2 | 1 | `PREP_READY / NOT_STARTED` |
 
 不增加与当前主问题无关的算法分支。数据制作完成前的唯一执行路线为 `A0 → B0 → B1 → S0 → D0I → D0R-1 → D0R-2 → D0S → D0A → D0F`。
 
@@ -867,6 +872,20 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 空间闭环：在训练、Dev、paired comparison、LoRA 与 result hashes 全部验证后，精确删除 `formal_runs/v3_tc_tailmix_cdt_g4_b4_seed20260827/checkpoints/global_step_500/actor/model_world_size_1_rank_0.pt`，大小 `8,144,550,392` bytes；删除不可恢复，LoRA/rollouts/曲线/reports/Dev/bootstrap 均保留；删除后 `/root/autodl-tmp` 可用 `66,005,102,592` bytes；
 - 状态：`COMPLETE / TC_DISCOVERY_GATE_CLOSED / TR_READY / FINAL_UNACCESSED`；
 - 下一唯一动作：按 priority 执行 `V3-TR` discovery seed `20260827`，完成后以 RR 同 seed Dev rows 作为 paired baseline 计算 `TR-RR`。
+
+### 记录 V3-018：跳过 RC、关闭 2×2 interaction，并冻结最后一次 TC-PPO2 路线
+
+- 时间：2026-08-31（Asia/Shanghai）；
+- 决策来源与状态边界：用户明确决定直接跳过 `V3-RC`，不再补齐原 `RR/TR/RC/TC` 四格；本记录不改写 RR/TC 已完成结果，也不虚构 TR 终态，TR 的训练、Dev、paired comparison 与资源闭环仍须按实际证据另行补记；`V3-RC` 固定为 `SKIPPED_BY_USER / NOT_RUN`；
+- 结论边界：由于 RC 缺失，本轮主动放弃 `RC-RR` reward 主效应与 `(TC-TR)-(RC-RR)` interaction 估计；不得将 `TC-RR`、`TR-RR` 或后续 `TC-PPO2` 拼接成 selector × reward 协同结论。V3 后续问题收缩为：在已证实 selector/reward 能改善训练侧 geometry、但 unseen policy-level 增益弱的条件下，增加同批 rollout 的实际 optimizer reuse 是否能够改善转化；
+- 诊断依据：RR、TC 与 H0 的 `actor/ppo_kl`、upper/lower clip fraction 在现有 `ppo_epochs=1` 路线中持续为 0；trainer 在 update 前用当前 actor 计算 `old_log_probs`，唯一 PPO epoch 的 loss forward 又发生在首次 optimizer step 前，因此 ratio 在该 forward 上结构性等于 1。该现象不等于梯度为 0，但说明 PPO clipping 在原路线中没有机会生效，日志也不能表示 optimizer step 后的 policy drift；reference `kl_loss` 继续只作为 actor-to-SFT proxy，不据此降低 KL coefficient；
+- 唯一新增 run：固定 ID 为 `V3-TC-PPO2`；从原始 `models/sft_stage2` 重新初始化，不续训 TC checkpoint；复用冻结 TailMix 2,000-token manifest、`R_TASK_CDT_V3`、seed `20260827`、`G=4`、4 groups/update、500 updates、8,000 train rollout queries、standard GRPO、LR `1e-6`、rank-8 attention-only LoRA、KL `0.01/low_var_kl`、shuffle true、clip ratio `[0.8,1.3]` 与 monitor steps `0/100/200/300/400/500`；相对原 TC 的唯一训练超参数变化为 `ppo_epochs: 1 → 2`；不同时改变 LR、KL、clip range、LoRA、batch、reward、selector、loss mask 或 rollout sampling；
+- 实现硬门禁：不能只修改配置。当前 actor update 会在 rank 0 将 `mini_batches` 覆盖为已消费的 `tqdm` iterator；正式启动前必须做最小修复，使每个 PPO epoch 都从同一冻结 mini-batch collection 创建新的 iterator，并增加 focused test。2-step smoke 必须证明每个 batch 精确执行两个 optimizer steps、epoch 1/2 样本与 old log-prob 相同、epoch 2 确实被执行且无 deadlock/OOM/non-finite；任一项失败不得启动正式 run；
+- 新增训练证据：按 epoch 分开保存 mean/p95/p99 log-ratio、approximate PPO KL、upper/lower clip fraction、policy loss 与 grad norm；epoch 1 的 pre-update ratio≈1 属预期，epoch 2 的指标必须来自 epoch 1 optimizer step 后的重新 forward。clipping 非零不是通过条件，但 epoch 2 指标不得因 iterator 或聚合错误继续结构性缺失；resolved config 必须明确记录 `ppo_epochs=2`，train/monitor parse、response clipping、reward geometry、timing、显存与 LoRA hash 继续按第 10 节保存；
+- 评价与停止规则：正式训练完成后只在既有冻结 Dev 416 scenes 上执行同协议评价，同时报告相对 RR 与原 TC 的 paired difference；最低成功门槛沿用 Tail StrictClear point delta 相对 RR `>=+0.01`、Tail CI upper `>0`、Natural PDMS-scaled point delta相对 RR `>=-0.01`、Natural CI lower `>-0.03`、任一 safety component drop 不超过 `0.005`，对应当前 RR `154/206` 时 Tail 至少需达到 `157/206`。本 run 无论结果均不追加 RC、LR/KL/clip/LoRA sweep 或额外训练 seed；Final 在 Dev 机械判定完成前继续锁定；
+- 预算：复用 TC 实测训练墙钟 `8 h 20 min 40 s` 与 actor-update 累计约 `2.32 h` 估算，PPO epoch 2 不增加 rollout/reward query，正式训练预计 `10.5–11.5 h`，Dev 与结果闭环另约 `0.5–1 h`；峰值显存预计与 TC 同量级，但启动前仍须通过空间、显存、端口与 source-clean gate；
+- 当前状态：`DECISION_FROZEN / RC_SKIPPED / INTERACTION_CLOSED / TC_PPO2_PREP_READY / NOT_STARTED / FINAL_UNACCESSED`；本记录只冻结路线和启动条件，尚未修改训练代码、生成新配置、运行 smoke 或启动 GPU；
+- 下一唯一动作：在不干扰 TR 现有 GPU 进程的前提下，完成 multi-epoch iterator 最小修复、epoch-indexed PPO telemetry、focused tests 与 2-step smoke；确认 TR 终态资源已回收且上述硬门禁全部通过后，才允许启动 `V3-TC-PPO2` 正式训练。
 
 ## 9. 结论边界
 

@@ -236,11 +236,22 @@ class DataParallelPPOActor(BasePPOActor):
         mini_batches = data.select(select_keys, non_tensor_select_keys).split(self.config.global_batch_size_per_device)
 
         metrics = defaultdict(list)
-        for _ in range(self.config.ppo_epochs):
+        for epoch in range(1, self.config.ppo_epochs + 1):
+            # Re-create the iterator from the same frozen mini-batch collection on
+            # every PPO epoch; reassigning mini_batches itself would consume the
+            # iterator on the first epoch and silently skip later epochs.
+            mini_batch_iter = mini_batches
             if self.rank == 0:
-                mini_batches = tqdm(mini_batches, desc="Train mini-batches", position=1)
+                mini_batch_iter = tqdm(mini_batches, desc="Train mini-batches", position=1)
 
-            for mini_batch in mini_batches:
+            epoch_log_ratios: list[torch.Tensor] = []
+            epoch_ppo_kl: list[float] = []
+            epoch_clip_frac_higher: list[float] = []
+            epoch_clip_frac_lower: list[float] = []
+            epoch_pg_loss: list[float] = []
+            epoch_grad_norms: list[float] = []
+
+            for mini_batch in mini_batch_iter:
                 total_response_tokens = torch.sum(mini_batch.batch["response_mask"])
                 dist.all_reduce(total_response_tokens, op=dist.ReduceOp.SUM)
 
@@ -262,6 +273,8 @@ class DataParallelPPOActor(BasePPOActor):
 
                     # all return: (bsz, response_length)
                     log_probs = self._forward_micro_batch(model_inputs, temperature=temperature)
+                    with torch.no_grad():
+                        epoch_log_ratios.append((log_probs - old_log_probs).detach()[response_mask.bool()].float().cpu())
 
                     # --- Detailed Entropy Logging (using -log_probs as estimator) ---
                     with torch.no_grad():
@@ -311,6 +324,12 @@ class DataParallelPPOActor(BasePPOActor):
                         loss_type=self.config.loss_type,
                         loss_avg_mode=self.config.loss_avg_mode,
                     )
+                    epoch_ppo_kl.append(pg_metrics["ppo_kl"])
+                    if "pg_clipfrac_higher" in pg_metrics:
+                        epoch_clip_frac_higher.append(pg_metrics["pg_clipfrac_higher"])
+                    if "pg_clipfrac_lower" in pg_metrics:
+                        epoch_clip_frac_lower.append(pg_metrics["pg_clipfrac_lower"])
+                    epoch_pg_loss.append(pg_loss.detach().item())
                     if self.config.use_kl_loss and "ref_log_probs" in model_inputs:
                         ref_log_probs = model_inputs["ref_log_probs"]
                         # compute kl loss
@@ -334,6 +353,28 @@ class DataParallelPPOActor(BasePPOActor):
                     append_to_dict(metrics, batch_metrics)
 
                 grad_norm = self._optimizer_step()
-                append_to_dict(metrics, {"actor/grad_norm": grad_norm.detach().item()})
+                grad_norm_value = grad_norm.detach().item()
+                epoch_grad_norms.append(grad_norm_value)
+                append_to_dict(metrics, {"actor/grad_norm": grad_norm_value})
+
+            if epoch_log_ratios:
+                log_ratio = torch.cat(epoch_log_ratios)
+                append_to_dict(metrics, {f"actor/epoch{epoch}/log_ratio_mean": log_ratio.mean().item()})
+                append_to_dict(metrics, {f"actor/epoch{epoch}/log_ratio_p95": torch.quantile(log_ratio, 0.95).item()})
+                append_to_dict(metrics, {f"actor/epoch{epoch}/log_ratio_p99": torch.quantile(log_ratio, 0.99).item()})
+            if epoch_ppo_kl:
+                append_to_dict(metrics, {f"actor/epoch{epoch}/ppo_kl": sum(epoch_ppo_kl) / len(epoch_ppo_kl)})
+            if epoch_clip_frac_higher:
+                append_to_dict(
+                    metrics, {f"actor/epoch{epoch}/pg_clipfrac_higher": sum(epoch_clip_frac_higher) / len(epoch_clip_frac_higher)}
+                )
+            if epoch_clip_frac_lower:
+                append_to_dict(
+                    metrics, {f"actor/epoch{epoch}/pg_clipfrac_lower": sum(epoch_clip_frac_lower) / len(epoch_clip_frac_lower)}
+                )
+            if epoch_pg_loss:
+                append_to_dict(metrics, {f"actor/epoch{epoch}/pg_loss": sum(epoch_pg_loss) / len(epoch_pg_loss)})
+            if epoch_grad_norms:
+                append_to_dict(metrics, {f"actor/epoch{epoch}/grad_norm": sum(epoch_grad_norms) / len(epoch_grad_norms)})
 
         return metrics

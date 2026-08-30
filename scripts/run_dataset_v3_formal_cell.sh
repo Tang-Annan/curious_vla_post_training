@@ -3,22 +3,28 @@ set -euo pipefail
 
 CELL=""
 SEED=""
+PPO_EPOCHS=1
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --cell) CELL="$2"; shift 2 ;;
         --seed) SEED="$2"; shift 2 ;;
+        --ppo-epochs) PPO_EPOCHS="$2"; shift 2 ;;
         *) echo "Unknown formal cell argument: $1" >&2; exit 2 ;;
     esac
 done
 [[ "$SEED" == 20260827 || "$SEED" == 20260828 || "$SEED" == 20260829 ]] || { echo "Unsupported formal seed" >&2; exit 2; }
+[[ "$PPO_EPOCHS" == 1 || "$PPO_EPOCHS" == 2 ]] || { echo "Unsupported PPO epochs" >&2; exit 2; }
 
 case "$CELL" in
     V3-RR) CELL_TAG=rr; SELECTOR=random; REWARD_TAG=raw; REWARD_FUNCTION=compute_score_raw_pdms ;;
     V3-TC) CELL_TAG=tc; SELECTOR=tailmix; REWARD_TAG=cdt; REWARD_FUNCTION=compute_score_cdt_task ;;
     V3-TR) CELL_TAG=tr; SELECTOR=tailmix; REWARD_TAG=raw; REWARD_FUNCTION=compute_score_raw_pdms ;;
     V3-RC) CELL_TAG=rc; SELECTOR=random; REWARD_TAG=cdt; REWARD_FUNCTION=compute_score_cdt_task ;;
+    V3-TC-PPO2) CELL_TAG=tc_ppo2; SELECTOR=tailmix; REWARD_TAG=cdt; REWARD_FUNCTION=compute_score_cdt_task ;;
     *) echo "Unsupported formal cell: $CELL" >&2; exit 2 ;;
 esac
+if [[ "$CELL" == "V3-TC-PPO2" && "$PPO_EPOCHS" != 2 ]]; then echo "V3-TC-PPO2 requires --ppo-epochs 2" >&2; exit 2; fi
+if [[ "$CELL" != "V3-TC-PPO2" && "$PPO_EPOCHS" != 1 ]]; then echo "PPO epochs may only change for V3-TC-PPO2" >&2; exit 2; fi
 
 WORKSPACE_ROOT=/root/autodl-tmp/curious-vla-workspace
 PROJECT_ROOT="$WORKSPACE_ROOT/src/curious_vla_v3"
@@ -55,8 +61,8 @@ touch "$RUN_DIR/RUNNING"
 date +%s > "$RUN_DIR/start_epoch.txt"
 git -C "$PROJECT_ROOT" rev-parse HEAD > "$RUN_DIR/source_commit.txt"
 git -C "$PROJECT_ROOT" status --porcelain > "$RUN_DIR/source_status.txt"
-printf 'run_id=%s\ncell=%s\nselector=%s\nreward=%s\nseed=%s\nlr=1e-6\nestimator=grpo\ngroup_size=4\ngroups_per_update=4\ntraining_groups=2000\nrollout_queries=8000\nmax_steps=500\nval_steps=0,100,200,300,400,500\n' \
-    "$RUN_ID" "$CELL" "$SELECTOR" "$REWARD_FUNCTION" "$SEED" > "$RUN_DIR/run.env"
+printf 'run_id=%s\ncell=%s\nselector=%s\nreward=%s\nseed=%s\nlr=1e-6\nestimator=grpo\ngroup_size=4\ngroups_per_update=4\ntraining_groups=2000\nrollout_queries=8000\nmax_steps=500\nval_steps=0,100,200,300,400,500\nppo_epochs=%s\n' \
+    "$RUN_ID" "$CELL" "$SELECTOR" "$REWARD_FUNCTION" "$SEED" "$PPO_EPOCHS" > "$RUN_DIR/run.env"
 sha256sum "$TRAIN_MANIFEST" "$TRAIN_PARQUET" "$MONITOR_MANIFEST" "$MONITOR_PARQUET" "$M0" > "$RUN_DIR/input_sha256.txt"
 sha256sum "$MODEL"/model-*.safetensors "$MODEL/config.json" "$MODEL/model.safetensors.index.json" > "$RUN_DIR/model_sha256.txt"
 cp "$EASYR1_ROOT/examples/config_v3_h0_single_gpu.yaml" "$RUN_DIR/resolved_source_config.yaml"
@@ -111,6 +117,7 @@ cd "$EASYR1_ROOT"
     data.image_dir="$WORKSPACE_ROOT/data" data.rollout_batch_size=4 data.mini_rollout_batch_size=4 \
     data.shuffle=true data.seed="$SEED" \
     worker.actor.global_batch_size=4 worker.actor.optim.lr=1e-6 \
+    worker.actor.ppo_epochs="$PPO_EPOCHS" \
     worker.actor.model.model_path="$MODEL" worker.rollout.seed="$SEED" \
     worker.reward.reward_function="$EASYR1_ROOT/verl/utils/reward_score/navsim/navsim_reward_text.py:$REWARD_FUNCTION" \
     algorithm.adv_estimator=grpo algorithm.std_floor=0.05 \

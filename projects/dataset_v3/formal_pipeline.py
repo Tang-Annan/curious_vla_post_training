@@ -26,7 +26,11 @@ CELL_REWARD = {
     "V3-TR": "compute_score_raw_pdms",
     "V3-RC": "compute_score_cdt_task",
     "V3-TC": "compute_score_cdt_task",
+    "V3-TC-PPO2": "compute_score_cdt_task",
 }
+# V3-018 freezes ppo_epochs=2 only for the last TC-PPO2 optimizer attempt; the
+# frozen M0 protocol keeps ppo_epochs=1 for the original matrix cells.
+CELL_PPO_EPOCHS = {"V3-TC-PPO2": 2}
 
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
@@ -62,7 +66,7 @@ def analyze_training(args: argparse.Namespace) -> None:
         "kl": config["algorithm"]["use_kl_loss"] is True
         and config["algorithm"]["kl_coef"] == optimization["kl_coefficient"]
         and config["algorithm"]["kl_penalty"] == optimization["kl_penalty"],
-        "ppo_epochs": config["worker"]["actor"]["ppo_epochs"] == optimization["ppo_epochs"],
+        "ppo_epochs": config["worker"]["actor"]["ppo_epochs"] == CELL_PPO_EPOCHS.get(args.cell, optimization["ppo_epochs"]),
         "lora_rank": lora["rank"] == optimization["lora_rank"],
         "vision_lora_excluded": lora["exclude_modules"] == ".*visual.*",
         "reward_function": config["worker"]["reward"]["reward_function_name"] == reward_name,
@@ -146,8 +150,8 @@ def analyze_training(args: argparse.Namespace) -> None:
         "status": "COMPLETE" if all(health.values()) else "FAILED_HEALTH_GATE",
         "cell": args.cell,
         "seed": args.seed,
-        "selector": protocol["matrix"]["cells"][args.cell]["selector"],
-        "reward": protocol["matrix"]["cells"][args.cell]["reward"],
+        "selector": protocol["matrix"]["cells"].get(args.cell, protocol["matrix"]["cells"]["V3-TC"])["selector"],
+        "reward": protocol["matrix"]["cells"].get(args.cell, protocol["matrix"]["cells"]["V3-TC"])["reward"],
         "processed_groups": len(groups),
         "rollout_queries": len(train_rows),
         "updates": expected_updates,
