@@ -16,6 +16,14 @@ def _finite(value: Any) -> bool:
     return isinstance(value, (int, float)) and math.isfinite(float(value))
 
 
+def _flatten(prefix: str, value: Any, output: dict[str, Any]) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _flatten(f"{prefix}/{key}" if prefix else key, child, output)
+    else:
+        output[prefix] = value
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment-config", type=Path, required=True)
@@ -35,13 +43,17 @@ def main() -> None:
     }
 
     steps = [int(row["step"]) for row in rows]
-    checks["log_step_coverage"] = sorted(set(steps)) == [1, 2]
-    checks["log_step_count"] = len(steps) == 2
+    checks["log_step_coverage"] = set(steps) == {1, 2}
 
-    per_step: dict[int, dict[str, Any]] = {}
+    flattened = []
     for row in rows:
-        step = int(row["step"])
-        per_step.setdefault(step, {}).update(row)
+        flat: dict[str, Any] = {}
+        _flatten("", row, flat)
+        flat["step"] = int(row["step"])
+        flattened.append(flat)
+    update_rows = [flat for flat in flattened if "actor/epoch1/grad_norm" in flat]
+    checks["update_step_count"] = len(update_rows) == 2
+    checks["update_step_coverage"] = sorted(flat["step"] for flat in update_rows) == [1, 2]
 
     required_epoch_keys = [
         "actor/epoch1/grad_norm",
@@ -63,15 +75,11 @@ def main() -> None:
     ]
     checks["epoch2_executed"] = True
     checks["all_epoch_metrics_finite"] = True
-    for step in (1, 2):
-        row = per_step.get(step)
-        if row is None:
-            checks["epoch2_executed"] = False
-            continue
+    for flat in update_rows:
         for key in required_epoch_keys:
-            if key not in row or not _finite(row[key]):
+            if key not in flat or not _finite(flat[key]):
                 checks["all_epoch_metrics_finite"] = False
-            if key.startswith("actor/epoch2/") and (key not in row or not _finite(row[key])):
+            if key.startswith("actor/epoch2/") and (key not in flat or not _finite(flat[key])):
                 checks["epoch2_executed"] = False
 
     forbidden = ("OutOfMemoryError", "CUDA error", "RuntimeError", "Traceback", "killed")
@@ -81,14 +89,14 @@ def main() -> None:
     report = {
         "status": "PASS" if passed else "FAIL",
         "checks": checks,
-        "steps": sorted(per_step),
+        "steps": sorted(set(steps)),
         "epoch_telemetry": {
-            str(step): {
-                key: row[key]
+            str(flat["step"]): {
+                key: flat[key]
                 for key in required_epoch_keys
-                if key in row and isinstance(row[key], (int, float))
+                if key in flat and isinstance(flat[key], (int, float))
             }
-            for step, row in sorted(per_step.items())
+            for flat in sorted(update_rows, key=lambda item: item["step"])
         },
     }
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
