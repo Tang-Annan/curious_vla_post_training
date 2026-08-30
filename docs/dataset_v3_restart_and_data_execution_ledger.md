@@ -854,6 +854,20 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 状态：`COMPLETE / RR_DISCOVERY_GATE_CLOSED / TC_READY / FINAL_UNACCESSED`；
 - 下一唯一动作：按 priority 执行 `V3-TC` discovery seed `20260827`，完成后以 RR 同 seed Dev rows 作为 paired baseline 计算 `TC-RR`。
 
+### 记录 V3-017：TC discovery 训练、Dev paired gate 与空间闭环
+
+- 时间：训练 2026-08-30 07:51 至 16:11:13（Asia/Shanghai），墙钟 8 小时 20 分 40 秒；Dev 评价 16:31:11 至 16:45:08，墙钟 13 分 57 秒；
+- branch / source commit / source status：训练与 Dev source=`471d75ad91b7c953eb89756fbaef314005208f9b`；训练、Dev 启动与终态均未发现 tracked source 污染；
+- 训练输入与动作：`V3-TC`、TailMix selector、冻结 reward `R_TASK_CDT_V3`、seed=`20260827`，严格沿用 H0/M0 的 LR `1e-6`、standard GRPO、`G=4`、4 groups/update、500 updates、2,000 groups / 8,000 queries、PPO epoch 1、rank-8 attention-only LoRA 与 KL `0.01/low_var_kl`；
+- 技术结果：`COMPLETE/exit_code=0`；train=8,000 rows / 2,000 unique groups / 每组 4，monitor=1,536 rows / steps `0/100/200/300/400/500` 各 256；train parse=`7996/8000=0.9995`、monitor parse=1，train clip=`1/8000=0.000125`、monitor clip=0，9,536 条 rollout 的递归 non-finite 扫描为 0；峰值显存约 21,266 MiB，终态 trainer/Ray/Gunicorn/8901 均回收；
+- 训练侧证据：CDT tier L0/L1/L2/L3/invalid=`154/887/117/6838/4`；training reward mean=`0.903551`；monitor PDMS / PDMS-scaled / StrictClear 在 step 0 为 `0.9410/0.9052/0.9844`，step 400 短暂降至 `0.9197/0.8857/0.9609`，step 500 恢复至 `0.9481/0.9117/0.9922`；结果清单 7 项 hash 全部复验；
+- Dev 结果：model-only checkpoint 成功加载且未请求 optimizer；416/416 scenes、Natural 210 / Tail 206、parse=1、clip/invalid/non-finite=0，`dev_accessed=true`、`final_accessed=false`；Natural PDMS/PDMS-scaled/StrictClear=`0.8006583/0.7892667/171/210=0.8142857`，Tail=`0.7361843/0.7242287/155/206=0.7524272`；5 项 result hash 全部通过，推理终态资源全部回收；
+- paired gate：以同 seed RR 为 baseline 执行 20,000 次 paired log-cluster bootstrap；Natural PDMS-scaled point delta=`-0.0038521488`，CI=`[-0.0170796209,+0.0151682603]`；Tail StrictClear point delta=`+0.0048543689`，CI=`[-0.0114285714,+0.0192307692]`；Natural point/CI、Tail CI-upper 与 safety-component gates 均通过，但 Tail point `<+0.01`，机械状态=`CLOSED_BY_DISCOVERY_GATE`，不补 TC seeds `20260828/20260829`；
+- 关键 hash：TC Dev scene metrics=`ee37354e796bf111661453788131735453101a401d6b95af2fda5d1f2fd775b7`，paired comparison=`1098a0dfc861f0a2b147220fef06edb8991328aa9afd2bcd7457bfa60824cc3b`，LoRA adapter=`f2d7abbe069e39c3b34f77d95dc07acd25afdb40fa99d37607bd5abfc2ae40c9`；
+- 空间闭环：在训练、Dev、paired comparison、LoRA 与 result hashes 全部验证后，精确删除 `formal_runs/v3_tc_tailmix_cdt_g4_b4_seed20260827/checkpoints/global_step_500/actor/model_world_size_1_rank_0.pt`，大小 `8,144,550,392` bytes；删除不可恢复，LoRA/rollouts/曲线/reports/Dev/bootstrap 均保留；删除后 `/root/autodl-tmp` 可用 `66,005,102,592` bytes；
+- 状态：`COMPLETE / TC_DISCOVERY_GATE_CLOSED / TR_READY / FINAL_UNACCESSED`；
+- 下一唯一动作：按 priority 执行 `V3-TR` discovery seed `20260827`，完成后以 RR 同 seed Dev rows 作为 paired baseline 计算 `TR-RR`。
+
 ## 9. 结论边界
 
 - V3 只承认在 V3 数据和 V3 代码上重新产生的指标；
