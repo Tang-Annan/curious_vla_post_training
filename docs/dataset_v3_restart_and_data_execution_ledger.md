@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`S1_COMPLETE / R0_COMPLETE / H0_COMPLETE / M0_COMPLETE / E0_COMPLETE / RR_COMPLETE_GATE_CLOSED / TC_COMPLETE_GATE_CLOSED / TR_TERMINAL_RECORD_PENDING / RC_SKIPPED_BY_USER / TC_PPO2_PREP_READY / FINAL_UNACCESSED`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix manifests、CDT `R_task`、原 PPO-epoch-1 配置、M0 协议及 SFT Dev anchor 均已冻结；RR/TC discovery 均未通过晋级门槛，TR 的服务器终态结果仍须独立补记；2026-08-31 用户决定跳过 RC、终止完整 2×2 interaction 路线，并将最后一次方法尝试切换为从 SFT Stage-2 重启的 `TailMix + CDT + ppo_epochs=2`。
+> 当前状态：`S1_COMPLETE / R0_COMPLETE / H0_COMPLETE / M0_COMPLETE / E0_COMPLETE / RR_COMPLETE_GATE_CLOSED / TC_COMPLETE_GATE_CLOSED / TR_COMPLETE_GATE_CLOSED / RC_SKIPPED_BY_USER / TC_PPO2_RUNNING / FINAL_UNACCESSED`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix manifests、CDT `R_task`、原 PPO-epoch-1 配置、M0 协议及 SFT Dev anchor 均已冻结；RR/TC/TR discovery 均未通过晋级门槛；2026-08-31 用户决定跳过 RC、终止完整 2×2 interaction 路线，并将最后一次方法尝试切换为从 SFT Stage-2 重启的 `TailMix + CDT + ppo_epochs=2`；multi-epoch iterator 修复、epoch-indexed PPO telemetry、focused test 与 2-step smoke 已全部通过，正式 `V3-TC-PPO2` 训练已于 2026-08-31 03:09 启动。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -342,10 +342,10 @@ Random、TailMix 和后续 selector 共用同一份资产。不得按 selector �
 | --- | --- | --- | --- | --- |
 | `V3-E0-SFT` | 无训练 | 无 | 零更新锚点 | `COMPLETE / BASELINE_FROZEN` |
 | `V3-RR` | Random | Raw-PDMS | primary GRPO baseline | `COMPLETE / DISCOVERY_GATE_CLOSED` |
-| `V3-TR` | TailMix | Raw-PDMS | selector 主效应 | `TERMINAL_RECORD_PENDING` |
+| `V3-TR` | TailMix | Raw-PDMS | selector 主效应 | `COMPLETE / DISCOVERY_GATE_CLOSED` |
 | `V3-RC` | Random | CDT scalar reward | reward 主效应 | `SKIPPED_BY_USER / NOT_RUN` |
 | `V3-TC` | TailMix | CDT scalar reward | 原完整方法端点 | `COMPLETE / DISCOVERY_GATE_CLOSED` |
-| `V3-TC-PPO2` | TailMix | CDT scalar reward | 最后一次下游优化强度尝试 | `PREP_READY / NOT_STARTED` |
+| `V3-TC-PPO2` | TailMix | CDT scalar reward | 最后一次下游优化强度尝试 | `RUNNING / SMOKE_GATE_PASSED` |
 
 直接 contrast：
 
@@ -886,6 +886,31 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 预算：复用 TC 实测训练墙钟 `8 h 20 min 40 s` 与 actor-update 累计约 `2.32 h` 估算，PPO epoch 2 不增加 rollout/reward query，正式训练预计 `10.5–11.5 h`，Dev 与结果闭环另约 `0.5–1 h`；峰值显存预计与 TC 同量级，但启动前仍须通过空间、显存、端口与 source-clean gate；
 - 当前状态：`DECISION_FROZEN / RC_SKIPPED / INTERACTION_CLOSED / TC_PPO2_PREP_READY / NOT_STARTED / FINAL_UNACCESSED`；本记录只冻结路线和启动条件，尚未修改训练代码、生成新配置、运行 smoke 或启动 GPU；
 - 下一唯一动作：在不干扰 TR 现有 GPU 进程的前提下，完成 multi-epoch iterator 最小修复、epoch-indexed PPO telemetry、focused tests 与 2-step smoke；确认 TR 终态资源已回收且上述硬门禁全部通过后，才允许启动 `V3-TC-PPO2` 正式训练。
+
+### 记录 V3-019：TR 终态补记（训练、Dev、paired gate 与资源闭环）
+
+- 时间：训练 2026-08-30 17:03 至 2026-08-31 00:34（Asia/Shanghai），墙钟 7 小时 31 分 11 秒；Dev 评价 00:44 至 00:58，墙钟 14 分钟；
+- branch / source commit / source status：训练与 Dev source 均为 `a2e078be09356a4862074ae45be1d823fb3f3a55`（`docs: close TC discovery gate`），`source_status.txt` 为空，source clean；paired comparison 在 source 更新后按同一 M0 协议复算；
+- 训练输入与动作：`V3-TR`、TailMix selector、Raw-PDMS reward、seed=`20260827`，严格沿用 H0/M0 冻结配置（LR `1e-6`、standard GRPO、`G=4`、4 groups/update、500 updates、2,000 groups / 8,000 queries、PPO epoch 1、rank-8 attention-only LoRA、KL `0.01/low_var_kl`）；rollout 与 reward query 预算与 RR/TC 完全一致；
+- 技术结果：`COMPLETE/exit_code=0`；train=8,000 rows / 2,000 unique groups / 每组 4；monitor=1,536 rows / steps `0/100/200/300/400/500` 各 256；train parse=1、monitor parse=1、clip=0、非 finite 递归扫描=0；峰值显存约 21,266 MiB；终态 trainer/Ray/Gunicorn/8901 均回收；
+- Dev 结果：`v3_tr_tailmix_raw_g4_b4_seed20260827_dev` COMPLETE/exit_code=0，416/416 scenes、Natural 210 / Tail 206、parse=1、clip=0、invalid=0；Natural PDMS/PDMS-scaled/StrictClear=`0.8156106/0.8011540/175/210=0.8333333`，Tail PDMS/PDMS-scaled/StrictClear=`0.7285397/0.7187350/153/206=0.7427184`；access record 显示 `dev_accessed=true`、`final_accessed=false`，checkpoint 为 TR `global_step_500`；
+- paired gate（`matrix_analysis/discovery/v3_tr_vs_rr_seed20260827.json`，20,000 次 paired log-cluster bootstrap）：Natural PDMS-scaled point delta=`+0.0080352`，CI=`[-0.0026996,+0.0261751]`；Tail StrictClear point delta=`-0.0048544`（153 vs 154），CI=`[-0.0212766,+0.0117647]`；Tail safety components：no_at_fault_collisions=`-0.0072816`、time_to_collision_within_bound=`-0.0097087`、drivable_area_compliance=`0`；机械状态=`CLOSED_BY_DISCOVERY_GATE`（Tail point `<+0.01` 且 safety 分项 drop 超限），不补 TR seeds `20260828/20260829`；
+- 空间闭环：验证 `training_report.json`、Dev eval_summary、paired comparison、LoRA adapter 与 result hashes 后确认 TR full actor state `formal_runs/v3_tr_tailmix_raw_g4_b4_seed20260827/checkpoints/global_step_500/actor/model_world_size_1_rank_0.pt` 已不存在（前序会话已删除，大小按 RR/TC 同型为 `8,144,550,392` bytes，不可恢复）；LoRA/rollouts/曲线/reports/Dev/bootstrap 均保留；`/root/autodl-tmp` 可用约 61 GiB（smoke 与正式 run 写入前）；
+- 状态：`COMPLETE / TR_DISCOVERY_GATE_CLOSED / FINAL_UNACCESSED`；
+- 下一唯一动作：完成 TC-PPO2 实现硬门禁与 smoke（见 V3-020），通过后启动正式训练。
+
+### 记录 V3-020：TC-PPO2 实现硬门禁、smoke 与正式训练启动
+
+- 时间：实现与门禁 2026-08-31 01:22–03:09（Asia/Shanghai）；正式训练 03:09 启动，预计 10.5–11.5 小时；
+- 代码修复（commit `e0b3a38`）：`EasyR1/verl/workers/actor/dp_actor.py` 的 `update_policy` 不再在 rank 0 将 `mini_batches` 覆盖为已消费的 `tqdm` iterator；每个 PPO epoch 从同一冻结 mini-batch collection 新建 iterator；同时按 epoch 保存 mean/p95/p99 log-ratio、approximate PPO KL、upper/lower clip fraction、policy loss 与 grad norm（`actor/epoch{1,2}/...`），并保留原有非 epoch 键不破坏既有分析；
+- 配套改动：`projects/dataset_v3/formal_pipeline.py` 注册 `V3-TC-PPO2` cell 并只对该 cell 期望 `ppo_epochs=2`（M0 协议仍冻结 1，不改写协议）；`scripts/run_dataset_v3_formal_cell.sh` 增加 `--ppo-epochs` 与 `V3-TC-PPO2` 分支（run id `v3_tc_ppo2_tailmix_cdt_g4_b4_seed20260827`）；新增 `scripts/run_dataset_v3_ppo2_smoke.sh` 与 `projects/dataset_v3/verify_ppo2_smoke.py`；`tests/test_v3_infrastructure.py` 增加 multi-epoch iterator 回归测试；
+- 测试：本地 V3 全量 `39 passed`；服务器 `39 passed`、`bash -n`、compile、`git diff --check` 通过；source 同步后 clean；
+- smoke 过程与修正：首次 `v3_tc_ppo2_smoke_seed20260827` 因 smoke 配置误把 2,000-token TailMix parquet 作为 val_files，trainer 在两个 step 全部完成后触发 2,000-token final validation，于验证阶段终止（exit_code=134，FAILED，证据保留）；修正 val_files 为 `train_monitor.parquet`（256 tokens）后 `retry1` 训练证据有效（两个 step × 两个 epoch 全部执行，epoch telemetry 写入 `experiment_log.jsonl`），但 wrapper 验证因 verifier 使用扁平 key 而嵌套日志实际为 `actor.epoch{1,2}.*` 误报 FAIL（exit_code=1，FAILED，证据保留）；verifier 修正为扁平化后，对 retry1 同一训练证据本地复验 PASS；
+- 正式 smoke：`v3_tc_ppo2_smoke_seed20260827_retry2` COMPLETE/exit_code=0，`smoke_report.json` 状态 PASS；全部 checks 通过：`config_ppo_epochs=2`、`max_steps=2`、`global_batch_size=4`、`update_step_count=2`、`update_step_coverage=[1,2]`、`epoch2_executed=true`、`all_epoch_metrics_finite=true`、`no_error_patterns=true`；step1 的 epoch1 log_ratio_mean=0（pre-update ratio≈1 属预期），epoch2 log_ratio_mean=-1.05e-4 / p95=2.85e-3 / p99=7.06e-2、ppo_kl=1.05e-4、pg_clipfrac_higher=1.68e-4（epoch1 optimizer step 后重新 forward，clipping 实际生效）；每个 step 恰好两次 `actor/grad_norm`（epoch1/epoch2 各一）；无 deadlock/OOM/non-finite；
+- 正式启动输入与门禁：`V3-TC-PPO2` 从原始 `models/sft_stage2` 初始化，不续训 TC/TR checkpoint；复用冻结 TailMix 2,000-token manifest、`R_TASK_CDT_V3`、seed=`20260827`、`G=4`、4 groups/update、500 updates、8,000 train rollout queries、LR `1e-6`、rank-8 attention-only LoRA、KL `0.01/low_var_kl`、shuffle true、clip ratio `[0.8,1.3]`、monitor steps `0/100/200/300/400/500`；唯一训练超参数变化为 `ppo_epochs: 1 → 2`；source `56513122942956513cebf2dd5305fe740bd90738`（smoke verifier 修复后）clean，GPU 空闲、8901 空闲、磁盘 ≥30 GiB、目标 run/debug/adas 目录不存在；
+- 启动证据：`formal_runs/v3_tc_ppo2_tailmix_cdt_g4_b4_seed20260827/RUNNING+STARTED`，`run.env` 记录 `ppo_epochs=2`、`max_steps=500`、`val_steps=0,100,200,300,400,500`；trainer 主进程与 reward server（8901）已启动；本记录发布时正式训练进行中；
+- 状态：`SMOKE_GATE_PASSED / TC_PPO2_RUNNING / FINAL_UNACCESSED`；
+- 下一唯一动作：由长任务 watcher 监控训练至 COMPLETE/FAILED；完成后在既有冻结 Dev 416 scenes 上执行同协议评价，报告相对 RR 与原 TC 的 paired difference，并按 V3-018 的停止规则机械判定（Tail StrictClear point delta 相对 RR `>=+0.01` 即 `>=157/206`、Tail CI upper `>0`、Natural PDMS-scaled `>=-0.01`、Natural CI lower `>-0.03`、safety drop `<=0.005`）；随后按第 10 节做空间闭环并补记结果。
 
 ## 9. 结论边界
 
