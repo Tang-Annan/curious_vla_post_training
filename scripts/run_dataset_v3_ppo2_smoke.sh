@@ -23,10 +23,11 @@ DATA_ROOT="$WORKSPACE_ROOT/data/dataset_v3_controlled_overlap"
 CACHE_ROOT="$DATA_ROOT/metric_cache"
 TRAIN_MANIFEST="$SELECTOR_ROOT/tailmix_train_2000.txt"
 TRAIN_PARQUET="$SELECTOR_ROOT/tailmix_train_2000.parquet"
+MONITOR_PARQUET="$DATA_ROOT/hf/train_monitor.parquet"
 RUN_DIR="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/ppo2_smoke/$RUN_ID"
 REWARD_PORT=8901
 
-for path in "$PYTHON" "$MODEL" "$TRAIN_MANIFEST" "$TRAIN_PARQUET" "$CACHE_ROOT/metadata/scene_metric_cache.csv"; do
+for path in "$PYTHON" "$MODEL" "$TRAIN_MANIFEST" "$TRAIN_PARQUET" "$MONITOR_PARQUET" "$CACHE_ROOT/metadata/scene_metric_cache.csv"; do
     [[ -e "$path" ]] || { echo "Missing PPO2 smoke input: $path" >&2; exit 1; }
 done
 [[ ! -e "$RUN_DIR" ]] || { echo "Refusing to overwrite PPO2 smoke: $RUN_DIR" >&2; exit 1; }
@@ -95,7 +96,7 @@ export TENSORBOARD_DIR="$RUN_DIR/tensorboard"
 cd "$EASYR1_ROOT"
 "$PYTHON" -m verl.trainer.main \
     config=examples/config_v3_h0_single_gpu.yaml \
-    data.train_files="$TRAIN_PARQUET@train" data.val_files="$TRAIN_PARQUET@train" \
+    data.train_files="$TRAIN_PARQUET@train" data.val_files="$MONITOR_PARQUET@train" \
     data.image_dir="$WORKSPACE_ROOT/data" data.rollout_batch_size=4 data.mini_rollout_batch_size=4 \
     data.shuffle=true data.seed=20260827 \
     worker.actor.global_batch_size=4 worker.actor.optim.lr=1e-6 \
