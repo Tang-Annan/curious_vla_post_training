@@ -13,6 +13,7 @@ from projects.dataset_v3.v4_reward_audit import (
     load_reward_module,
     replay,
     replay_group,
+    restrict_labels,
     trainer_metrics,
 )
 
@@ -184,6 +185,14 @@ def test_replay_group_validates_new_fields() -> None:
 def test_group_rows_rejects_size_mismatch() -> None:
     with pytest.raises(ValueError):
         group_rows([_row("t0"), _row("t0"), _row("t0")], ["t0"])
+
+
+def test_restrict_labels_filters_to_manifest_tokens() -> None:
+    labels = {f"t{index}": {"token": f"t{index}"} for index in range(3)}
+    restricted = restrict_labels(labels, ["t0", "t2"])
+    assert set(restricted) == {"t0", "t2"}
+    with pytest.raises(ValueError):
+        restrict_labels(labels, ["t0", "missing"])
 
 
 def test_cli_subcommands_dispatch_to_functions() -> None:

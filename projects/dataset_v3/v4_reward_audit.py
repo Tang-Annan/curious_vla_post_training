@@ -265,6 +265,13 @@ def read_labels(path: Path) -> dict[str, dict[str, str]]:
     return labels
 
 
+def restrict_labels(labels: dict[str, dict[str, str]], tokens: list[str]) -> dict[str, dict[str, str]]:
+    missing = [token for token in tokens if token not in labels]
+    if missing:
+        raise ValueError(f"Manifest contains tokens missing from labels: {missing[:5]}")
+    return {token: labels[token] for token in tokens}
+
+
 def _median(values: list[float]) -> float:
     if not values:
         raise ValueError("Cannot compute median of an empty list")
@@ -452,9 +459,7 @@ def audit(args: argparse.Namespace) -> None:
     tokens = read_manifest(args.manifest)
     rows = read_jsonl(args.input)
     groups = group_rows(rows, tokens)
-    labels = read_labels(args.labels)
-    if set(labels) != set(tokens):
-        raise ValueError("Label tokens do not match the manifest")
+    labels = restrict_labels(read_labels(args.labels), tokens)
 
     family_counts = Counter(labels[token]["exclusive_family"] for token in tokens)
     if any(labels[token]["exclusive_family"] not in FAMILIES for token in tokens):
