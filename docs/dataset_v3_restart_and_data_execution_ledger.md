@@ -1,7 +1,7 @@
 # Curious-VLA Dataset V3：干净重启、数据制作与 Selector × Reward 预备台账
 
 > 生效日期：2026-08-27（Asia/Shanghai）。
-> 当前状态：`S1_COMPLETE / R0_COMPLETE / H0_COMPLETE / M0_COMPLETE / E0_COMPLETE / RR_COMPLETE_GATE_CLOSED / TC_COMPLETE_GATE_CLOSED / TR_COMPLETE_GATE_CLOSED / RC_SKIPPED_BY_USER / TC_PPO2_RUNNING / FINAL_UNACCESSED`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix manifests、CDT `R_task`、原 PPO-epoch-1 配置、M0 协议及 SFT Dev anchor 均已冻结；RR/TC/TR discovery 均未通过晋级门槛；2026-08-31 用户决定跳过 RC、终止完整 2×2 interaction 路线，并将最后一次方法尝试切换为从 SFT Stage-2 重启的 `TailMix + CDT + ppo_epochs=2`；multi-epoch iterator 修复、epoch-indexed PPO telemetry、focused test 与 2-step smoke 已全部通过，正式 `V3-TC-PPO2` 训练已于 2026-08-31 03:09 启动。
+> 当前状态：`S1_COMPLETE / R0_COMPLETE / H0_COMPLETE / M0_COMPLETE / E0_COMPLETE / RR_COMPLETE_GATE_CLOSED / TC_COMPLETE_GATE_CLOSED / TR_COMPLETE_GATE_CLOSED / RC_SKIPPED_BY_USER / TC_PPO2_COMPLETE_GATE_CLOSED / FINAL_UNACCESSED`；保留现有 `models/sft_stage2`，将 118 个 SFT-unseen logs / 835 个 eligible scenes 全部保留给 Dev/Final，并只从 1,192 个 SFT-seen logs / 103,288 个 SFT tokens 构建受控、可审计的 GRPO train-side pool；Random/TailMix manifests、CDT `R_task`、原 PPO-epoch-1 配置、M0 协议及 SFT Dev anchor 均已冻结；RR/TC/TR discovery 均未通过晋级门槛；2026-08-31 用户决定跳过 RC、终止完整 2×2 interaction 路线，并将最后一次方法尝试切换为从 SFT Stage-2 重启的 `TailMix + CDT + ppo_epochs=2`；multi-epoch iterator 修复、epoch-indexed PPO telemetry、focused test 与 2-step smoke 均已通过，但正式训练的 monitor 与严格 unseen Dev 均退化，最后一次尝试按冻结停止规则关闭。
 > 本文是 Dataset V3 的执行入口。Dataset V2、G4、CDT-HLA 等旧台账只作为历史证据，不再接管新实验。
 
 ## 1. 重启目标与当前冻结结论
@@ -345,7 +345,7 @@ Random、TailMix 和后续 selector 共用同一份资产。不得按 selector �
 | `V3-TR` | TailMix | Raw-PDMS | selector 主效应 | `COMPLETE / DISCOVERY_GATE_CLOSED` |
 | `V3-RC` | Random | CDT scalar reward | reward 主效应 | `SKIPPED_BY_USER / NOT_RUN` |
 | `V3-TC` | TailMix | CDT scalar reward | 原完整方法端点 | `COMPLETE / DISCOVERY_GATE_CLOSED` |
-| `V3-TC-PPO2` | TailMix | CDT scalar reward | 最后一次下游优化强度尝试 | `RUNNING / SMOKE_GATE_PASSED` |
+| `V3-TC-PPO2` | TailMix | CDT scalar reward | 最后一次下游优化强度尝试 | `COMPLETE / DISCOVERY_GATE_CLOSED` |
 
 直接 contrast：
 
@@ -619,8 +619,8 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 | 13 | `V3-H0` | train-only update budget、LR 与条件 estimator/batch pilot | 1 | `COMPLETE / CONFIG_FROZEN` |
 | 14 | `V3-M0` | 冻结 Selector × Reward、训练配置、指标和晋级规则 | 0 | `COMPLETE / PROTOCOL_FROZEN` |
 | 15 | `V3-E0-SFT` | 在冻结 V3 dev 上生成零更新锚点 | 1 | `COMPLETE / BASELINE_FROZEN` |
-| 16 | `V3-RR/TC/TR/RC` | 原最小 2×2 discovery 路线 | 1 | `RR/TC_COMPLETE_GATE_CLOSED / TR_RECORD_PENDING / RC_SKIPPED` |
-| 17 | `V3-TC-PPO2` | 修复 multi-epoch iterator、通过两轮更新 smoke 后，从 SFT Stage-2 执行 TailMix + CDT + PPO epoch 2 | 1 | `PREP_READY / NOT_STARTED` |
+| 16 | `V3-RR/TC/TR/RC` | 原最小 2×2 discovery 路线 | 1 | `RR/TC/TR_COMPLETE_GATE_CLOSED / RC_SKIPPED` |
+| 17 | `V3-TC-PPO2` | 修复 multi-epoch iterator、通过两轮更新 smoke 后，从 SFT Stage-2 执行 TailMix + CDT + PPO epoch 2 | 1 | `COMPLETE / DISCOVERY_GATE_CLOSED` |
 
 不增加与当前主问题无关的算法分支。数据制作完成前的唯一执行路线为 `A0 → B0 → B1 → S0 → D0I → D0R-1 → D0R-2 → D0S → D0A → D0F`。
 
@@ -911,6 +911,20 @@ M0 不重新发明算法，只把以下结论写成唯一正式协议：
 - 启动证据：`formal_runs/v3_tc_ppo2_tailmix_cdt_g4_b4_seed20260827/RUNNING+STARTED`，`run.env` 记录 `ppo_epochs=2`、`max_steps=500`、`val_steps=0,100,200,300,400,500`；trainer 主进程与 reward server（8901）已启动；本记录发布时正式训练进行中；
 - 状态：`SMOKE_GATE_PASSED / TC_PPO2_RUNNING / FINAL_UNACCESSED`；
 - 下一唯一动作：由长任务 watcher 监控训练至 COMPLETE/FAILED；完成后在既有冻结 Dev 416 scenes 上执行同协议评价，报告相对 RR 与原 TC 的 paired difference，并按 V3-018 的停止规则机械判定（Tail StrictClear point delta 相对 RR `>=+0.01` 即 `>=157/206`、Tail CI upper `>0`、Natural PDMS-scaled `>=-0.01`、Natural CI lower `>-0.03`、safety drop `<=0.005`）；随后按第 10 节做空间闭环并补记结果。
+
+### 记录 V3-021：TC-PPO2 训练终态、Dev paired gate 与停止结论
+
+- 时间：正式训练墙钟 9 小时 40 分 38 秒；Dev 评价 2026-08-31 13:40:32–13:55:20（Asia/Shanghai），墙钟 14 分 48 秒；
+- branch / source commit / source status：训练与 Dev source=`56513122942956513cebf2dd5305fe740bd90738`，Dev 启动与终态 source clean；
+- 训练终态：`COMPLETE/exit_code=0`，500/500 updates 均有 epoch 1/2 telemetry，epoch 2 不缺失且无 non-finite；epoch 2 upper clipping 在 72/500 updates 非零、lower clipping 始终为 0，证明两轮 PPO 已真实执行但 ratio 大多仍远离 clipping 边界；monitor step 0→500 的 PDMS=`0.94102→0.92420`、PDMS-scaled=`0.90515→0.89111`、StrictClear=`0.984375→0.96484375`，训练监控未显示增大 optimizer reuse 带来改善；
+- Dev 技术结果：`v3_tc_ppo2_tailmix_cdt_g4_b4_seed20260827_dev` 为 `COMPLETE/exit_code=0`；416/416 scenes、Natural 210 / Tail 206，rollouts 416 rows、ADAS 与 scene metrics 各 416 data rows，parse=1、clip=0、invalid/non-finite=0；结果清单 5 项 hash 全部通过，GPU/reward server/Ray 均已回收，`dev_accessed=true`、`final_accessed=false`；
+- Dev 科学结果：Combined PDMS/PDMS-scaled/StrictClear=`0.7594252/0.7490362/323/416=0.7764423`；Natural PDMS/PDMS-scaled/StrictClear=`0.7970035/0.7853787/171/210=0.8142857`；Tail PDMS/PDMS-scaled/StrictClear=`0.7211172/0.7119881/152/206=0.7378641`；Tail 未达到相对 RR 冻结要求的至少 `157/206`；
+- paired gate（相对 RR，20,000 次 paired log-cluster bootstrap）：Natural PDMS-scaled point delta=`-0.0077401`，CI=`[-0.0217709,+0.0008461]`，point 与 severe-harm CI gates 通过；Tail StrictClear point delta=`-0.0097087`（152 vs 154），CI=`[-0.0288475,+0.0097087]`，Tail CI-upper gate 通过但 point gate 失败；Tail safety deltas 为 drivable-area=`0`、no-at-fault-collisions=`-0.0169903`、TTC=`-0.0048544`，collision drop 超过 `0.005`，safety gate 失败；机械状态=`CLOSED_BY_DISCOVERY_GATE`；
+- 相对原 TC 的解释性 paired 结果：Natural PDMS-scaled point delta=`-0.0038880`，CI=`[-0.0262567,+0.0095996]`；Tail StrictClear point delta=`-0.0145631`（152 vs 155），CI=`[-0.0324689,+0.0057471]`；Tail collision/TTC deltas=`-0.0169903/-0.0097087`。因此 `ppo_epochs: 1→2` 没有把训练侧更强 optimizer reuse 转化为 unseen policy-level 增益，反而在 Tail 主指标和 safety 上退化；
+- 关键 hash：PPO2 scene metrics=`742a503af16a551091065681d13893c878aed4fa4b1117dec00fb02197759b54`，PPO2-vs-RR report=`d739b7edeee7c38dea0c3ff70854f55665e2642f852f8f064dfa3d645de0b229`，PPO2-vs-TC report=`5a641497545b3a2264ca190a961fc364ee266887dca3123ca38da055021b3185`；报告位于 `matrix_analysis/discovery/v3_tc_ppo2_vs_{rr,tc}_seed20260827.json`；
+- 空间状态：`global_step_500/actor/model_world_size_1_rank_0.pt` 仍保留，大小 `8,144,550,392` bytes；本次未执行不可恢复删除，当前 `/root/autodl-tmp` 可用约 37 GiB；
+- 状态：`COMPLETE / TC_PPO2_DISCOVERY_GATE_CLOSED / FINAL_UNACCESSED / NO_FURTHER_V3_TRAINING`；
+- 下一唯一动作：不追加 RC、额外 seed 或 LR/KL/clip/LoRA sweep；如需释放空间，只在用户明确确认后精确删除上述 PPO2 full actor，并记录路径、大小、时间与不可恢复性。
 
 ## 9. 结论边界
 
