@@ -1,7 +1,7 @@
 # Dataset V4 Span-Inspired Risk 执行台账
 
 > 状态日期：2026-08-31
-> 当前状态：CPU-only 场景重标注、容量审计与 Tier-1 决策派生均已完成；未启动训练
+> 当前状态：CPU-only 场景重标注、互斥容量与五模型难度闭环已完成；原 Tier-1 难度门失败，current-visible 修订获得历史模型支持；未启动训练
 > 数据边界：读取冻结 Train Screen 与完整 Dev；`Final accessed = false`
 
 ## 1. 结论摘要
@@ -244,7 +244,7 @@ Train Tier-1 明显由 signal/construction response 主导，因此下一步必�
 5. 冻结评价报告协议：All Dev + Tier-1 + Control + 两个 Tier-1 子类型；
 6. 通过上述门后再决定是否执行最后一次 GPU 尝试。
 
-当前冻结决策：`V4 Tier-1 semantics accepted; training launch = false`。
+当时冻结决策：`V4 Tier-1 semantics accepted; training launch = false`。该判断已被第 12 节的历史模型难度门结果替代；原 Tier-1 不再是 GPU-A 的 primary risk 候选。
 
 ## 11. V4 单变量实验闭环计划
 
@@ -309,3 +309,138 @@ Train Tier-1 明显由 signal/construction response 主导，因此下一步必�
 - 期望方向为 Tier-1 上升、critical proximity 上升、Control 近似不变、All Dev 不下降。
 
 本计划写入时仍保持：`GPU training authorized = false`。
+
+## 12. CPU 闭环正式结果：原标签失败与 current-visible 修订
+
+### 12.1 首次互斥容量与历史模型难度 run
+
+- run id：`v4_experiment_closure_cpu_20260831`
+- source commit：`f382cd10dc94cbcb9d2e3415ab0ebd2b8b5a1d3b`
+- 状态：`COMPLETE`，exit code 0，wall time 6 秒
+- 环境：0.5 vCPU / 2 GiB，`CUDA_VISIBLE_DEVICES` 为空
+- tests：26 passed
+- 数据边界：Dev accessed=true，Final accessed=false
+- 资源终态：`oom=0`、`oom_kill=0`
+
+原 3,289 个候选按 `近距离 > 施工 > 信号` 互斥后为：
+
+| family | 场景数 | unique logs |
+|---|---:|---:|
+| strict horizon proximity | 538 | 285 |
+| construction response | 949 | 467 |
+| signal response | 1,802 | 648 |
+
+per-log 容量审计：
+
+| cap | 最多可用场景 | 2,000 exact 状态 |
+|---:|---:|---|
+| 2 | 1,680 | upper bound insufficient |
+| 4 | 2,730 | exact feasible |
+| 6 | 3,194 | 未继续求解；cap=4 已是最小可行 |
+| 8 | 3,289 | 未继续求解；cap=4 已是最小可行 |
+
+MILP 在 cap=4 下生成了精确 2,000 条 provisional candidate：
+
+- family：近距离/施工/信号=`500/500/1000`；
+- intent：straight/left/right=`1333/434/233`；
+- unique logs=`820`；
+- max per log=`4`；
+- manifest SHA256：`2e619615f3c97b91f5ee24f42f19f946fa4300dcf8b05bf6c23402f2b2047310`；
+- 状态：`PROVISIONAL_NOT_TRAINING_AUTHORIZED`。
+
+### 12.2 原 139-scene Tier-1 难度门失败
+
+五组既有模型全部重新按 All Dev / Tier-1 / Control / critical proximity / response complexity / current interaction 统计，并按 `log_name` 做 20,000 次 cluster bootstrap。
+
+结果方向与预期相反：
+
+- `Tier-1 − Control` StrictClear 在五个模型上全部为正，范围 `+6.56～+8.00 pp`；
+- `Tier-1 − Control` PDMS-scaled 全部为正，范围 `+0.0610～+0.0715`；
+- critical proximity 76 个场景相对 Control 的 StrictClear point delta 为 `+1.10～+3.14 pp`，没有稳定定位困难；
+- response complexity 76 个场景的 StrictClear 为 `90.79%～92.11%`，相对 Control 高约 `+14.62～+16.65 pp`，主要是模型已经容易处理的红灯/停车/起步上下文；
+- 原 V3 current-interaction 265 个场景相对 noninteraction 151 个场景的 StrictClear 在五个模型上为 `−11.09～−13.45 pp`，PDMS-scaled 为 `−0.0986～−0.1125`，全部 bootstrap CI 上界小于 0。
+
+机械结论：
+
+```text
+LABEL_DIFFICULTY_GATE_FAILED
+original_tier1_training_ready=false
+GPU training authorized=false
+```
+
+这证明“expert 做了明显响应”不能直接当作“模型困难风险”；它更适合作为 context family，而不是 primary risk label。
+
+### 12.3 current-visible 追加修订
+
+修订没有在 Dev 上搜索新阈值，而是复用早已存在的 current interaction 阈值，并补上当前输入支持：
+
+```text
+primary risk =
+  当前 vehicle distance <= 5m 且当前前视存在 vehicle context
+  OR
+  当前 VRU distance <= 10m 且当前前视存在 VRU context
+```
+
+construction 与 signal response 降为训练数据的 context quota family，不再并入评价侧 primary risk。
+
+正式修订 run：
+
+- run id：`v4_experiment_closure_cpu_20260831_r1`
+- source commit：`4a19f0b76a3f9c35405c0897cfe127486f0af952`
+- 状态：`COMPLETE`，exit code 0，wall time 9 秒
+- tests：27 passed
+- 数据边界：Dev accessed=true，Final accessed=false
+- 资源终态：`oom=0`、`oom_kill=0`
+
+修订后的 Train 互斥容量：
+
+| family | 场景数 | unique logs |
+|---|---:|---:|
+| current-visible proximity | 1,871 | 691 |
+| construction context | 790 | 431 |
+| signal context | 1,344 | 562 |
+| union | 4,005 | 975 |
+
+cap=2 的理论上限为 1,825，仍不足 2,000；cap=4 的上限为 3,104 且 exact feasible。修订版 provisional 2K 精确满足：
+
+- family=`500/500/1000`；
+- intent=`1333/434/233`；
+- unique logs=`834`；
+- max per log=`4`；
+- manifest SHA256：`3bcb6f32febe5f743a9e400ec750cf59f94c6256159ed8023a4cc4440f6f3e25`。
+
+修订后的 Dev primary risk / Control=`214/202`。五模型历史结果如下：
+
+| 模型 | Risk StrictClear | Control StrictClear | delta | Risk PDMS-scaled | Control PDMS-scaled | delta |
+|---|---:|---:|---:|---:|---:|---:|
+| SFT | 72.43% | 84.16% | -11.73 pp | 0.6948 | 0.8151 | -0.1203 |
+| RR | 72.90% | 84.16% | -11.26 pp | 0.7010 | 0.8181 | -0.1172 |
+| TR | 72.43% | 85.64% | -13.21 pp | 0.6978 | 0.8266 | -0.1289 |
+| TC | 72.43% | 84.65% | -12.22 pp | 0.6971 | 0.8206 | -0.1235 |
+| TC-PPO2 | 71.96% | 83.66% | -11.70 pp | 0.6902 | 0.8114 | -0.1212 |
+
+统计门：
+
+- 五模型 StrictClear point delta 全部小于 0，95% bootstrap CI 上界范围为 `-3.25～-4.72 pp`；
+- 五模型 PDMS-scaled point delta 全部小于 0，95% bootstrap CI 上界范围为 `-0.0432～-0.0512`；
+- `LABEL_DIFFICULTY_GATE_PASS`；
+- 状态限定为 `HISTORICAL_MODEL_SUPPORTED_PROVISIONAL_REVISION`，不是独立 holdout 证明。
+
+### 12.4 正式产物与当前门
+
+`v4_experiment_closure_cpu_20260831_r1` 关键输出：
+
+| 输出 | SHA256 |
+|---|---|
+| `provisional_current_visible_risk_balanced_2000.txt` | `3bcb6f32febe5f743a9e400ec750cf59f94c6256159ed8023a4cc4440f6f3e25` |
+| `train_current_visible_exclusive_labels.csv` | `328de268945d0c306c52220a2d36d7cfc88c263a6bbad1fea2aa69a9b6bc3ee9` |
+| `dev_current_visible_model_slices.csv` | `28395ffd073db52528c89e2d1119a9b7eeb3285fc7f693464142a9aa1aaabf8b` |
+| `v4_cpu_experiment_closure_report.json` | `7143049ca9815380fbcb5970556bb5514abd8f557f6346dda8b3580544bec206` |
+
+当前决策：
+
+1. 原 139-scene Tier-1 退回历史诊断标签，不得用于 GPU-A primary gate；
+2. current-visible 214-scene 修订冻结为下一候选，不再继续读取 Dev 调阈值；
+3. 2,000 条修订 manifest 已精确生成，但仍保留 `provisional` 名称；
+4. 当前无卡服务器不启动训练；`gpu_training_authorized=false`；
+5. 下一步只允许把该 exact manifest 物化为与 RR 完全匹配的 optimizer parquet/config，完成输入哈希和成本门后，再切换 GPU 执行“只改数据”的 GPU-A。
