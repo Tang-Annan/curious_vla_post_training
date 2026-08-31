@@ -14,7 +14,7 @@ MONITOR_MANIFEST="$WORKSPACE_ROOT/manifests/dataset_v3_controlled_overlap/train_
 MONITOR_PARQUET="$DATA_ROOT/dataset_v3_controlled_overlap/hf/train_monitor.parquet"
 M0="$EXPERIMENT_ROOT/protocol_freeze/v3_m0_matrix_protocol_20260829/results/m0_protocol.json"
 FUTURE_RUN="$EXPERIMENT_ROOT/formal_runs/v4_risk50_raw_g4_b4_seed20260827"
-RUN_DIR="$EXPERIMENT_ROOT/training_prepare/v4_risk50_rr_aligned_prepare_20260831"
+RUN_DIR="$EXPERIMENT_ROOT/training_prepare/v4_risk50_rr_aligned_prepare_20260831_r1"
 
 for path in "$PYTHON" "$RR/COMPLETE" "$RR/checkpoints/experiment_config.json" \
     "$RR/model_sha256.txt" "$RISK_AUDIT/COMPLETE" \
@@ -33,7 +33,7 @@ touch "$RUN_DIR/RUNNING"
 date +%s > "$RUN_DIR/start_epoch.txt"
 git -C "$PROJECT_ROOT" rev-parse HEAD > "$RUN_DIR/source_commit.txt"
 git -C "$PROJECT_ROOT" status --porcelain > "$RUN_DIR/source_status.txt"
-printf 'run_id=v4_risk50_rr_aligned_prepare_20260831\ncuda_visible_devices=empty\ndev_accessed=false\nfinal_accessed=false\ngpu_training_authorized=false\n' > "$RUN_DIR/run.env"
+printf 'run_id=v4_risk50_rr_aligned_prepare_20260831_r1\ncuda_visible_devices=empty\ndev_accessed=false\nfinal_accessed=false\ngpu_training_authorized=false\n' > "$RUN_DIR/run.env"
 sha256sum "$RISK_AUDIT/results/frozen_current_visible_risk50_2000.txt" "$SCREEN" \
     "$SELECTOR/random_train_2000.parquet" "$RR/checkpoints/experiment_config.json" \
     "$MONITOR_MANIFEST" "$MONITOR_PARQUET" "$M0" > "$RUN_DIR/input_sha256.txt"

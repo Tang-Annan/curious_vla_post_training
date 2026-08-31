@@ -10,6 +10,7 @@ from projects.dataset_v3.v4_training_prepare import (
     build_aligned_config,
     config_differences,
     materialize_parquet,
+    runtime_input_config,
     validate_rr_contract,
 )
 
@@ -72,6 +73,21 @@ def test_aligned_config_only_changes_the_three_data_identity_fields(tmp_path: Pa
 
 def test_config_differences_reports_nested_paths() -> None:
     assert config_differences({"a": {"b": 1}, "c": 2}, {"a": {"b": 3}, "c": 2}) == ["a.b"]
+
+
+def test_runtime_input_recombines_resolved_reward_function() -> None:
+    config = rr_config()
+    config["worker"]["reward"].update(
+        reward_function="/project/reward.py",
+        reward_function_name="compute_score_raw_pdms",
+    )
+
+    runnable = runtime_input_config(config)
+
+    assert runnable["worker"]["reward"]["reward_function"] == (
+        "/project/reward.py:compute_score_raw_pdms"
+    )
+    assert "reward_function_name" not in runnable["worker"]["reward"]
 
 
 def test_materialized_parquet_matches_rr_schema_and_manifest_order(tmp_path: Path, monkeypatch) -> None:

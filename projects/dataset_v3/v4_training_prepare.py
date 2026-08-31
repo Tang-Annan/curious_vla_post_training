@@ -54,12 +54,23 @@ def build_aligned_config(
     return aligned, differences
 
 
+def runtime_input_config(resolved_config: dict[str, Any]) -> dict[str, Any]:
+    runnable = copy.deepcopy(resolved_config)
+    reward = runnable["worker"]["reward"]
+    reward_name = reward.pop("reward_function_name", None)
+    if reward_name is not None:
+        reward["reward_function"] = f"{reward['reward_function']}:{reward_name}"
+    return runnable
+
+
 def resolve_with_current_runtime(config: dict[str, Any]) -> dict[str, Any]:
     from omegaconf import OmegaConf
 
     from EasyR1.verl.trainer.config import PPOConfig
 
-    merged = OmegaConf.merge(OmegaConf.structured(PPOConfig()), OmegaConf.create(config))
+    merged = OmegaConf.merge(
+        OmegaConf.structured(PPOConfig()), OmegaConf.create(runtime_input_config(config))
+    )
     resolved: PPOConfig = OmegaConf.to_object(merged)
     resolved.deep_post_init()
     return _normalized(resolved.to_dict())
@@ -195,7 +206,8 @@ def prepare(args: argparse.Namespace) -> None:
         raise ValueError("Current runtime changes the generated V4 aligned config")
     config_path = args.output_dir / "risk50_rr_aligned_config.json"
     config_path.write_text(
-        json.dumps(aligned_config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        json.dumps(runtime_input_config(aligned_config), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
     )
 
     monitor_tokens = read_manifest(args.monitor_manifest)
