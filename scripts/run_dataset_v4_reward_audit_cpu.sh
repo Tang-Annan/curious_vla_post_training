@@ -4,7 +4,7 @@ set -euo pipefail
 WORKSPACE_ROOT=/root/autodl-tmp/curious-vla-workspace
 PROJECT_ROOT="$WORKSPACE_ROOT/src/curious_vla_v3"
 PYTHON="$WORKSPACE_ROOT/envs/curious/bin/python"
-RUN_ID=v4_reward_audit_20260831_r2
+RUN_ID=v4_reward_audit_20260831_r3
 RUN_ROOT="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/semantic_audit"
 RUN_DIR="$RUN_ROOT/$RUN_ID"
 S1_DIR="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/rollout_bank/v3_s1_screen8000_g4_seed20260827"
@@ -36,7 +36,7 @@ touch "$RUN_DIR/RUNNING"
 date +%s > "$RUN_DIR/start_epoch.txt"
 git -C "$PROJECT_ROOT" rev-parse HEAD > "$RUN_DIR/source_commit.txt"
 git -C "$PROJECT_ROOT" status --porcelain > "$RUN_DIR/source_status.txt"
-printf 'run_id=%s\nsource_run=%s\nmanifest=%s\nlabels=%s\ncache=%s\nserver_workers=2\nclient_workers=2\ndev_accessed=false\nfinal_accessed=false\n' \
+printf 'run_id=%s\nsource_run=%s\nmanifest=%s\nlabels=%s\ncache=%s\nserver_workers=2\nclient_workers=4\ndev_accessed=false\nfinal_accessed=false\n' \
     "$RUN_ID" "$S1_DIR" "$MANIFEST" "$LABELS" "$CACHE_ROOT" > "$RUN_DIR/run.env"
 sha256sum "$S1_DIR/rollouts.jsonl" "$MANIFEST" "$LABELS" > "$RUN_DIR/input_sha256.txt"
 
@@ -80,7 +80,7 @@ curl -fsS "http://127.0.0.1:$REWARD_PORT/ping" >/dev/null
     --manifest "$MANIFEST" \
     --output "$RUN_DIR/enriched_risk50_reward.jsonl" \
     --report "$RUN_DIR/replay_report.json" \
-    --workers 2
+    --workers 4
 
 "$PYTHON" "$PROJECT_ROOT/projects/dataset_v3/v4_reward_audit.py" audit \
     --input "$RUN_DIR/enriched_risk50_reward.jsonl" \
