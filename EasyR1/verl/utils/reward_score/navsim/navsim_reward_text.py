@@ -14,7 +14,11 @@ from verl.utils.reward_score.navsim.helper import (
     get_trajectory_parser,
 )
 from verl.utils.reward_score.navsim.pdms_logger import BatchJsonlLogger
-from verl.utils.reward_score.navsim.cdt_scalar_reward import cdt_task_reward, raw_pdms_reward
+from verl.utils.reward_score.navsim.cdt_scalar_reward import (
+    cdt_task_reward,
+    raw_pdms_reward,
+    safety_continuous_reward,
+)
 
 import logging
 from datetime import datetime
@@ -77,6 +81,9 @@ SAVED_METRICS = (
     "ego_progress",
     "time_to_collision_within_bound",
     "history_comfort",
+    "time_to_at_fault_collision",
+    "time_to_ttc_infraction",
+    "min_distance_to_actors",
     "pdms",
     "pdms_scaled",
 )
@@ -161,7 +168,7 @@ def format_reward(parsed):
 def _compute_scores(reward_inputs: List[Dict[str, Any]], reward_mode: str) -> List[Dict[str, float]]:
     if not isinstance(reward_inputs, list):
         raise ValueError("Please use `reward_type=batch` for pdms reward function.")
-    if reward_mode not in {"scaled_pdms", "raw_pdms", "cdt_task"}:
+    if reward_mode not in {"scaled_pdms", "raw_pdms", "cdt_task", "safety_continuous"}:
         raise ValueError(f"Unknown reward mode: {reward_mode}")
 
     parse_fn = get_trajectory_parser()
@@ -191,6 +198,8 @@ def _compute_scores(reward_inputs: List[Dict[str, Any]], reward_mode: str) -> Li
             training_reward, cdt_tier = scaled_pdms, None
         elif reward_mode == "raw_pdms":
             training_reward, cdt_tier = raw_pdms_reward(metrics), None
+        elif reward_mode == "safety_continuous":
+            training_reward, cdt_tier = safety_continuous_reward(metrics), None
         else:
             training_reward, cdt_tier = cdt_task_reward(parsed_ok, metrics)
             
@@ -264,3 +273,7 @@ def compute_score_raw_pdms(reward_inputs: List[Dict[str, Any]], format_weight: f
 
 def compute_score_cdt_task(reward_inputs: List[Dict[str, Any]], format_weight: float = 0.1) -> List[Dict[str, float]]:
     return _compute_scores(reward_inputs, "cdt_task")
+
+
+def compute_score_safety_continuous(reward_inputs: List[Dict[str, Any]], format_weight: float = 0.1) -> List[Dict[str, float]]:
+    return _compute_scores(reward_inputs, "safety_continuous")

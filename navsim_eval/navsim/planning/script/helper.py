@@ -256,6 +256,9 @@ def score_single_trajectory(cfg: DictConfig,
     # score_dict["pdms"] = score_dict["pdm_score"]
     score_dict["pdms_scaled"] = calculate_scaled_pdms(score_dict)
     # logger.info(score_dict) 
+    score_dict["time_to_at_fault_collision"] = scorer.time_to_at_fault_collision(1)
+    score_dict["time_to_ttc_infraction"] = scorer.time_to_ttc_infraction(1)
+    score_dict["min_distance_to_actors"] = scorer.min_distance_to_actors(1)
     if verbose:
         score_dict["token"] = token
         score_dict["visual"] = ""
@@ -309,6 +312,9 @@ def score_same_token_trajectory(cfg: DictConfig,
         # score_dict["pdms"] = score_dict["pdm_score"]
         score_dict["pdms_scaled"] = calculate_scaled_pdms(score_dict)
         # logger.info(score_dict) 
+        score_dict["time_to_at_fault_collision"] = scorer.time_to_at_fault_collision(1)
+        score_dict["time_to_ttc_infraction"] = scorer.time_to_ttc_infraction(1)
+        score_dict["min_distance_to_actors"] = scorer.min_distance_to_actors(1)
         if verbose:
             score_dict["token"] = token
             score_dict["visual"] = ""

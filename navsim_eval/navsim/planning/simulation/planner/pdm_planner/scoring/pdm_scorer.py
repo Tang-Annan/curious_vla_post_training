@@ -110,6 +110,7 @@ class PDMScorer:
 
         self._collision_time_idcs: Optional[npt.NDArray[np.float64]] = None
         self._ttc_time_idcs: Optional[npt.NDArray[np.float64]] = None
+        self._min_distance_to_actors: Optional[npt.NDArray[np.float64]] = None
 
     def time_to_at_fault_collision(self, proposal_idx: int) -> float:
         """
@@ -126,6 +127,16 @@ class PDMScorer:
         :return: time to infraction
         """
         return self._ttc_time_idcs[proposal_idx] * self.proposal_sampling.interval_length
+
+    def min_distance_to_actors(self, proposal_idx: int) -> float:
+        """
+        Returns the minimum polygon-to-polygon distance between the ego
+        footprint and any dynamic agent over the proposal horizon.
+        :param proposal_idx: index for proposal
+        :return: minimum distance in meters (inf if no agent is present)
+        """
+        assert self._min_distance_to_actors is not None, "Min distance has not been calculated yet."
+        return float(self._min_distance_to_actors[proposal_idx])
 
     def score_proposals(
         self,
@@ -175,6 +186,7 @@ class PDMScorer:
         # 2. weighted metrics
         self._calculate_progress()
         self._calculate_ttc()
+        self._calculate_min_distance_to_actors()
         self._calculate_lane_keeping()
         self._calculate_history_comfort()
 
@@ -578,6 +590,34 @@ class PDMScorer:
                         temp_collided_track_ids[proposal_idx].append(token)
 
         self._weighted_metrics[WeightedMetricIndex.TTC] = ttc_scores
+
+    def _calculate_min_distance_to_actors(self) -> None:
+        """
+        Computes the minimum polygon-to-polygon distance between the ego
+        footprint and any dynamic agent over the proposal horizon. Distances
+        are measured on the same simulated observation used by collision/TTC.
+        """
+        n_proposals = self._num_proposals
+        distances = np.full(n_proposals, np.inf, dtype=np.float64)
+        agent_tokens = [
+            token
+            for token, obj in self._observation.unique_objects.items()
+            if obj.tracked_object_type in AGENT_TYPES
+        ]
+        if agent_tokens:
+            for proposal_idx in range(n_proposals):
+                best = np.inf
+                for time_idx in range(self.proposal_sampling.num_poses + 1):
+                    occupancy = self._observation[time_idx]
+                    ego_polygon = self._ego_polygons[proposal_idx, time_idx]
+                    for token in agent_tokens:
+                        if token not in occupancy.token_to_idx:
+                            continue
+                        distance = ego_polygon.distance(occupancy[token])
+                        if distance < best:
+                            best = distance
+                distances[proposal_idx] = best
+        self._min_distance_to_actors = distances
 
     def _calculate_traffic_light_compliance(self) -> None:
         """
