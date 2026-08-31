@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import numpy.typing as npt
@@ -23,7 +23,7 @@ from navsim.planning.simulation.planner.pdm_planner.utils.pdm_array_representati
 from navsim.traffic_agents_policies.abstract_traffic_agents_policy import AbstractTrafficAgentsPolicy
 
 
-def _finite_or_none(value: float) -> float | None:
+def _finite_or_none(value: float) -> Optional[float]:
     """JSON-safe representation: non-finite values become null (no infraction)."""
     return None if not np.isfinite(value) else float(value)
 
