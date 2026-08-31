@@ -444,3 +444,23 @@ cap=2 的理论上限为 1,825，仍不足 2,000；cap=4 的上限为 3,104 且 
 3. 2,000 条修订 manifest 已精确生成，但仍保留 `provisional` 名称；
 4. 当前无卡服务器不启动训练；`gpu_training_authorized=false`；
 5. 下一步只允许把该 exact manifest 物化为与 RR 完全匹配的 optimizer parquet/config，完成输入哈希和成本门后，再切换 GPU 执行“只改数据”的 GPU-A。
+
+## 13. 近距离风险占比容量门与 Random 语义差异
+
+### 13.1 对上一版计划的修订
+
+GPU-A 前增加一个纯 Train、CPU-only 的比例门。此门不读取 Dev/Final，也不训练模型；唯一目标是证明新的 2K optimizer manifest 相对既有 Random 2K 在风险语义上具有足够大的差异。
+
+固定规则：
+
+- primary risk 沿用第 12 节 current-visible 定义，不再调阈值；
+- 总量固定 2,000，intent 固定 straight/left/right=`1333/434/233`，每日志最多 4 条；
+- 对 40%/50%/60% 三档分别求 exact feasible 解；剩余配额在 construction/signal context 间等分；
+- 另求上述总量、intent、log-cap 约束下的 primary-risk 最大值，只作为容量上界，不作为训练候选；
+- 首选冻结 50% primary risk + 25% construction + 25% signal；
+- 冻结门预注册为：50% exact feasible、intent 精确、max-per-log≤4，并且相对既有 Random 2K 的 primary-risk 占比提高至少 20 个百分点；
+- 若未过门，GPU 继续关闭；不得通过修改奖励、PPO 强度或训练预算掩盖数据语义差异不足。
+
+正式对比表固定报告 mutually exclusive 的 proximity/construction/signal/control、intent、unique logs 与 max-per-log。既有 Random 清单保持原样，不为改善表格而重采样；因此它是否满足 max-per-log=4 也作为审计结果如实记录。
+
+计划 run id：`v4_risk_ratio_audit_20260831`；执行环境固定为无卡服务器，`CUDA_VISIBLE_DEVICES` 为空，`dev_accessed=false`，`final_accessed=false`，`gpu_training_authorized=false`。
