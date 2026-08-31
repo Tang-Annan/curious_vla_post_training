@@ -21,6 +21,7 @@ case "$CELL" in
     V3-TR) CELL_TAG=tr; SELECTOR=tailmix; REWARD_TAG=raw; REWARD_FUNCTION=compute_score_raw_pdms ;;
     V3-RC) CELL_TAG=rc; SELECTOR=random; REWARD_TAG=cdt; REWARD_FUNCTION=compute_score_cdt_task ;;
     V3-TC-PPO2) CELL_TAG=tc_ppo2; SELECTOR=tailmix; REWARD_TAG=cdt; REWARD_FUNCTION=compute_score_cdt_task ;;
+    V4-RISK50) CELL_TAG=risk50; SELECTOR=risk50; REWARD_TAG=raw; REWARD_FUNCTION=compute_score_raw_pdms ;;
     *) echo "Unsupported formal cell: $CELL" >&2; exit 2 ;;
 esac
 if [[ "$CELL" == "V3-TC-PPO2" && "$PPO_EPOCHS" != 2 ]]; then echo "V3-TC-PPO2 requires --ppo-epochs 2" >&2; exit 2; fi
@@ -32,21 +33,40 @@ EASYR1_ROOT="$PROJECT_ROOT/EasyR1"
 PYTHON="$WORKSPACE_ROOT/envs/curious/bin/python"
 MODEL="$WORKSPACE_ROOT/models/sft_stage2"
 SELECTOR_ROOT="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/selector_freeze/v3_s1_selector_freeze_20260829/results"
+V4_PREP_ROOT="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/training_prepare/v4_risk50_rr_aligned_prepare_20260831/results"
 DATA_ROOT="$WORKSPACE_ROOT/data/dataset_v3_controlled_overlap"
 CACHE_ROOT="$DATA_ROOT/metric_cache"
 MANIFEST_ROOT="$WORKSPACE_ROOT/manifests/dataset_v3_controlled_overlap"
-TRAIN_MANIFEST="$SELECTOR_ROOT/${SELECTOR}_train_2000.txt"
-TRAIN_PARQUET="$SELECTOR_ROOT/${SELECTOR}_train_2000.parquet"
+if [[ "$CELL" == "V4-RISK50" ]]; then
+    TRAIN_MANIFEST="$V4_PREP_ROOT/risk50_train_2000.txt"
+    TRAIN_PARQUET="$V4_PREP_ROOT/risk50_train_2000.parquet"
+    FROZEN_CONFIG="$V4_PREP_ROOT/risk50_rr_aligned_config.json"
+else
+    TRAIN_MANIFEST="$SELECTOR_ROOT/${SELECTOR}_train_2000.txt"
+    TRAIN_PARQUET="$SELECTOR_ROOT/${SELECTOR}_train_2000.parquet"
+    FROZEN_CONFIG=""
+fi
 MONITOR_MANIFEST="$MANIFEST_ROOT/train_monitor_256.txt"
 MONITOR_PARQUET="$DATA_ROOT/hf/train_monitor.parquet"
 M0="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/protocol_freeze/v3_m0_matrix_protocol_20260829/results/m0_protocol.json"
-RUN_ID="v3_${CELL_TAG}_${SELECTOR}_${REWARD_TAG}_g4_b4_seed${SEED}"
+if [[ "$CELL" == "V4-RISK50" ]]; then
+    RUN_ID="v4_risk50_raw_g4_b4_seed${SEED}"
+else
+    RUN_ID="v3_${CELL_TAG}_${SELECTOR}_${REWARD_TAG}_g4_b4_seed${SEED}"
+fi
 RUN_DIR="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/formal_runs/$RUN_ID"
 REWARD_PORT=8901
 
 for path in "$PYTHON" "$MODEL" "$TRAIN_MANIFEST" "$TRAIN_PARQUET" "$MONITOR_MANIFEST" "$MONITOR_PARQUET" "$M0" "$CACHE_ROOT/metadata/scene_metric_cache.csv"; do
     [[ -e "$path" ]] || { echo "Missing formal cell input: $path" >&2; exit 1; }
 done
+if [[ "$CELL" == "V4-RISK50" ]]; then
+    [[ -e "$V4_PREP_ROOT/../COMPLETE" && -e "$FROZEN_CONFIG" ]] || { echo "V4 Risk50 preparation is incomplete" >&2; exit 1; }
+    [[ "$(git -C "$PROJECT_ROOT" rev-parse HEAD)" == "$(cat "$V4_PREP_ROOT/../source_commit.txt")" ]] || { echo "Source changed after V4 preparation" >&2; exit 1; }
+    sha256sum -c "$V4_PREP_ROOT/../result_sha256.txt" >/dev/null
+    "$PYTHON" -c 'import json,sys; report=json.load(open(sys.argv[1])); assert report["status"] == "V4_RISK50_RR_ALIGNED_READY"' \
+        "$V4_PREP_ROOT/v4_risk50_training_prepare_report.json"
+fi
 [[ ! -e "$RUN_DIR" ]] || { echo "Refusing to overwrite formal cell: $RUN_DIR" >&2; exit 1; }
 [[ ! -e "$EASYR1_ROOT/checkpoints/debug/$RUN_ID" ]] || { echo "Debug output exists" >&2; exit 1; }
 [[ -z "$(git -C "$PROJECT_ROOT" status --porcelain)" ]] || { echo "Source checkout is dirty" >&2; exit 1; }
@@ -64,8 +84,13 @@ git -C "$PROJECT_ROOT" status --porcelain > "$RUN_DIR/source_status.txt"
 printf 'run_id=%s\ncell=%s\nselector=%s\nreward=%s\nseed=%s\nlr=1e-6\nestimator=grpo\ngroup_size=4\ngroups_per_update=4\ntraining_groups=2000\nrollout_queries=8000\nmax_steps=500\nval_steps=0,100,200,300,400,500\nppo_epochs=%s\n' \
     "$RUN_ID" "$CELL" "$SELECTOR" "$REWARD_FUNCTION" "$SEED" "$PPO_EPOCHS" > "$RUN_DIR/run.env"
 sha256sum "$TRAIN_MANIFEST" "$TRAIN_PARQUET" "$MONITOR_MANIFEST" "$MONITOR_PARQUET" "$M0" > "$RUN_DIR/input_sha256.txt"
+if [[ -n "$FROZEN_CONFIG" ]]; then sha256sum "$FROZEN_CONFIG" >> "$RUN_DIR/input_sha256.txt"; fi
 sha256sum "$MODEL"/model-*.safetensors "$MODEL/config.json" "$MODEL/model.safetensors.index.json" > "$RUN_DIR/model_sha256.txt"
-cp "$EASYR1_ROOT/examples/config_v3_h0_single_gpu.yaml" "$RUN_DIR/resolved_source_config.yaml"
+if [[ -n "$FROZEN_CONFIG" ]]; then
+    cp "$FROZEN_CONFIG" "$RUN_DIR/resolved_source_config.json"
+else
+    cp "$EASYR1_ROOT/examples/config_v3_h0_single_gpu.yaml" "$RUN_DIR/resolved_source_config.yaml"
+fi
 
 cleanup() {
     status=$?
@@ -111,7 +136,10 @@ export NAVSIM_STAT_PATH="$PROJECT_ROOT/stats/trajectory_stats_train.json"
 export NAVSIM_TRAJ_PARSER_FUNC=verl.utils.reward_score.navsim.helper:parse_trajectory_string_after_tag
 export TENSORBOARD_DIR="$RUN_DIR/tensorboard"
 cd "$EASYR1_ROOT"
-"$PYTHON" -m verl.trainer.main \
+if [[ "$CELL" == "V4-RISK50" ]]; then
+    "$PYTHON" -m verl.trainer.main config="$FROZEN_CONFIG"
+else
+    "$PYTHON" -m verl.trainer.main \
     config=examples/config_v3_h0_single_gpu.yaml \
     data.train_files="$TRAIN_PARQUET@train" data.val_files="$MONITOR_PARQUET@train" \
     data.image_dir="$WORKSPACE_ROOT/data" data.rollout_batch_size=4 data.mini_rollout_batch_size=4 \
@@ -123,6 +151,7 @@ cd "$EASYR1_ROOT"
     algorithm.adv_estimator=grpo algorithm.std_floor=0.05 \
     trainer.experiment_name="$RUN_ID" trainer.max_steps=500 trainer.val_steps='[100,200,300,400,500]' \
     trainer.save_checkpoint_path="$RUN_DIR/checkpoints"
+fi
 
 mapfile -t rollout_files < <(find "$EASYR1_ROOT/checkpoints/debug/$RUN_ID" -maxdepth 1 -type f -name 'generations_*.jsonl')
 [[ "${#rollout_files[@]}" -ge 1 ]] || { echo "Formal rollout log is missing" >&2; exit 1; }

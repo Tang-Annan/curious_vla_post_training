@@ -27,7 +27,9 @@ CELL_REWARD = {
     "V3-RC": "compute_score_cdt_task",
     "V3-TC": "compute_score_cdt_task",
     "V3-TC-PPO2": "compute_score_cdt_task",
+    "V4-RISK50": "compute_score_raw_pdms",
 }
+CELL_METADATA = {"V4-RISK50": {"selector": "Risk50", "reward": "Raw-PDMS"}}
 # V3-018 freezes ppo_epochs=2 only for the last TC-PPO2 optimizer attempt; the
 # frozen M0 protocol keeps ppo_epochs=1 for the original matrix cells.
 CELL_PPO_EPOCHS = {"V3-TC-PPO2": 2}
@@ -146,12 +148,15 @@ def analyze_training(args: argparse.Namespace) -> None:
         "final_clip_rate": final_monitor["clip_rate"] <= protocol["resolved_config_gate"]["clip_rate_max"],
         "nonfinite": True,
     }
+    metadata = CELL_METADATA.get(args.cell, protocol["matrix"]["cells"].get(args.cell))
+    if metadata is None:
+        raise ValueError(f"Formal cell metadata is missing: {args.cell}")
     report = {
         "status": "COMPLETE" if all(health.values()) else "FAILED_HEALTH_GATE",
         "cell": args.cell,
         "seed": args.seed,
-        "selector": protocol["matrix"]["cells"].get(args.cell, protocol["matrix"]["cells"]["V3-TC"])["selector"],
-        "reward": protocol["matrix"]["cells"].get(args.cell, protocol["matrix"]["cells"]["V3-TC"])["reward"],
+        "selector": metadata["selector"],
+        "reward": metadata["reward"],
         "processed_groups": len(groups),
         "rollout_queries": len(train_rows),
         "updates": expected_updates,

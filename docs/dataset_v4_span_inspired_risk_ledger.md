@@ -519,3 +519,33 @@ GPU-A 前增加一个纯 Train、CPU-only 的比例门。此门不读取 Dev/Fin
 | `v4_risk_ratio_audit_report.json` | `cca5a3f46ad74898c74bda3f666dc701241761ce54ca5db22304f6b334c2bfe6` |
 
 当前执行门：Risk50 数据语义门已通过并冻结；GPU 仍未启动，`gpu_training_authorized=false`。下一步只准备与 RR 对齐的 optimizer parquet/config、训练时长与成本门；待 GPU 实例可用后再执行“Risk50 + Raw-PDMS”，不同时改奖励或 PPO 参数。
+
+## 14. Risk50 optimizer 物化与 RR 对齐计划
+
+### 14.1 唯一允许变化的训练输入
+
+以 RR 实际保存的 `checkpoints/experiment_config.json` 为配置权威，而不是重新解释旧台账或依赖当前 YAML 默认值。Risk50 配置相对 RR 只允许三个路径发生变化：
+
+1. `data.train_files`：Random parquet → Risk50 parquet；
+2. `trainer.experiment_name`：RR run id → `v4_risk50_raw_g4_b4_seed20260827`；
+3. `trainer.save_checkpoint_path`：RR checkpoint 目录 → V4 checkpoint 目录。
+
+其余完整 resolved config 必须逐字段相等，包括 seed=`20260827`、Raw-PDMS、G=4、4 groups/update、500 updates、PPO epoch=1、LR=`1e-6`、constant scheduler、LoRA rank 8 attention-only、KL=`0.01/low_var_kl`、shuffle=true、train sampling=`1.0/1.0` 与 Monitor steps=`0/100/200/300/400/500`。本次不继承 TC-PPO2 的 `ppo_epochs=2`。
+
+### 14.2 CPU-only 训练前门
+
+物化 run 必须完成：
+
+- 从冻结 Screen 8K parquet 按 Risk50 manifest 顺序抽取 2,000 行；
+- 输出 parquet schema 与 RR Random parquet 完全一致，answer token 顺序与 manifest 完全一致；
+- 2,000 unique tokens、所有图像路径存在、与 Train Monitor 256 overlap=0；
+- 当前 runtime 合并历史 RR config 后不得新增或改变字段；
+- SFT Stage-2 两个模型分片、config 和 index 的 SHA256 重新通过 RR `model_sha256.txt`；
+- 使用真实 tokenizer/processor 对 Risk50 parquet 做四点 CPU dataloader smoke；
+- 冻结正式启动入口，使启动前再次验证 prep hashes、source commit、GPU idle、8901 端口、30 GiB 磁盘和目标目录不存在。
+
+RR 参考成本来自既有正式 run：wall time=`27,358 秒（7 小时 35 分 58 秒）`，峰值显存=`21,266 MiB / 24,564 MiB`。Risk50 与 RR 的序列预算完全相同，因此训练时长应按同量级预留；正式成本门以至少 24 GiB GPU、至少 30 GiB 可用磁盘和约 8 小时连续窗口为准。
+
+RR 训练 source=`fafda8a771753653a098582b15cce7b17f603037`。当前 source 相对 RR 增加了 PPO epoch telemetry/iterator 修复；PPO epoch=1 时 optimizer update 数与损失路径不变，但源码不是 byte-identical。正式对齐表述限定为“数据以外的 resolved config 完全相同，当前训练实现包含额外只读 telemetry”；不得写成源码逐字节相同。
+
+计划 run id：`v4_risk50_rr_aligned_prepare_20260831`。本阶段保持 `CUDA_VISIBLE_DEVICES=empty`、Dev/Final 均不读取且不启动训练。
