@@ -168,6 +168,12 @@ def pdm_score_from_interpolated_trajectory(
         metric_cache.past_human_trajectory,
     )[pred_idx]
 
+    # Capture the candidate's continuous hazard timing and min actor clearance
+    # before the human-penalty branch re-scores with the same scorer instance.
+    pdm_result["time_to_at_fault_collision"] = scorer.time_to_at_fault_collision(pred_idx)
+    pdm_result["time_to_ttc_infraction"] = scorer.time_to_ttc_infraction(pred_idx)
+    pdm_result["min_distance_to_actors"] = scorer.min_distance_to_actors(pred_idx)
+
     if scorer._config.human_penalty_filter and metric_cache.scene_type == SceneFrameType.ORIGINAL:
         # human_penalty_filter
 
