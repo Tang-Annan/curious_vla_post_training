@@ -153,7 +153,8 @@ def replay(args: argparse.Namespace) -> None:
     if args.output.exists() or args.report.exists():
         raise FileExistsError("Replay output already exists")
     tokens = read_manifest(args.manifest)
-    groups = group_rows(read_jsonl(args.input), tokens)
+    rows = [row for row in read_jsonl(args.input) if row["token"] in set(tokens)]
+    groups = group_rows(rows, tokens)
 
     def post_group(token: str, poses: list[list[list[float]]]) -> list[dict[str, Any]]:
         result = _post_json(

@@ -1,7 +1,9 @@
+import json
 import math
 
 import pytest
 
+from projects.dataset_v3 import v4_reward_audit as reward_audit_module
 from projects.dataset_v3.v4_reward_audit import (
     audit,
     build_parser,
@@ -193,6 +195,43 @@ def test_cli_subcommands_dispatch_to_functions() -> None:
     )
     assert replay_args.function is replay
     assert audit_args.function is audit
+
+
+def test_replay_filters_to_manifest_tokens(tmp_path, monkeypatch) -> None:
+    rows = []
+    for token in ("a", "b", "c"):
+        for _ in range(4):
+            row = _row(token, parsed_ok=True, pdms=0.7, pdms_scaled=0.7)
+            row["poses"] = [[0.0, 0.0, 0.0]] * 8
+            rows.append(row)
+    input_path = tmp_path / "rollouts.jsonl"
+    input_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    manifest = tmp_path / "manifest.txt"
+    manifest.write_text("a\nb\n", encoding="utf-8")
+    output = tmp_path / "out.jsonl"
+    report = tmp_path / "report.json"
+
+    def fake_post(url: str, payload: dict[str, object], timeout: float, retries: int) -> list[dict[str, float]]:
+        return [metrics(pdms=0.7, pdms_scaled=0.7) for _ in payload["poses"]]
+
+    monkeypatch.setattr(reward_audit_module, "_post_json", fake_post)
+    args = reward_audit_module.build_parser().parse_args(
+        [
+            "replay",
+            "--input",
+            str(input_path),
+            "--manifest",
+            str(manifest),
+            "--output",
+            str(output),
+            "--report",
+            str(report),
+        ]
+    )
+    reward_audit_module.replay(args)
+    output_rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines() if line]
+    assert len(output_rows) == 8
+    assert {row["token"] for row in output_rows} == {"a", "b"}
 
 
 def _audit_fixture() -> tuple[dict[str, list[dict[str, object]]], list[str], dict[str, dict[str, str]]]:

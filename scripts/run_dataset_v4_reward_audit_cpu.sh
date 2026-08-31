@@ -4,7 +4,7 @@ set -euo pipefail
 WORKSPACE_ROOT=/root/autodl-tmp/curious-vla-workspace
 PROJECT_ROOT="$WORKSPACE_ROOT/src/curious_vla_v3"
 PYTHON="$WORKSPACE_ROOT/envs/curious/bin/python"
-RUN_ID=v4_reward_audit_20260831_r1
+RUN_ID=v4_reward_audit_20260831_r2
 RUN_ROOT="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/semantic_audit"
 RUN_DIR="$RUN_ROOT/$RUN_ID"
 S1_DIR="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/rollout_bank/v3_s1_screen8000_g4_seed20260827"
