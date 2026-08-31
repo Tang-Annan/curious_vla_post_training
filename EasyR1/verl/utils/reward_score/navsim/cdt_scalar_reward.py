@@ -59,12 +59,22 @@ def time_to_infraction(metrics: Mapping[str, Any]) -> float:
 
 def safety_hard_gate(metrics: Mapping[str, Any]) -> float:
     """
-    Hard safety switch H: 1 iff no at-fault collision and drivable-area
-    compliance hold, otherwise 0.
+    Hard safety switch H: 1 iff the unadjusted candidate passes collision,
+    drivable-area, driving-direction, and traffic-light compliance.
     """
-    collision = _canonical(metrics["no_at_fault_collisions"], (0.0, 0.5, 1.0), "collision")
-    drivable = _canonical(metrics["drivable_area_compliance"], (0.0, 1.0), "drivable")
-    return 1.0 if collision == 1.0 and drivable == 1.0 else 0.0
+    collision = _canonical(
+        metrics["candidate_no_at_fault_collisions"], (0.0, 0.5, 1.0), "candidate collision"
+    )
+    drivable = _canonical(
+        metrics["candidate_drivable_area_compliance"], (0.0, 1.0), "candidate drivable"
+    )
+    direction = _canonical(
+        metrics["candidate_driving_direction_compliance"], (0.0, 0.5, 1.0), "candidate direction"
+    )
+    traffic_light = _canonical(
+        metrics["candidate_traffic_light_compliance"], (0.0, 1.0), "candidate traffic light"
+    )
+    return 1.0 if collision == drivable == direction == traffic_light == 1.0 else 0.0
 
 
 def classify_cdt_tier(parsed_ok: bool, metrics: Mapping[str, Any]) -> str | None:
@@ -100,7 +110,8 @@ def safety_continuous_reward(metrics: Mapping[str, Any]) -> float:
     S = 0.55 * H + 0.30 * R_TTC + 0.15 * R_distance
     Q = 0.7 * ego_progress + 0.3 * history_comfort
 
-    H = 1 iff no at-fault collision and drivable-area compliance hold.
+    H = 1 iff the unadjusted candidate passes collision, drivable-area,
+    driving-direction, and traffic-light compliance.
     R_TTC caps the earliest hazard time at 4.0s; no hazard maps to 1.0.
     R_distance caps min polygon clearance to dynamic agents at 5.0m.
     """

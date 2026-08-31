@@ -78,6 +78,10 @@ timeout = 120
 SAVED_METRICS = (
     "no_at_fault_collisions",
     "drivable_area_compliance",
+    "candidate_no_at_fault_collisions",
+    "candidate_drivable_area_compliance",
+    "candidate_driving_direction_compliance",
+    "candidate_traffic_light_compliance",
     "ego_progress",
     "time_to_collision_within_bound",
     "history_comfort",

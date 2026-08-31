@@ -1,5 +1,6 @@
 import json
 import math
+from typing import Optional
 
 import pytest
 
@@ -25,6 +26,10 @@ def metrics(
     *,
     collision: float = 1.0,
     drivable: float = 1.0,
+    direction: float = 1.0,
+    traffic_light: float = 1.0,
+    candidate_collision: Optional[float] = None,
+    candidate_drivable: Optional[float] = None,
     ttc_collision: float = math.inf,
     ttc_infraction: float = math.inf,
     distance: float = 8.0,
@@ -36,6 +41,10 @@ def metrics(
     return {
         "no_at_fault_collisions": collision,
         "drivable_area_compliance": drivable,
+        "candidate_no_at_fault_collisions": collision if candidate_collision is None else candidate_collision,
+        "candidate_drivable_area_compliance": drivable if candidate_drivable is None else candidate_drivable,
+        "candidate_driving_direction_compliance": direction,
+        "candidate_traffic_light_compliance": traffic_light,
         "ego_progress": progress,
         "time_to_collision_within_bound": 1.0 if ttc_infraction == math.inf else 0.0,
         "history_comfort": comfort,
@@ -63,6 +72,19 @@ def test_safety_continuous_reward_hard_gate_ordering() -> None:
         comfort=0.0,
     )
     assert REWARD.safety_continuous_reward(safe) > REWARD.safety_continuous_reward(unsafe)
+
+
+def test_safety_continuous_reward_rejects_red_light_and_wrong_way() -> None:
+    safe = REWARD.safety_continuous_reward(metrics(progress=0.0, comfort=0.0, distance=0.0, ttc_infraction=0.0))
+    red_light = REWARD.safety_continuous_reward(metrics(traffic_light=0.0, progress=1.0, distance=100.0))
+    wrong_way = REWARD.safety_continuous_reward(metrics(direction=0.0, progress=1.0, distance=100.0))
+    assert safe > red_light
+    assert safe > wrong_way
+
+
+def test_safety_hard_gate_uses_unadjusted_candidate_metrics() -> None:
+    human_adjusted = metrics(collision=1.0, drivable=1.0, candidate_collision=0.0)
+    assert REWARD.safety_hard_gate(human_adjusted) == 0.0
 
 
 def test_safety_continuous_reward_ttc_continuity() -> None:
@@ -115,6 +137,10 @@ def test_safety_continuous_reward_none_fields_are_safe() -> None:
 _FIELD_MAP = {
     "collision": "no_at_fault_collisions",
     "drivable": "drivable_area_compliance",
+    "direction": "candidate_driving_direction_compliance",
+    "traffic_light": "candidate_traffic_light_compliance",
+    "candidate_collision": "candidate_no_at_fault_collisions",
+    "candidate_drivable": "candidate_drivable_area_compliance",
     "ttc_collision": "time_to_at_fault_collision",
     "ttc_infraction": "time_to_ttc_infraction",
     "distance": "min_distance_to_actors",
@@ -132,6 +158,10 @@ def _row(token: str, parsed_ok: bool = True, **overrides: float) -> dict[str, ob
     }
     for key, value in overrides.items():
         row[_FIELD_MAP.get(key, key)] = value
+    if "collision" in overrides and "candidate_collision" not in overrides:
+        row["candidate_no_at_fault_collisions"] = overrides["collision"]
+    if "drivable" in overrides and "candidate_drivable" not in overrides:
+        row["candidate_drivable_area_compliance"] = overrides["drivable"]
     return row
 
 

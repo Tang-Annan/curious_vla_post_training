@@ -17,8 +17,14 @@ from projects.dataset_v3.s1_pipeline import read_manifest
 
 EXPECTED_GROUPS = 2000
 EXPERIMENT_NAME = "v4_risk50_raw_g4_b4_seed20260827"
+SAFETY_EXPERIMENT_NAME = "v4_risk50_safety_g4_b4_seed20260827"
 ALLOWED_RR_CONFIG_DIFFERENCES = {
     "data.train_files",
+    "trainer.experiment_name",
+    "trainer.save_checkpoint_path",
+}
+ALLOWED_GPU_A_CONFIG_DIFFERENCES = {
+    "worker.reward.reward_function_name",
     "trainer.experiment_name",
     "trainer.save_checkpoint_path",
 }
@@ -51,6 +57,19 @@ def build_aligned_config(
     differences = config_differences(rr_config, aligned)
     if set(differences) != ALLOWED_RR_CONFIG_DIFFERENCES:
         raise ValueError(f"Unexpected RR-aligned config differences: {differences}")
+    return aligned, differences
+
+
+def build_safety_aligned_config(
+    gpu_a_config: dict[str, Any], *, future_run_dir: Path
+) -> tuple[dict[str, Any], list[str]]:
+    aligned = copy.deepcopy(gpu_a_config)
+    aligned["worker"]["reward"]["reward_function_name"] = "compute_score_safety_continuous"
+    aligned["trainer"]["experiment_name"] = SAFETY_EXPERIMENT_NAME
+    aligned["trainer"]["save_checkpoint_path"] = str(future_run_dir / "checkpoints")
+    differences = config_differences(gpu_a_config, aligned)
+    if set(differences) != ALLOWED_GPU_A_CONFIG_DIFFERENCES:
+        raise ValueError(f"Unexpected GPU-A-aligned config differences: {differences}")
     return aligned, differences
 
 
@@ -259,6 +278,79 @@ def prepare(args: argparse.Namespace) -> None:
     )
 
 
+def prepare_safety(args: argparse.Namespace) -> None:
+    if args.output_dir.exists():
+        raise FileExistsError(f"Refusing to overwrite V4 safety preparation: {args.output_dir}")
+    if args.future_run_dir.exists():
+        raise FileExistsError(f"Future V4 safety run already exists: {args.future_run_dir}")
+    if args.source_status.read_text(encoding="utf-8").strip():
+        raise ValueError("V4 safety preparation source tree is not clean")
+
+    gpu_a_report = json.loads(args.gpu_a_training_report.read_text(encoding="utf-8"))
+    if gpu_a_report.get("status") != "COMPLETE" or gpu_a_report.get("cell") != "V4-RISK50":
+        raise ValueError("GPU-A training did not complete its formal health gate")
+    reward_audit = json.loads(args.reward_audit_report.read_text(encoding="utf-8"))
+    gates = reward_audit["gates"]
+    if not (
+        all(gates["differentiation"].values())
+        and all(gates["inversion"].values())
+        and all(gates["not_gt_imitation"].values())
+        and "hard_gate_audit" in reward_audit
+    ):
+        raise ValueError("Corrected safety reward did not pass its blocking audit gates")
+
+    gpu_a_config = json.loads(args.gpu_a_config.read_text(encoding="utf-8"))
+    validate_rr_contract(gpu_a_config)
+    if gpu_a_config["data"]["train_files"] != f"{args.train_parquet}@train":
+        raise ValueError("GPU-A resolved config does not use the frozen Risk50 parquet")
+    if sha256_file(args.train_manifest) != gpu_a_report["input_sha256"]["train_manifest"]:
+        raise ValueError("GPU-A training manifest differs from the frozen Risk50 manifest")
+
+    current_gpu_a = resolve_with_current_runtime(gpu_a_config)
+    runtime_differences = config_differences(gpu_a_config, current_gpu_a)
+    if runtime_differences:
+        raise ValueError(f"Current runtime changes GPU-A config semantics: {runtime_differences}")
+    aligned_config, allowed_differences = build_safety_aligned_config(
+        gpu_a_config, future_run_dir=args.future_run_dir
+    )
+    aligned_runtime = resolve_with_current_runtime(aligned_config)
+    if config_differences(aligned_config, aligned_runtime):
+        raise ValueError("Current runtime changes the generated V4 safety config")
+
+    args.output_dir.mkdir(parents=True)
+    config_path = args.output_dir / "risk50_safety_aligned_config.json"
+    config_path.write_text(
+        json.dumps(runtime_input_config(aligned_config), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    report = {
+        "status": "V4_RISK50_SAFETY_ALIGNED_READY",
+        "experiment_name": SAFETY_EXPERIMENT_NAME,
+        "gpu_a_status": gpu_a_report["status"],
+        "gpu_a_runtime_config_drift": runtime_differences,
+        "allowed_config_differences": allowed_differences,
+        "reward_audit_blocking_gates": {
+            "differentiation": gates["differentiation"],
+            "inversion": gates["inversion"],
+            "not_gt_imitation": gates["not_gt_imitation"],
+        },
+        "input_sha256": {
+            "gpu_a_config": sha256_file(args.gpu_a_config),
+            "gpu_a_training_report": sha256_file(args.gpu_a_training_report),
+            "reward_audit_report": sha256_file(args.reward_audit_report),
+            "train_manifest": sha256_file(args.train_manifest),
+            "train_parquet": sha256_file(args.train_parquet),
+        },
+        "output_sha256": {"config": sha256_file(config_path)},
+        "dev_accessed": False,
+        "final_accessed": False,
+        "gpu_training_authorized": True,
+    }
+    (args.output_dir / "v4_risk50_safety_prepare_report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
 def smoke_loader(args: argparse.Namespace) -> None:
     from EasyR1.verl.utils.dataset import RLHFDataset, collate_fn
     from EasyR1.verl.utils.tokenizer import get_processor, get_tokenizer
@@ -322,6 +414,16 @@ def main() -> None:
     prep.add_argument("--model-hash-check", type=Path, required=True)
     prep.add_argument("--output-dir", type=Path, required=True)
     prep.set_defaults(function=prepare)
+    safety = commands.add_parser("prepare-safety")
+    safety.add_argument("--gpu-a-config", type=Path, required=True)
+    safety.add_argument("--gpu-a-training-report", type=Path, required=True)
+    safety.add_argument("--reward-audit-report", type=Path, required=True)
+    safety.add_argument("--train-manifest", type=Path, required=True)
+    safety.add_argument("--train-parquet", type=Path, required=True)
+    safety.add_argument("--future-run-dir", type=Path, required=True)
+    safety.add_argument("--source-status", type=Path, required=True)
+    safety.add_argument("--output-dir", type=Path, required=True)
+    safety.set_defaults(function=prepare_safety)
     smoke = commands.add_parser("smoke-loader")
     smoke.add_argument("--config", type=Path, required=True)
     smoke.add_argument("--output", type=Path, required=True)

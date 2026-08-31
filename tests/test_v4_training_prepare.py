@@ -5,9 +5,12 @@ import pyarrow.parquet as pq
 
 from projects.dataset_v3.formal_pipeline import CELL_METADATA, CELL_REWARD
 from projects.dataset_v3.v4_training_prepare import (
+    ALLOWED_GPU_A_CONFIG_DIFFERENCES,
     ALLOWED_RR_CONFIG_DIFFERENCES,
     EXPERIMENT_NAME,
+    SAFETY_EXPERIMENT_NAME,
     build_aligned_config,
+    build_safety_aligned_config,
     config_differences,
     materialize_parquet,
     runtime_input_config,
@@ -126,3 +129,25 @@ def test_materialized_parquet_matches_rr_schema_and_manifest_order(tmp_path: Pat
 def test_v4_formal_cell_uses_risk50_and_raw_pdms() -> None:
     assert CELL_REWARD["V4-RISK50"] == "compute_score_raw_pdms"
     assert CELL_METADATA["V4-RISK50"] == {"selector": "Risk50", "reward": "Raw-PDMS"}
+
+
+def test_safety_config_only_changes_reward_and_run_identity(tmp_path: Path) -> None:
+    baseline = rr_config()
+    baseline["data"]["train_files"] = "/v4/risk50.parquet@train"
+    baseline["trainer"]["experiment_name"] = EXPERIMENT_NAME
+    baseline["trainer"]["save_checkpoint_path"] = "/v4/gpu-a/checkpoints"
+
+    aligned, differences = build_safety_aligned_config(baseline, future_run_dir=tmp_path / "gpu-b")
+
+    assert set(differences) == ALLOWED_GPU_A_CONFIG_DIFFERENCES
+    assert aligned["trainer"]["experiment_name"] == SAFETY_EXPERIMENT_NAME
+    assert aligned["worker"]["reward"]["reward_function_name"] == "compute_score_safety_continuous"
+    assert aligned["data"] == baseline["data"]
+
+
+def test_v4_safety_formal_cell_uses_same_selector_and_new_reward() -> None:
+    assert CELL_REWARD["V4-RISK50-SAFETY"] == "compute_score_safety_continuous"
+    assert CELL_METADATA["V4-RISK50-SAFETY"] == {
+        "selector": "Risk50",
+        "reward": "Safety-Continuous",
+    }

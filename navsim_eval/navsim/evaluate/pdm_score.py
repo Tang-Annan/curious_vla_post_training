@@ -173,8 +173,18 @@ def pdm_score_from_interpolated_trajectory(
         metric_cache.past_human_trajectory,
     )[pred_idx]
 
-    # Capture the candidate's continuous hazard timing and min actor clearance
-    # before the human-penalty branch re-scores with the same scorer instance.
+    # Preserve the candidate's unadjusted safety gates before human-penalty
+    # compatibility can rewrite the public PDMS metrics.
+    for field in (
+        "no_at_fault_collisions",
+        "drivable_area_compliance",
+        "driving_direction_compliance",
+        "traffic_light_compliance",
+    ):
+        pdm_result[f"candidate_{field}"] = float(pdm_result.at[0, field])
+
+    # Capture continuous hazard timing and min actor clearance before the
+    # human-penalty branch re-scores with the same scorer instance.
     pdm_result["time_to_at_fault_collision"] = _finite_or_none(scorer.time_to_at_fault_collision(pred_idx))
     pdm_result["time_to_ttc_infraction"] = _finite_or_none(scorer.time_to_ttc_infraction(pred_idx))
     pdm_result["min_distance_to_actors"] = _finite_or_none(scorer.min_distance_to_actors(pred_idx))

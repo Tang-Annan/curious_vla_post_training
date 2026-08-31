@@ -18,6 +18,10 @@ from typing import Any, Callable
 REWARD_FIELDS = (
     "no_at_fault_collisions",
     "drivable_area_compliance",
+    "candidate_no_at_fault_collisions",
+    "candidate_drivable_area_compliance",
+    "candidate_driving_direction_compliance",
+    "candidate_traffic_light_compliance",
     "ego_progress",
     "time_to_collision_within_bound",
     "history_comfort",
@@ -297,12 +301,28 @@ def audit_report(
     inversion_violations = 0
     safe_values: list[float] = []
     unsafe_values: list[float] = []
+    hard_gate_failures: Counter[str] = Counter()
+    legacy_safe_candidate_unsafe = 0
 
     for token in tokens:
         token_rows = groups[token]
         family = labels[token]["exclusive_family"]
         rewards = [candidate_rewards(row, reward) for row in token_rows]
         for row, entry in zip(token_rows, rewards):
+            if bool(row["parsed_ok"]):
+                for field in (
+                    "candidate_no_at_fault_collisions",
+                    "candidate_drivable_area_compliance",
+                    "candidate_driving_direction_compliance",
+                    "candidate_traffic_light_compliance",
+                ):
+                    if float(row[field]) < 1.0:
+                        hard_gate_failures[field] += 1
+                legacy_safe = (
+                    float(row["no_at_fault_collisions"]) == 1.0
+                    and float(row["drivable_area_compliance"]) == 1.0
+                )
+                legacy_safe_candidate_unsafe += legacy_safe and entry["hard_safe"] == 0.0
             table.append(
                 {
                     "token": token,
@@ -311,6 +331,12 @@ def audit_report(
                     "exclusive_family": family,
                     "parsed_ok": int(bool(row["parsed_ok"])),
                     "hard_safe": entry["hard_safe"],
+                    "candidate_no_at_fault_collisions": float(row["candidate_no_at_fault_collisions"]),
+                    "candidate_drivable_area_compliance": float(row["candidate_drivable_area_compliance"]),
+                    "candidate_driving_direction_compliance": float(
+                        row["candidate_driving_direction_compliance"]
+                    ),
+                    "candidate_traffic_light_compliance": float(row["candidate_traffic_light_compliance"]),
                     "ego_progress": float(row["ego_progress"]),
                     "raw_pdms_reward": entry["raw_pdms"],
                     "cdt_task_reward": entry["cdt_task"],
@@ -412,13 +438,19 @@ def audit_report(
             "safe_min": min(safe_values) if safe_values else None,
             "unsafe_max": max(unsafe_values) if unsafe_values else None,
         },
+        "hard_gate_audit": {
+            "candidate_component_failure_rows": dict(sorted(hard_gate_failures.items())),
+            "legacy_safe_candidate_unsafe_rows": legacy_safe_candidate_unsafe,
+        },
         "family_differentiation": family_rows,
         "correlations": correlations,
         "not_gt_imitation": {
             "by_construction": True,
             "reward_inputs": [
-                "no_at_fault_collisions",
-                "drivable_area_compliance",
+                "candidate_no_at_fault_collisions",
+                "candidate_drivable_area_compliance",
+                "candidate_driving_direction_compliance",
+                "candidate_traffic_light_compliance",
                 "time_to_at_fault_collision",
                 "time_to_ttc_infraction",
                 "min_distance_to_actors",
