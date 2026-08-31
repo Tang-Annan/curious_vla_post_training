@@ -245,3 +245,67 @@ Train Tier-1 明显由 signal/construction response 主导，因此下一步必�
 6. 通过上述门后再决定是否执行最后一次 GPU 尝试。
 
 当前冻结决策：`V4 Tier-1 semantics accepted; training launch = false`。
+
+## 11. V4 单变量实验闭环计划
+
+### 11.1 只回答三个问题
+
+1. 按真实驾驶场景组织训练数据，是否优于相同规模的随机数据；
+2. 数据固定后，CDT 奖励是否相对原驾驶评分产生额外增益；
+3. 数据与奖励结论明确后，policy-derived failure/recovery proxy 是否还有额外价值。
+
+三项不得在同一次实验中同时改变。正式因果链固定为：
+
+```text
+随机数据 + 原奖励
+  → 风险均衡数据 + 原奖励
+  → 同一风险均衡数据 + CDT
+  → 同一风险均衡数据 + CDT + failure/recovery proxy
+```
+
+### 11.2 阶段与停止门
+
+| 阶段 | 唯一变化 | 首要问题 | 进入下一阶段的条件 |
+|---|---|---|---|
+| CPU-A | 无训练；重做场景互斥分类和容量审计 | 能否得到可复现且不被信号灯主导的 2,000 条候选集 | exact family/intent/log-cap 约束可满足 |
+| CPU-B | 无训练；只重算已有模型的 Dev 切片 | 新标签是否稳定定位模型薄弱场景 | Tier-1 与 critical proximity 在历史模型上方向性低于 Control |
+| GPU-A | Random 2K 改为风险均衡 2K；其余全部相同 | 数据选择是否有效 | Tier-1/critical 改善，Control 不明显退化 |
+| GPU-B | 固定 GPU-A 的同一 2K，只替换为 CDT | 奖励是否有额外价值 | 相对 GPU-A 有增量且 Control/safety 不退化 |
+| GPU-C | 固定数据与奖励，只加入少量 failure/recovery proxy | proxy pairing 是否有额外价值 | 相对 GPU-B 有增量；结论始终保留 proxy 限定 |
+
+任一阶段未通过，其后的 GPU 阶段自动关闭；不得通过同时修改数据、奖励、PPO 强度或训练预算来补救。
+
+### 11.3 CPU-A 预注册规则
+
+- Train Tier-1 的互斥优先级固定为：`近距离交互 > 施工响应 > 信号灯响应`；
+- 近距离交互只使用当前同类型前视可见的 critical proximity；
+- 全局 intent quota 与 V3 Random 基线保持一致：straight/left/right=`1333/434/233`；
+- 审计 per-log cap=`2/4/6/8`，采用能够满足 2,000 条精确约束的最小 cap；
+- 目标 family quota 在容量审计后机械冻结为：近距离交互至少 25%，信号灯响应不超过 50%，其余给施工响应；
+- 选样使用固定 seed，manifest 必须 2,000 unique tokens、train-only、与 Dev/Final 无 overlap；
+- CPU-A 产出的 2,000 条在 CPU-B 通过前只称 `provisional candidate`，不得送入 optimizer。
+
+### 11.4 CPU-B 固定报告切片
+
+对既有 SFT、Random+原奖励、TailMix+原奖励、TailMix+CDT、TailMix+CDT+PPO2 五组模型，统一重算：
+
+- All Dev：416；
+- V4 Tier-1：139；
+- Control：277；
+- critical proximity：76；
+- response complexity：76；
+- 旧 current-interaction comparator：用于检查新标签是否比已知近距定义更能定位失败。
+
+每个切片至少报告 StrictClear、PDMS-scaled、Collision 与 TTC；以 `Tier-1 − Control` 和 `critical proximity − Control` 的跨模型方向一致性作为训练门。Dev 结果只用于判定标签是否有效，不参与 token 选择或 family quota 调参。
+
+### 11.5 GPU-A 的冻结对照原则
+
+若 CPU-B 通过，GPU-A 只能改变 2,000-token optimizer manifest：
+
+- 初始化模型、seed、G、batch、学习率、LoRA、PPO epochs、总 update、rollout 预算不变；
+- 奖励继续使用原 Raw-PDMS；
+- primary comparison 为“风险均衡 2K + Raw-PDMS”相对“Random 2K + Raw-PDMS”；
+- 必须同时报告 Tier-1、critical proximity、Control 与 All Dev；
+- 期望方向为 Tier-1 上升、critical proximity 上升、Control 近似不变、All Dev 不下降。
+
+本计划写入时仍保持：`GPU training authorized = false`。
