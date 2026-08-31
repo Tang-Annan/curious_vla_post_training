@@ -3,10 +3,13 @@ import math
 import pytest
 
 from projects.dataset_v3.v4_reward_audit import (
+    audit,
+    build_parser,
     audit_report,
     candidate_rewards,
     group_rows,
     load_reward_module,
+    replay,
     replay_group,
     trainer_metrics,
 )
@@ -179,6 +182,17 @@ def test_replay_group_validates_new_fields() -> None:
 def test_group_rows_rejects_size_mismatch() -> None:
     with pytest.raises(ValueError):
         group_rows([_row("t0"), _row("t0"), _row("t0")], ["t0"])
+
+
+def test_cli_subcommands_dispatch_to_functions() -> None:
+    replay_args = build_parser().parse_args(
+        ["replay", "--input", "in.jsonl", "--manifest", "m.txt", "--output", "out.jsonl", "--report", "r.json"]
+    )
+    audit_args = build_parser().parse_args(
+        ["audit", "--input", "in.jsonl", "--manifest", "m.txt", "--labels", "l.csv", "--output-dir", "out"]
+    )
+    assert replay_args.function is replay
+    assert audit_args.function is audit
 
 
 def _audit_fixture() -> tuple[dict[str, list[dict[str, object]]], list[str], dict[str, dict[str, str]]]:
