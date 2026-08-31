@@ -11,7 +11,7 @@ RAW_LOGS="$WORKSPACE_ROOT/data/navsim/navsim_logs/trainval"
 STABILITY="$EXPERIMENT_ROOT/rollout_bank/v3_s1_stability_capacity_audit_20260829/results/stability_capacity.csv"
 SELECTOR_ROOT="$EXPERIMENT_ROOT/selector_freeze/v3_s1_selector_freeze_20260829/results"
 MASTER="$MANIFEST_ROOT/master_index.csv"
-RANDOM="$SELECTOR_ROOT/random_train_2000.txt"
+RANDOM_MANIFEST="$SELECTOR_ROOT/random_train_2000.txt"
 TAILMIX="$SELECTOR_ROOT/tailmix_train_2000.txt"
 DEV_NATURAL="$MANIFEST_ROOT/dev_natural.txt"
 DEV_TAIL="$MANIFEST_ROOT/dev_tail.txt"
@@ -21,7 +21,7 @@ TC="$EXPERIMENT_ROOT/dev_evaluation/v3_tc_tailmix_cdt_g4_b4_seed20260827_dev/res
 TR="$EXPERIMENT_ROOT/dev_evaluation/v3_tr_tailmix_raw_g4_b4_seed20260827_dev/results/scene_metrics.csv"
 PPO2="$EXPERIMENT_ROOT/dev_evaluation/v3_tc_ppo2_tailmix_cdt_g4_b4_seed20260827_dev/results/scene_metrics.csv"
 
-for path in "$PYTHON" "$RAW_LOGS" "$STABILITY" "$MASTER" "$RANDOM" "$TAILMIX" \
+for path in "$PYTHON" "$RAW_LOGS" "$STABILITY" "$MASTER" "$RANDOM_MANIFEST" "$TAILMIX" \
     "$DEV_NATURAL" "$DEV_TAIL" "$SFT" "$RR" "$TC" "$TR" "$PPO2"; do
     [[ -e "$path" ]] || { echo "Missing Tail semantic audit input: $path" >&2; exit 1; }
 done
@@ -38,7 +38,7 @@ date +%s > "$RUN_DIR/start_epoch.txt"
 git -C "$PROJECT_ROOT" rev-parse HEAD > "$RUN_DIR/source_commit.txt"
 git -C "$PROJECT_ROOT" status --porcelain > "$RUN_DIR/source_status.txt"
 printf 'run_id=v3_tail_semantic_alignment_20260831\nworkers=1\nbootstrap_resamples=20000\ncuda_visible_devices=empty\ntrain_screen=8000\ndev_natural=210\ndev_tail=206\nfinal_accessed=false\n' > "$RUN_DIR/run.env"
-sha256sum "$STABILITY" "$MASTER" "$RANDOM" "$TAILMIX" "$DEV_NATURAL" "$DEV_TAIL" \
+sha256sum "$STABILITY" "$MASTER" "$RANDOM_MANIFEST" "$TAILMIX" "$DEV_NATURAL" "$DEV_TAIL" \
     "$SFT" "$RR" "$TC" "$TR" "$PPO2" > "$RUN_DIR/input_sha256.txt"
 
 cleanup() {
@@ -57,7 +57,7 @@ cd "$PROJECT_ROOT"
     --raw-train-logs "$RAW_LOGS" \
     --master-index "$MASTER" \
     --stability-capacity "$STABILITY" \
-    --random-manifest "$RANDOM" \
+    --random-manifest "$RANDOM_MANIFEST" \
     --tailmix-manifest "$TAILMIX" \
     --dev-natural "$DEV_NATURAL" \
     --dev-tail "$DEV_TAIL" \
