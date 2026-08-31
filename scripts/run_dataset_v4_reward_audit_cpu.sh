@@ -20,7 +20,15 @@ done
 [[ "$(cat "$S1_DIR/exit_code")" == 0 ]] || { echo "S1 did not exit successfully" >&2; exit 1; }
 [[ ! -e "$RUN_DIR" ]] || { echo "Refusing to overwrite run directory: $RUN_DIR" >&2; exit 1; }
 [[ -z "$(git -C "$PROJECT_ROOT" status --porcelain)" ]] || { echo "Source checkout is dirty" >&2; exit 1; }
-[[ -z "$(fuser "$REWARD_PORT/tcp" 2>/dev/null || true)" ]] || { echo "Port $REWARD_PORT is in use" >&2; exit 1; }
+if (exec 3<>"/dev/tcp/127.0.0.1/$REWARD_PORT") 2>/dev/null; then
+    exec 3>&- 3<&- || true
+    echo "Port $REWARD_PORT is in use" >&2
+    exit 1
+fi
+if pidof gunicorn >/dev/null 2>&1; then
+    echo "A gunicorn process is already running" >&2
+    exit 1
+fi
 [[ "$(df -Pk "$WORKSPACE_ROOT" | awk 'NR==2 {print $4}')" -ge 5242880 ]] || { echo "Reward audit requires 5 GiB free" >&2; exit 1; }
 
 mkdir -p "$RUN_DIR"

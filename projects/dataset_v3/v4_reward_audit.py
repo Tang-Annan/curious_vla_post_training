@@ -99,13 +99,17 @@ def group_rows(
 
 
 def _validate_metric(metric: dict[str, Any]) -> None:
-    distance = float(metric["min_distance_to_actors"])
-    if not math.isfinite(distance) or distance < 0.0:
-        raise ValueError(f"min_distance_to_actors is invalid: {distance}")
+    distance = metric["min_distance_to_actors"]
+    if distance is not None:
+        distance = float(distance)
+        if not math.isfinite(distance) or distance < 0.0:
+            raise ValueError(f"min_distance_to_actors is invalid: {distance}")
     for field in ("time_to_at_fault_collision", "time_to_ttc_infraction"):
-        value = float(metric[field])
-        if value < 0.0 or (not math.isfinite(value) and value != math.inf):
-            raise ValueError(f"{field} is invalid: {value}")
+        value = metric[field]
+        if value is not None:
+            value = float(value)
+            if value < 0.0 or (not math.isfinite(value) and value != math.inf):
+                raise ValueError(f"{field} is invalid: {value}")
 
 
 def replay_group(
@@ -122,9 +126,11 @@ def replay_group(
     for index, metric in zip(valid_indices, metrics):
         _validate_metric(metric)
         for field in REWARD_FIELDS:
-            value = float(metric[field])
-            if field not in {"time_to_at_fault_collision", "time_to_ttc_infraction"} and not math.isfinite(value):
-                raise ValueError(f"Non-finite {field} for {token}")
+            value = metric[field]
+            if value is not None:
+                value = float(value)
+                if field not in {"time_to_at_fault_collision", "time_to_ttc_infraction"} and not math.isfinite(value):
+                    raise ValueError(f"Non-finite {field} for {token}")
             enriched[index][field] = value
         if abs(float(rows[index]["pdms"]) - float(metric["pdms"])) > 1e-8:
             raise ValueError(f"PDMS replay mismatch for {token}")
@@ -199,7 +205,10 @@ def _canonical(value: Any, allowed: tuple[float, ...], name: str) -> float:
 
 def trainer_metrics(row: dict[str, Any]) -> dict[str, float]:
     """Metrics exactly as the trainer reward callable sees them."""
-    metrics = {field: float(row[field]) for field in REWARD_FIELDS}
+    metrics = {}
+    for field in REWARD_FIELDS:
+        value = row[field]
+        metrics[field] = float("inf") if value is None else float(value)
     if not bool(row["parsed_ok"]):
         for field in REWARD_FIELDS:
             metrics[field] = 0.0
@@ -298,9 +307,15 @@ def audit_report(
                     "raw_pdms_reward": entry["raw_pdms"],
                     "cdt_task_reward": entry["cdt_task"],
                     "safety_continuous_reward": entry["safety_continuous"],
-                    "time_to_at_fault_collision": float(row["time_to_at_fault_collision"]),
-                    "time_to_ttc_infraction": float(row["time_to_ttc_infraction"]),
-                    "min_distance_to_actors": float(row["min_distance_to_actors"]),
+                    "time_to_at_fault_collision": (
+                        float("inf") if row["time_to_at_fault_collision"] is None else float(row["time_to_at_fault_collision"])
+                    ),
+                    "time_to_ttc_infraction": (
+                        float("inf") if row["time_to_ttc_infraction"] is None else float(row["time_to_ttc_infraction"])
+                    ),
+                    "min_distance_to_actors": (
+                        float("inf") if row["min_distance_to_actors"] is None else float(row["min_distance_to_actors"])
+                    ),
                 }
             )
 

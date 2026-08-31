@@ -8,6 +8,7 @@ from projects.dataset_v3.v4_reward_audit import (
     group_rows,
     load_reward_module,
     replay_group,
+    trainer_metrics,
 )
 
 
@@ -97,6 +98,14 @@ def test_safety_continuous_reward_bounds_and_invalid_inputs() -> None:
         REWARD.safety_continuous_reward(metrics(collision=0.7))
 
 
+def test_safety_continuous_reward_none_fields_are_safe() -> None:
+    none_metrics = metrics(progress=1.0)
+    none_metrics["time_to_at_fault_collision"] = None
+    none_metrics["time_to_ttc_infraction"] = None
+    none_metrics["min_distance_to_actors"] = None
+    assert REWARD.safety_continuous_reward(none_metrics) == 1.0
+
+
 _FIELD_MAP = {
     "collision": "no_at_fault_collisions",
     "drivable": "drivable_area_compliance",
@@ -127,6 +136,17 @@ def test_candidate_rewards_zero_invalid_rows_like_trainer() -> None:
     assert rewards["cdt_task"] == 0.0
     assert rewards["safety_continuous"] == 0.0
     assert rewards["hard_safe"] == 0.0
+
+
+def test_trainer_metrics_treats_none_as_infinity() -> None:
+    row = _row("t0")
+    row["time_to_at_fault_collision"] = None
+    row["time_to_ttc_infraction"] = None
+    row["min_distance_to_actors"] = None
+    metrics = trainer_metrics(row)
+    assert metrics["time_to_at_fault_collision"] == math.inf
+    assert metrics["time_to_ttc_infraction"] == math.inf
+    assert metrics["min_distance_to_actors"] == math.inf
 
 
 def test_replay_group_validates_new_fields() -> None:

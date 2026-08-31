@@ -47,6 +47,8 @@ def time_to_infraction(metrics: Mapping[str, Any]) -> float:
     """
     earliest = math.inf
     for field in ("time_to_at_fault_collision", "time_to_ttc_infraction"):
+        if metrics[field] is None:
+            continue
         value = float(metrics[field])
         if math.isfinite(value):
             if value < 0.0:
@@ -102,7 +104,11 @@ def safety_continuous_reward(metrics: Mapping[str, Any]) -> float:
     R_TTC caps the earliest hazard time at 4.0s; no hazard maps to 1.0.
     R_distance caps min polygon clearance to dynamic agents at 5.0m.
     """
-    distance = _nonnegative(metrics["min_distance_to_actors"], "min_distance_to_actors")
+    distance = (
+        math.inf
+        if metrics["min_distance_to_actors"] is None
+        else _nonnegative(metrics["min_distance_to_actors"], "min_distance_to_actors")
+    )
     progress = _bounded(metrics["ego_progress"], "ego_progress")
     comfort = _bounded(metrics["history_comfort"], "history_comfort")
 

@@ -23,6 +23,11 @@ from navsim.planning.simulation.planner.pdm_planner.utils.pdm_array_representati
 from navsim.traffic_agents_policies.abstract_traffic_agents_policy import AbstractTrafficAgentsPolicy
 
 
+def _finite_or_none(value: float) -> float | None:
+    """JSON-safe representation: non-finite values become null (no infraction)."""
+    return None if not np.isfinite(value) else float(value)
+
+
 def transform_trajectory(pred_trajectory: Trajectory, initial_ego_state: EgoState) -> InterpolatedTrajectory:
     """
     Transform trajectory in global frame and return as InterpolatedTrajectory
@@ -170,9 +175,9 @@ def pdm_score_from_interpolated_trajectory(
 
     # Capture the candidate's continuous hazard timing and min actor clearance
     # before the human-penalty branch re-scores with the same scorer instance.
-    pdm_result["time_to_at_fault_collision"] = scorer.time_to_at_fault_collision(pred_idx)
-    pdm_result["time_to_ttc_infraction"] = scorer.time_to_ttc_infraction(pred_idx)
-    pdm_result["min_distance_to_actors"] = scorer.min_distance_to_actors(pred_idx)
+    pdm_result["time_to_at_fault_collision"] = _finite_or_none(scorer.time_to_at_fault_collision(pred_idx))
+    pdm_result["time_to_ttc_infraction"] = _finite_or_none(scorer.time_to_ttc_infraction(pred_idx))
+    pdm_result["min_distance_to_actors"] = _finite_or_none(scorer.min_distance_to_actors(pred_idx))
 
     if scorer._config.human_penalty_filter and metric_cache.scene_type == SceneFrameType.ORIGINAL:
         # human_penalty_filter

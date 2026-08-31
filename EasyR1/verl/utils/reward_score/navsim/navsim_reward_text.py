@@ -113,7 +113,10 @@ def simulator_reward(token: str, poses: list[list[float]], verbose: bool):
                 resp = client.post(random.choice(url_pool), content=json.dumps(payload), headers=headers)
             if resp.status_code == 200:
                 data = resp.json()
-                return {field: float(data[field]) for field in SAVED_METRICS}
+                return {
+                    field: (float("inf") if data[field] is None else float(data[field]))
+                    for field in SAVED_METRICS
+                }
             else:
                 logger.warning(f"[WARN] server error code: {resp.status_code}, try again {attempt}/{retries}")
         except httpx.HTTPError as e:
