@@ -1,7 +1,7 @@
 # Dataset V4 Span-Inspired Risk 执行台账
 
 > 状态日期：2026-08-31
-> 当前状态：CPU-only 场景重标注、互斥容量与五模型难度闭环已完成；原 Tier-1 难度门失败，current-visible 修订获得历史模型支持；未启动训练
+> 当前状态：CPU-only 场景重标注、互斥容量与五模型难度闭环已完成；原 Tier-1 难度门失败，current-visible 修订获得历史模型支持；Risk50 数据门通过并已物化 READY；安全优先连续 reward 定义与 CPU 审计完成并冻结为 GPU-B 候选；未启动训练
 > 数据边界：读取冻结 Train Screen 与完整 Dev；`Final accessed = false`
 
 ## 1. 结论摘要
@@ -598,3 +598,64 @@ bash scripts/run_dataset_v3_formal_cell.sh --cell V4-RISK50 --seed 20260827
 ```
 
 启动器会在创建 run 前再次验证 prep 全部 SHA256、source commit=`5844792...`、GPU idle、8901 空闲、磁盘≥30 GiB、目标目录不存在。当前持久化准备状态=`V4_RISK50_RR_ALIGNED_READY`；无卡实例不启动训练，`gpu_training_authorized=false`。切换 GPU 后仍需通过启动瞬间的两个易失门，预计训练参考时长 7 小时 36 分，建议预留约 8 小时连续 GPU 窗口。
+
+## 15. V4 Reward：安全优先连续奖励设计与 CPU 审计冻结
+
+### 15.1 冻结定义
+
+设计原则来自用户 2026-08-31 的 reward 意见（Risk50 已冻结前提下不再以 CDT 为主 reward）：先判安全，安全程度连续化，安全之后才允许进度/舒适加分。冻结公式：
+
+```text
+R = (S + 0.25 * H * Q) / 1.25
+S = 0.55 * H + 0.30 * R_TTC + 0.15 * R_distance
+Q = 0.70 * ego_progress + 0.30 * history_comfort
+H = 1  iff  no_at_fault_collisions == 1.0 and drivable_area_compliance == 1.0, else 0
+R_TTC = min(t_inf / 4.0s, 1.0), t_inf = min(time_to_at_fault_collision, time_to_ttc_infraction)
+        (无碰撞且无 TTC 违规时 t_inf = inf → R_TTC = 1.0)
+R_distance = min(min_distance_to_actors / 5.0m, 1.0)
+```
+
+关键性质（结构性，审计复核）：`H=1` 时 `R >= 0.55`，`H=0` 时 `R <= 0.45`，硬安全通过/失败永不相交；危险轨迹只能通过 `S` 竞争，不会因进度/舒适反超安全轨迹。
+
+训练侧入口：`compute_score_safety_continuous`（`EasyR1/verl/utils/reward_score/navsim/navsim_reward_text.py`）。JSON 语义约定：无风险时刻/无参与者距离在 server 响应中为 `null`，reward 函数解释为 `inf`（`navsim_reward_text.simulator_reward` 转 `inf`；`cdt_scalar_reward.time_to_infraction` 跳过 `null`；审计层 `None → inf`）。
+
+### 15.2 实现与可审计字段
+
+NAVSIM scorer 新增三个逐候选字段，统一在 human-penalty 分支用同一 scorer 重打分之前捕获：
+
+| 字段 | 定义 |
+|---|---|
+| `time_to_at_fault_collision` | 首次 at-fault 碰撞时刻（s），无碰撞为 `null`（即 inf） |
+| `time_to_ttc_infraction` | 首次 TTC 违规时刻（s），无违规为 `null` |
+| `min_distance_to_actors` | 4s 水平线上自车 footprint 与任意 `AGENT_TYPES` 动态参与者的最小多边形净距（m），无参与者为 `null` |
+
+代码：`navsim_eval/navsim/planning/simulation/planner/pdm_planner/scoring/pdm_scorer.py` 增加 `_calculate_min_distance_to_actors`；`navsim_eval/navsim/evaluate/pdm_score.py` 在 human-penalty 前写入 `pdm_result`；`EasyR1/.../cdt_scalar_reward.py` 增加 `safety_continuous_reward`/`safety_hard_gate`/`time_to_infraction`；`navsim_reward_text.py` 增加 `compute_score_safety_continuous` 与 `SAVED_METRICS` 新字段。实现与修复 commit：`cc46c4c`（设计+审计框架）、`07b8116`（human-penalty 覆盖修复）、`4346f21`（JSON null）、`c7cf3f7`（py3.9 兼容）、`5daf802`（CLI dispatch）、`6d58e23`（replay 按 manifest 过滤）、`6e852c5`（audit 标签按 manifest 过滤）。本地与服务器测试 `37 passed`，服务器 `git diff --check` 与 source clean 通过。
+
+### 15.3 CPU 审计协议（预注册）
+
+只使用冻结 Risk50 2,000 token（8,000 条候选轨迹）与既有 Train-only 标签，不读取 Dev/Final：
+
+1. **区分度门**：新 reward 的零扩散组数 ≤ Raw-PDMS，且 Raw-PDMS 全平、新 reward 有差异的组数 > 0；
+2. **安全反转门**：同一 G=4 组内同时存在 `H=1` 与 `H=0` 候选时，`min(R|H=1) > max(R|H=0)`，违规数必须为 0；
+3. **family 区分度门**：proximity family 的组内中位 range ≥ construction 且 ≥ signal；
+4. **非 GT 模仿门**：reward 输入不含任何 GT/expert 轨迹距离项（构造性验证）+ 报告相关性。
+
+运行环境：`v4_reward_audit_20260831_r4`（replay，16 vCPU / 120 GiB 实例，gunicorn `-w 8`、client `--workers 8`，2,000/2,000 groups 完成，7,996/8,000 metric replayed，4 parse failures，PDMS 一致性 1e-8 通过）；`_r4` 的 audit 步骤因标签集合校验 bug 失败并保留；修复后 `_r5` 复用 `_r4` replay 产物完成 audit，`COMPLETE/exit_code=0`。`dev_accessed=false`、`final_accessed=false`。
+
+### 15.4 审计结果
+
+| 门 | 结果 | 证据 |
+|---|---|---|
+| 区分度 | **PASS** | 零扩散组 Raw-PDMS 670 → safety 218；Raw 全平组 670 中 452 组被新 reward 区分；distinct≥2 组占比 0.665 → 0.891（CDT 0.668） |
+| 安全反转 | **PASS** | 140 个混合组检查，违规 0；`safe_min=0.7662 > unsafe_max=0.3600` |
+| family 区分度 | **PARTIAL** | proximity 组内中位 range `0.01040`，construction `0.01072`，signal `0.01042`（门槛未达）；但 distinct≥2 组占比 proximity `0.912` > construction `0.818`，signal `0.922`；差异约 3%，属银行级噪声，无语义反转 |
+| 非 GT 模仿 | **PASS** | 构造性无 GT 输入；Pearson(reward, ego_progress)=`0.096`，Pearson(reward, pdms)=`0.921`（保留 benchmark 锚定） |
+
+其他关键统计（8,000 条候选）：`hard_safe=7,757`、`H=0=243`（3.04%）；`time_to_at_fault_collision` 有限值 72 条（中位 3.7s）；`time_to_ttc_infraction` 有限值 119 条（中位 2.6s）；`min_distance_to_actors` 中位 1.52m、q75 3.42m（5m 封顶未饱和，距离项有梯度）；reward 整体中位 0.907、q95 0.9997；proximity family 均值 reward `0.882`（最低，与“近距离场景更难”一致）。
+
+### 15.5 决定与后续
+
+1. **冻结** 安全优先连续奖励为 GPU-B 候选；权重 `0.55/0.30/0.15/0.25`、`TTC_SAFE=4.0s`、`DISTANCE_SAFE=5.0m` 一并冻结，不再用 Dev 调参；
+2. family 门记录为 `PARTIAL` 观察项而非阻断：新 reward 在全部 family 都提供连续区分（0.891），proximity 的 distinct 比例最高，中位 range 差异约 3% 且无反转；GPU-B 解释时把 proximity 切片作为次要指标报告；
+3. GPU-A 顺序不变：`Risk50 + Raw-PDMS`（已 READY）先行，回答数据本身价值；GPU-B 才把 reward 换成 `compute_score_safety_continuous`，其余 resolved config 与 GPU-A 逐字段一致；
+4. 审计产物：`v4_reward_audit_20260831_r5/results/reward_audit_report.json` SHA256=`6a65d087c84a14fdb2b7715a8f1fe7cd9b11908962dc7244215526216f80b569`，`candidate_reward_rows.csv`（8,000 rows）SHA256=`59f3c321b2ed9fc901ee7c5da211f97ae8b54b563fb15d3d89a54c76f7f1ffd5`；replay 产物 `_r4/enriched_risk50_reward.jsonl` SHA256=`00df412d7aa610f70d6203e15d96f8fd018ddb138c45dd70cc130d05a6fe1b87`；manifest/labels SHA 与第 13.3/12.4 节一致。
