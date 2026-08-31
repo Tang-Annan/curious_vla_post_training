@@ -1,7 +1,9 @@
 from projects.dataset_v3.v4_experiment_closure import (
     build_dev_report,
     build_train_selection,
+    current_visible_interaction,
     exclusive_family,
+    revised_train_tiers,
 )
 
 
@@ -16,6 +18,27 @@ def test_exclusive_family_uses_frozen_priority() -> None:
     assert exclusive_family(row) == "construction"
     row["front_construction_response"] = "0"
     assert exclusive_family(row) == "signal"
+
+
+def test_current_visible_revision_requires_matching_front_actor() -> None:
+    row = {
+        "token": "token",
+        "current_vehicle_distance_m": "4",
+        "current_vru_distance_m": "",
+        "current_vehicle_front_context": "0",
+        "current_vru_front_context": "0",
+        "construction_present": "0",
+        "current_construction_front_context": "0",
+        "current_traffic_control": "0",
+        "expert_turn": "0",
+        "expert_lateral": "0",
+        "expert_braking": "0",
+        "expert_stop_to_go": "0",
+    }
+    assert current_visible_interaction(row) is False
+    row["current_vehicle_front_context"] = "1"
+    assert current_visible_interaction(row) is True
+    assert revised_train_tiers([row])[0]["visible_critical_proximity"] == "1"
 
 
 def test_selection_satisfies_family_intent_and_log_constraints() -> None:

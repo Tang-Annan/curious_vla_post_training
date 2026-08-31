@@ -20,6 +20,8 @@ FAMILY_QUOTAS = {"proximity": 500, "construction": 500, "signal": 1000}
 INTENT_QUOTAS = {"straight": 1333, "left": 434, "right": 233}
 LOG_CAP_CANDIDATES = (2, 4, 6, 8)
 EXPECTED_MODELS = {"SFT", "RR", "TR", "TC", "TC-PPO2"}
+CURRENT_VEHICLE_DISTANCE_M = 5.0
+CURRENT_VRU_DISTANCE_M = 10.0
 METRIC_FIELDS = (
     "no_at_fault_collisions",
     "time_to_collision_within_bound",
@@ -51,6 +53,71 @@ def exclusive_family(row: dict[str, str]) -> str:
     if truthy(row["current_signal_hard_response"]):
         return "signal"
     return "control"
+
+
+def current_visible_interaction(row: dict[str, str]) -> bool:
+    vehicle_distance = (
+        math.inf if row["current_vehicle_distance_m"] == "" else float(row["current_vehicle_distance_m"])
+    )
+    vru_distance = math.inf if row["current_vru_distance_m"] == "" else float(row["current_vru_distance_m"])
+    return (
+        vehicle_distance <= CURRENT_VEHICLE_DISTANCE_M
+        and truthy(row["current_vehicle_front_context"])
+    ) or (
+        vru_distance <= CURRENT_VRU_DISTANCE_M
+        and truthy(row["current_vru_front_context"])
+    )
+
+
+def revised_train_tiers(scene_rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    rows = []
+    for row in scene_rows:
+        proximity = current_visible_interaction(row)
+        expert_response = any(
+            truthy(row[key])
+            for key in ("expert_turn", "expert_lateral", "expert_braking", "expert_stop_to_go")
+        )
+        construction = (
+            not proximity
+            and truthy(row["construction_present"])
+            and truthy(row["current_construction_front_context"])
+            and expert_response
+        )
+        signal = (
+            not proximity
+            and not construction
+            and truthy(row["current_traffic_control"])
+            and (truthy(row["expert_braking"]) or truthy(row["expert_stop_to_go"]))
+        )
+        rows.append(
+            {
+                "token": row["token"],
+                "train_tier1": str(int(proximity or construction or signal)),
+                "visible_critical_proximity": str(int(proximity)),
+                "front_construction_response": str(int(construction)),
+                "current_signal_hard_response": str(int(signal)),
+            }
+        )
+    return rows
+
+
+def revised_dev_tiers(
+    scene_rows: list[dict[str, str]], original_tiers: list[dict[str, str]]
+) -> list[dict[str, str]]:
+    original = {row["token"]: row for row in original_tiers}
+    rows = []
+    for row in scene_rows:
+        visible = current_visible_interaction(row)
+        rows.append(
+            {
+                "token": row["token"],
+                "split": row["split"],
+                "eval_tier1": str(int(visible)),
+                "critical_proximity": str(int(visible)),
+                "response_complexity": original[row["token"]]["response_complexity"],
+            }
+        )
+    return rows
 
 
 def _deterministic_cost(seed: int, token: str) -> float:
@@ -388,6 +455,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-scene-labels", type=Path, required=True)
     parser.add_argument("--train-tier-labels", type=Path, required=True)
+    parser.add_argument("--dev-scene-labels", type=Path, required=True)
     parser.add_argument("--dev-tier-labels", type=Path, required=True)
     parser.add_argument("--dev-model-outcomes", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -399,12 +467,13 @@ def main() -> None:
 
     train_scene_rows = read_csv(args.train_scene_labels)
     train_tier_rows = read_csv(args.train_tier_labels)
+    dev_scene_rows = read_csv(args.dev_scene_labels)
     dev_tier_rows = read_csv(args.dev_tier_labels)
     model_rows = read_csv(args.dev_model_outcomes)
     if len(train_scene_rows) != 8000 or len(train_tier_rows) != 8000:
         raise ValueError("V4 Train inputs must each contain 8,000 rows")
-    if len(dev_tier_rows) != 416 or len(model_rows) != 2080:
-        raise ValueError("V4 Dev inputs must contain 416 labels and 2,080 model rows")
+    if len(dev_scene_rows) != 416 or len(dev_tier_rows) != 416 or len(model_rows) != 2080:
+        raise ValueError("V4 Dev inputs must contain two 416-row labels and 2,080 model rows")
     if {row["model"] for row in model_rows} != EXPECTED_MODELS:
         raise ValueError("V4 Dev model set differs from the frozen five-model audit")
     if args.bootstrap_resamples < 1:
@@ -421,22 +490,44 @@ def main() -> None:
         resamples=args.bootstrap_resamples,
         seed=args.seed,
     )
+    revised_tiers = revised_train_tiers(train_scene_rows)
+    revised_train_labels, revised_selected, revised_selection_report = build_train_selection(
+        train_scene_rows,
+        revised_tiers,
+        seed=args.seed,
+    )
+    revised_dev_labels = revised_dev_tiers(dev_scene_rows, dev_tier_rows)
+    revised_dev_slices, revised_dev_report = build_dev_report(
+        model_rows,
+        revised_dev_labels,
+        resamples=args.bootstrap_resamples,
+        seed=args.seed + 10000,
+    )
     report = {
         "status": "V4_CPU_CLOSURE_COMPLETE",
         "train_selection": selection_report,
         "dev_label_validation": dev_report,
+        "current_visible_revision": {
+            "semantic_definition": {
+                "primary_risk": "current matching-front visible vehicle<=5m or VRU<=10m",
+                "construction_and_signal": "context quota families, not primary risk labels",
+                "threshold_search_on_dev": False,
+            },
+            "train_selection": revised_selection_report,
+            "dev_label_validation": revised_dev_report,
+            "status": "HISTORICAL_MODEL_SUPPORTED_PROVISIONAL_REVISION",
+        },
         "decision": {
             "provisional_manifest_created": True,
-            "gpu_training_authorized": bool(dev_report["training_ready"]),
-            "next_action": (
-                "freeze GPU-A inputs"
-                if dev_report["training_ready"]
-                else "stop before GPU and revise policy-independent risk labels using train-only geometry"
-            ),
+            "original_tier1_training_ready": bool(dev_report["training_ready"]),
+            "current_visible_revision_historical_support": bool(revised_dev_report["training_ready"]),
+            "gpu_training_authorized": False,
+            "next_action": "freeze the current-visible revision without further Dev tuning, then prepare a matched GPU-A launch gate",
         },
         "input_sha256": {
             "train_scene_labels": sha256_file(args.train_scene_labels),
             "train_tier_labels": sha256_file(args.train_tier_labels),
+            "dev_scene_labels": sha256_file(args.dev_scene_labels),
             "dev_tier_labels": sha256_file(args.dev_tier_labels),
             "dev_model_outcomes": sha256_file(args.dev_model_outcomes),
         },
@@ -449,6 +540,15 @@ def main() -> None:
     write_csv(args.output_dir / "dev_historical_model_slices.csv", dev_slices)
     (args.output_dir / "provisional_risk_balanced_2000.txt").write_text(
         "".join(f"{row['token']}\n" for row in selected), encoding="utf-8"
+    )
+    write_csv(
+        args.output_dir / "train_current_visible_exclusive_labels.csv", revised_train_labels
+    )
+    write_csv(
+        args.output_dir / "dev_current_visible_model_slices.csv", revised_dev_slices
+    )
+    (args.output_dir / "provisional_current_visible_risk_balanced_2000.txt").write_text(
+        "".join(f"{row['token']}\n" for row in revised_selected), encoding="utf-8"
     )
     (args.output_dir / "v4_cpu_experiment_closure_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
