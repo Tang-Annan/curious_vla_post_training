@@ -464,3 +464,58 @@ GPU-A 前增加一个纯 Train、CPU-only 的比例门。此门不读取 Dev/Fin
 正式对比表固定报告 mutually exclusive 的 proximity/construction/signal/control、intent、unique logs 与 max-per-log。既有 Random 清单保持原样，不为改善表格而重采样；因此它是否满足 max-per-log=4 也作为审计结果如实记录。
 
 计划 run id：`v4_risk_ratio_audit_20260831`；执行环境固定为无卡服务器，`CUDA_VISIBLE_DEVICES` 为空，`dev_accessed=false`，`final_accessed=false`，`gpu_training_authorized=false`。
+
+### 13.2 正式容量结果
+
+- run id：`v4_risk_ratio_audit_20260831`
+- source commit：`31fbb069aab4652db1f586212bb0e0e072b56c8f`
+- 状态：`COMPLETE`，exit code 0，wall time 6 秒
+- 环境：0.5 vCPU / 2 GiB，`CUDA_VISIBLE_DEVICES` 为空
+- tests：14 passed
+- 数据边界：Train only，Dev accessed=false，Final accessed=false
+- 资源终态：`oom=0`、`oom_kill=0`、训练进程数 0，run 目录 224 KiB
+
+40%/50%/60% 三档均可在 intent=`1333/434/233`、max-per-log=4 下精确求解：
+
+| 方案 | proximity | construction | signal | unique logs | max/log | 状态 |
+|---|---:|---:|---:|---:|---:|---|
+| Risk40 | 800 | 600 | 600 | 862 | 4 | exact feasible |
+| Risk50 | 1,000 | 500 | 500 | 880 | 4 | exact feasible |
+| Risk60 | 1,200 | 400 | 400 | 854 | 4 | exact feasible |
+
+在只固定总量、intent 与 max-per-log=4、其余 context family 不设配额时，MILP 的 primary-risk 最大解为：
+
+- proximity=`1,685/2,000=84.25%`；
+- construction/signal=`216/99`；
+- unique logs=`803`，max per log=`4`。
+
+该 84.25% 仅是约束下容量上界。它会把 context diversity 压缩到 15.75%，因此不进入训练；不能因为容量允许就选择最大化方案。
+
+### 13.3 Random 与冻结 Risk50 的语义差异
+
+| 数据 | proximity | construction | signal | control | intent S/L/R | unique logs | max/log |
+|---|---:|---:|---:|---:|---|---:|---:|
+| Random 2K | 464（23.20%） | 203（10.15%） | 334（16.70%） | 999（49.95%） | 1333/434/233 | 944 | 6 |
+| Frozen Risk50 2K | 1,000（50.00%） | 500（25.00%） | 500（25.00%） | 0 | 1333/434/233 | 880 | 4 |
+
+结论：
+
+1. primary-risk 占比从 23.2% 提高到 50.0%，差值 `+26.8 pp`，超过预注册的 `+20 pp` 门；
+2. 两个清单仅重叠 495 条，Jaccard=`14.12%`，不是对 Random 的轻微重排；
+3. Frozen Risk50 精确满足 intent 和 max-per-log=4；正式状态为 `FROZEN_RISK50_CPU_GATE_PASS`；
+4. 旧 Random 清单的 max-per-log 实测为 6。后续可以把 GPU-A 解释为“整个风险导向数据组织相对旧 Random 的效果”，但不能把差异严格归因于风险占比一个变量；若要做纯比例因果实验，需另建同样 max-per-log=4 的 matched Random，并重新训练对应基线；
+5. 当前选择冻结 50%，而不是 60% 或 84.25%，原因是它已经制造足够大的可检验语义差异，同时保留 1,000 条 construction/signal context diversity，实验含义最直接。
+
+冻结清单：`frozen_current_visible_risk50_2000.txt`，SHA256=`28bff1c503377b94eff0adb5415db3696c74f8c463b528b98d5e44009eeaade1`。
+
+关键输出 SHA256：
+
+| 输出 | SHA256 |
+|---|---|
+| `candidate_risk_ratio_40_2000.txt` | `f81751fedbee7c755b3db7e75766aca83ee0b4af657680874a42f601a3aa66cd` |
+| `candidate_risk_ratio_60_2000.txt` | `ef3ec92cb8f452e1e3b6a5d3638e07fa379fa050be2fcb8189e60273f39d989c` |
+| `capacity_max_primary_risk_2000.txt` | `f7902c8dc6e0eebbb2a89df41e6050cc74310f07d1e58e8e3a648661eac82f12` |
+| `random_vs_frozen_risk_composition.csv` | `43a53e479da550a29137458a6b11294986ebea0d2da278d14ae61b9ed893ee31` |
+| `v4_risk_ratio_audit_report.json` | `cca5a3f46ad74898c74bda3f666dc701241761ce54ca5db22304f6b334c2bfe6` |
+
+当前执行门：Risk50 数据语义门已通过并冻结；GPU 仍未启动，`gpu_training_authorized=false`。下一步只准备与 RR 对齐的 optimizer parquet/config、训练时长与成本门；待 GPU 实例可用后再执行“Risk50 + Raw-PDMS”，不同时改奖励或 PPO 参数。
