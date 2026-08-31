@@ -2,7 +2,8 @@ import math
 
 import numpy as np
 
-from projects.dataset_v3.span_risk_audit import add_train_role, build_report, label_window
+from projects.dataset_v3 import span_risk_audit
+from projects.dataset_v3.span_risk_audit import add_train_role, build_report, extract_log, label_window
 
 
 def _frame(index: int, *, lateral: float = 0.0, names=(), boxes=(), traffic=False) -> dict:
@@ -35,6 +36,18 @@ def test_window_labels_future_interaction_and_expert_response() -> None:
     assert row["learnable_risk_flag"] == 0
     assert "vehicle_interaction" in row["event_labels"]
     assert math.isfinite(row["center_speed_mps"])
+
+
+def test_extract_log_finds_non_chunk_aligned_target(monkeypatch, tmp_path) -> None:
+    frames = [_frame(index) for index in range(20)]
+    frames[8]["token"] = "target"
+    path = tmp_path / "log.pkl"
+    path.touch()
+    monkeypatch.setattr(span_risk_audit, "load_navsim_log", lambda handle: frames)
+
+    rows = extract_log(path, ["target"])
+
+    assert [row["token"] for row in rows] == ["target"]
 
 
 def test_train_role_requires_event_gate_before_rollout_semantics() -> None:

@@ -9,8 +9,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Iterable
 
-from projects.dataset_v3.data_prep import eligible_windows, quaternion_yaw, stable_key, wrap_angle
-from projects.dataset_v3.inventory import NUM_HISTORY_FRAMES, load_navsim_log, sha256_file
+from projects.dataset_v3.data_prep import quaternion_yaw, stable_key, wrap_angle
+from projects.dataset_v3.inventory import NUM_FRAMES, NUM_HISTORY_FRAMES, load_navsim_log, sha256_file
 
 
 VEHICLE_DISTANCE_M = 5.0
@@ -242,7 +242,8 @@ def extract_log(path: Path, target_tokens: list[str]) -> list[dict[str, Any]]:
     with path.open("rb") as handle:
         frames = load_navsim_log(handle)
     rows = []
-    for window in eligible_windows(frames):
+    for start in range(0, len(frames) - NUM_FRAMES + 1):
+        window = frames[start : start + NUM_FRAMES]
         token = str(window[NUM_HISTORY_FRAMES - 1]["token"])
         if token in targets:
             rows.append({"token": token, "log_name": path.stem, **label_window(window)})
