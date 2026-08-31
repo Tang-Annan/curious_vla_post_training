@@ -549,3 +549,52 @@ RR 参考成本来自既有正式 run：wall time=`27,358 秒（7 小时 35 分 
 RR 训练 source=`fafda8a771753653a098582b15cce7b17f603037`。当前 source 相对 RR 增加了 PPO epoch telemetry/iterator 修复；PPO epoch=1 时 optimizer update 数与损失路径不变，但源码不是 byte-identical。正式对齐表述限定为“数据以外的 resolved config 完全相同，当前训练实现包含额外只读 telemetry”；不得写成源码逐字节相同。
 
 计划 run id：`v4_risk50_rr_aligned_prepare_20260831`。本阶段保持 `CUDA_VISIBLE_DEVICES=empty`、Dev/Final 均不读取且不启动训练。
+
+### 14.3 首次准备失败与最小修复
+
+首次 run `v4_risk50_rr_aligned_prepare_20260831` 在配置语义门失败并完整保留，状态=`FAILED`。模型哈希和 parquet 抽取已经通过，失败原因是：RR 保存的 `experiment_config.json` 是 post-init resolved config，reward 路径与函数名已拆为：
+
+```text
+reward_function=/.../navsim_reward_text.py
+reward_function_name=compute_score_raw_pdms
+```
+
+该 resolved JSON 不能直接作为启动配置回灌；框架会把无冒号的路径重新解释为默认函数 `main`。最小修复只在生成 runnable config 时重组为 `path:compute_score_raw_pdms`，然后再次执行 post-init，并要求最终 resolved config 相对 RR 仍然只有预注册的三个路径差异。没有放宽字段比较，也没有覆盖失败目录。
+
+### 14.4 正式 r1 训练准备结果
+
+- run id：`v4_risk50_rr_aligned_prepare_20260831_r1`
+- source commit：`5844792a809dd15a550687b720da914fad99b6e9`
+- 状态：`COMPLETE`，exit code 0，wall time 348 秒
+- tests：17 passed；两个 bash 启动脚本 `bash -n` 通过
+- 环境：0.5 vCPU / 2 GiB，`CUDA_VISIBLE_DEVICES` 为空
+- 数据边界：Train only，Dev accessed=false，Final accessed=false
+- 资源终态：`oom=0`、`oom_kill=0`，run 目录 848 KiB
+
+物化结果：
+
+- `risk50_train_2000.txt`：2,000 unique tokens，字节级等于冻结 Risk50 manifest；
+- `risk50_train_2000.parquet`：2,000 rows，列为 `images/problem/answer`，schema 与 RR Random parquet 完全一致；
+- answer token 顺序与 manifest 完全一致；2,000 个图像引用全部存在；
+- 与冻结 Train Monitor 256 overlap=`0`；
+- 当前 runtime 重新解析 RR config 的 drift=`[]`；V4 resolved config 相对 RR 只变化 `data.train_files`、`trainer.experiment_name`、`trainer.save_checkpoint_path`；
+- SFT Stage-2 两个 safetensors 分片、`config.json`、index 全部通过 RR 原 `model_sha256.txt`；
+- dataloader smoke 使用实际 tokenizer/processor 读取索引 `0/666/1333/1999`，batch=`4`，`input_ids shape=[4,3072]`，状态=`V4_RISK50_DATALOADER_SMOKE_PASS`。
+
+关键输出 SHA256：
+
+| 输出 | SHA256 |
+|---|---|
+| `risk50_train_2000.txt` | `28bff1c503377b94eff0adb5415db3696c74f8c463b528b98d5e44009eeaade1` |
+| `risk50_train_2000.parquet` | `e2933afd27fe3a8df2ba52b3586f8ff4efcbf1092d455a2ca92c16a5c0e1a378` |
+| `risk50_rr_aligned_config.json` | `08b20da15a270a641f685fb0b40d19e0bfa95a63507515b275d612f127b5c4ae` |
+| `dataloader_smoke_report.json` | `a6c979cd6fe74b816e2cdd534bbb7bbcf70731195383fff6e0815b598ece6f40` |
+| `v4_risk50_training_prepare_report.json` | `5e6c9019084a5f8778d0c8259fe12a776e8b3fc3352513b638d3d7da1047a4a4` |
+
+CPU 侧启动前复核：source clean；可用磁盘约 36.1 GiB；8901 端口使用者 0；目标 formal run 和 debug 目录均不存在；Raw-PDMS 函数存在。正式训练入口已经冻结为：
+
+```text
+bash scripts/run_dataset_v3_formal_cell.sh --cell V4-RISK50 --seed 20260827
+```
+
+启动器会在创建 run 前再次验证 prep 全部 SHA256、source commit=`5844792...`、GPU idle、8901 空闲、磁盘≥30 GiB、目标目录不存在。当前持久化准备状态=`V4_RISK50_RR_ALIGNED_READY`；无卡实例不启动训练，`gpu_training_authorized=false`。切换 GPU 后仍需通过启动瞬间的两个易失门，预计训练参考时长 7 小时 36 分，建议预留约 8 小时连续 GPU 窗口。
