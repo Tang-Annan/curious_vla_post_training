@@ -1,0 +1,247 @@
+# Dataset V4 Span-Inspired Risk 执行台账
+
+> 状态日期：2026-08-31
+> 当前状态：CPU-only 场景重标注、容量审计与 Tier-1 决策派生均已完成；未启动训练
+> 数据边界：读取冻结 Train Screen 与完整 Dev；`Final accessed = false`
+
+## 1. 结论摘要
+
+1. 旧的 `Dev Tail` 并非完全无效：它显著富集了严格近距交互，`critical proximity=51/206`，高于 `Dev Natural=25/210`。
+2. 旧 Tail 没有同时富集 expert-response complexity：Tail 为 `36/206`，Natural 为 `40/210`。因此旧 Tail 只对“近距”语义对齐，不能代表完整的风险/恢复语义。
+3. 首轮宽口径 `event risk` 覆盖 Train `6,767/8,000`、Dev `368/416`，过宽，只能作为复杂上下文 inventory，不能冻结为 V4 风险集。
+4. V4 Tier-1 将评价侧风险改为 `critical proximity ∪ response complexity`；训练侧再要求 critical proximity 具有当前同类型前视输入支持。
+5. 冻结定义下，Train Tier-1 learnable pool 为 `3,289`；positive / policy-negative / paired-recovery 容量为 `3,015 / 176 / 193`。
+6. 按 2,000-group Span 比例模板，需求为 `1,667 / 166 / 167`。容量形式上可行，但 negative 只余 `10`，recovery 只余 `26`，状态为 `FEASIBLE_TIGHT_MARGIN`。
+7. 本轮只冻结语义和候选 manifests，不启动 GPU 训练。下一门是确定性角色采样与 disjoint family quota；不能直接把 3,289 个 Tier-1 token 全部混训。
+
+## 2. 与 V3 的关系
+
+- V3 台账、原始 Screen/Dev/Final 划分及既有实验结论保持不变；V4 是追加协议，不回写历史结果。
+- V4 不重新划分 Dev 日志，也不读取或重标注 Final。
+- V4 复用的冻结集合：
+  - Train Screen：8,000 个 `sft_seen` token；
+  - Dev Natural：210 个 `sft_unseen` token；
+  - Dev Tail：206 个 `sft_unseen` token；
+  - Train 与 Dev token 严格不相交。
+- V4 的目标不是证明 selector 已经产生 policy-level 增益，而是把“GT 风险上下文”“当前输入可学习性”“policy failure/recovery”拆成三个门，避免继续用同一个 Tail 标签混合三种语义。
+
+## 3. SpanVLA 迁移边界
+
+参考：[SpanVLA: Efficient Action Bridging and Learning from Negative-Recovery Samples for Vision-Language-Action Model](https://arxiv.org/abs/2604.19710)。论文的 negative-recovery 数据来自真实道路早期探索测试中的 suboptimal ego trajectories 与对应 expert corrections。
+
+当前项目没有真实 takeover/correction pair，因此只能做如下受限迁移：
+
+- GT expert trajectory 与 actor/traffic/construction annotation 用于构造 policy-independent 场景门；
+- 当前 `CAM_F0` 对应的前视上下文用于构造 input-support / learnability 门；
+- 两个独立 G4 rollout block 的稳定性用于构造 policy-derived negative/recovery proxy；
+- `stable_severe` 不等于真实负轨迹，`stable_mixed_recoverable` 不等于人工纠正轨迹；所有文档与实验名必须保留 `Span-inspired` 或 `proxy` 限定。
+
+本台账沿用 2,000-group 比例模板：
+
+| 阶段/角色 | 数量 |
+|---|---:|
+| warmup positive | 667 |
+| mixed positive | 1,000 |
+| mixed negative | 166 |
+| mixed recovery | 167 |
+| 总计 | 2,000 |
+
+## 4. 输入与不可触碰边界
+
+### 4.1 正式输入 SHA256
+
+| 输入 | SHA256 |
+|---|---|
+| `grpo_screen_8000.txt` | `0df963c45c06f0e7590d9e698cc086e5317532672b6031158636ac4ff8b50f00` |
+| `dev_natural.txt` | `f8200afae6a29954fc41cbc126f9bfc2909d668cd593d9ea5c68a8812348b5a5` |
+| `dev_tail.txt` | `dca81d1dca0d45415b0e3040bb6f834a60fcb4714c170c3b3a969aa9c513b35b` |
+| `master_index.csv` | `40b3a1fb4a9c12a7a4cce26497aa0058128c7370870477033a2a7e523a90280b` |
+| `stability_capacity.csv` | `ebb90ea58bc7e8605f00eaa85ab4247a8f6264b027deb176af2a5a89fe254f41` |
+
+### 4.2 运行边界
+
+- `workers=1`
+- `CUDA_VISIBLE_DEVICES` 为空
+- cgroup：`cpu.max=50000 100000`，即 0.5 vCPU
+- cgroup：`memory.max=2147483648`，即 2 GiB
+- `Dev accessed=true`
+- `Final accessed=false`
+- 不读取 Dev/Final policy outcome 来调阈值；Dev 只用于冻结标签分布审计。
+
+## 5. 两层标签协议
+
+### 5.1 宽口径 context inventory，不作为最终风险集
+
+首轮扫描使用以下宽口径：
+
+- vehicle expert-path horizon separation `<=5m`；
+- pedestrian/bicycle expert-path horizon separation `<=10m`；
+- 20m 内 construction context 与 expert turn/lateral/brake/stop-to-go 同现；
+- traffic-control context 与 expert brake/stop-to-go 同现。
+
+该口径得到：
+
+| 集合 | event context | 当前输入支持 | learnable proxy |
+|---|---:|---:|---:|
+| Train Screen | 6,767 / 8,000 | 5,773 | 4,880 |
+| Dev all | 368 / 416 | 354 | 309 |
+
+覆盖率 Train `84.59%`、Dev `88.46%`，不能解释为稀缺真实风险。V4 决策明确设置 `broad_event_is_context_only=true`。
+
+### 5.2 冻结的 V4 Tier-1
+
+`critical proximity`：GT expert-path horizon 中满足以下任一条件：
+
+- vehicle minimum separation `<=3m`；
+- pedestrian/bicycle minimum separation `<=5m`。
+
+`response complexity`：满足以下任一条件：
+
+- 当前前视 20m、±45° 内存在 construction object，且 expert trajectory 出现 turn、lateral、braking 或 stop-to-go response；
+- 当前存在 traffic-control context，且 expert trajectory 出现 braking 或 stop-to-go response。
+
+评价侧：
+
+```text
+Eval Tier-1 = critical proximity OR response complexity
+```
+
+训练侧：
+
+```text
+Train Tier-1 =
+  matching-current-front-visible critical proximity
+  OR response complexity
+```
+
+其中 critical vehicle 必须有当前前视 vehicle context，critical VRU 必须有当前前视 VRU context。这样不会把未来才进入视野的 actor 误算为当前单帧 `CAM_F0` 可学习信号。
+
+## 6. 正式容量结果
+
+### 6.1 Train 结构
+
+| 标签 | 场景数 |
+|---|---:|
+| strict critical proximity | 746 |
+| 当前前视可见 critical proximity | 538 |
+| front construction response | 1,027 |
+| current signal hard response | 2,160 |
+| response complexity union | 2,969 |
+| Eval-style Tier-1 union | 3,434 |
+| Train Tier-1 learnable union | 3,289 |
+
+Train Tier-1 明显由 signal/construction response 主导，因此下一步必须按互斥 family 做 quota，不能在 3,289 内直接均匀随机采样。
+
+### 6.2 角色容量与 2K 模板
+
+| 角色 | 可用 | 需求 | 余量 |
+|---|---:|---:|---:|
+| positive | 3,015 | 1,667 | +1,348 |
+| policy negative proxy | 176 | 166 | +10 |
+| paired recovery proxy | 193 | 167 | +26 |
+
+- negative/recovery 有 154 个共享 token；这表示同一场景可提供不同 rollout 角色，是 pair 语义，不应误报为互斥独立场景。
+- 只要进一步增加任何严格过滤，2K 模板都可能因 negative 容量首先失效。
+- `recipe_status=FEASIBLE_TIGHT_MARGIN` 只表示 manifest 容量足够，不表示训练有效，也不构成启动 GPU 的授权。
+
+## 7. Dev 评价组成与 Tail 复盘
+
+完整 Dev 416 个 token 全部保留，主报告改为 Tier-1 / Control 及子类型分层；不创建只含 139 个风险 token 的替代 benchmark。
+
+| 冻结旧 split | 场景数 | critical proximity | response complexity | V4 Eval Tier-1 |
+|---|---:|---:|---:|---:|
+| Dev Tail | 206 | 51 | 36 | 80 |
+| Dev Natural | 210 | 25 | 40 | 59 |
+| 合计 | 416 | 76 | 76 | 139 |
+
+解释：
+
+- 旧 Tail 对 critical proximity 有效，51 对 25，说明原静态 interaction ranking 捕获了接近性。
+- 旧 Tail 对 response complexity 不富集，36 对 40；它没有覆盖“交通控制/施工上下文下的 expert response”语义。
+- V4 Tier-1 后 Tail 仍较高，80 对 59，但差异主要来自 proximity，而不是完整 recovery demand。
+- 评价时应同时报告 `All Dev`、`Tier-1=139`、`Control=277`、`critical proximity=76`、`response complexity=76`；旧 Tail/Natural 只保留为历史辅助切片。
+
+## 8. 正式运行记录
+
+### 8.1 保留的失败 run
+
+- run id：`v4_span_inspired_risk_capacity_20260831`
+- source commit：`35a50d8340dd6d7b0e2d98b7d1543f5b6c7b82c3`
+- 状态：`FAILED`，exit code 1，耗时 172 秒
+- 原因：错误复用 Dev 非重叠 14-frame chunk 规则定位 SFT Screen token；目标日志中存在非 chunk-center token。
+- 处置：失败目录原样保留；未覆盖、未删除。
+
+修复改为只对冻结目标 token 执行滑动 14-frame 定位；没有将邻近帧加入 Screen/Dev 集合。新增 non-chunk-aligned target 回归测试。
+
+### 8.2 正式 capacity run
+
+- run id：`v4_span_inspired_risk_capacity_20260831_r1`
+- source commit：`3b38b8d0dfe713c4df2c05819a78dae21124905d`
+- 状态：`COMPLETE`，exit code 0
+- 覆盖：Train 8,000 行，Dev 416 行，相关日志 1,091 个
+- wall time：222 秒
+- 磁盘：3.5 MiB
+- 资源：0.5 vCPU / 2 GiB，`oom=0`，`oom_kill=0`
+- tests：相关测试 21 passed
+
+关键输出 SHA256：
+
+| 输出 | SHA256 |
+|---|---|
+| `train_scene_labels.csv` | `5a4dd9faa3b0ca780f67b59e427e2000b1c1a175534027ada41e2e412feaa0b3` |
+| `dev_scene_labels.csv` | `058c5de76286401fe7bdb752fc89138f4f693ed6fb5eae77d7b11472e6e52bc8` |
+| `span_risk_capacity_report.json` | `c287bad4f1a0e0abab777b3bf41da44d8f4bc306f98c3d74ee589ee913ca1784` |
+
+### 8.3 正式 decision run
+
+- run id：`v4_span_inspired_risk_decision_20260831`
+- source commit：`49d0dc8d21579f822cbda5a087e8c0d8c582f482`
+- 状态：`COMPLETE`，exit code 0
+- wall time：3 秒
+- 磁盘：712 KiB
+- tests：相关测试 23 passed
+- 所有输入/输出 `sha256sum -c` 通过
+- 所有 manifest 无重复；Train role manifests 均为 Train Tier-1 子集；Dev Tier-1 与 Control 互斥且并集恰为 416。
+
+关键输出 SHA256：
+
+| 输出 | 行数 | SHA256 |
+|---|---:|---|
+| `train_v4_tier1_learnable.txt` | 3,289 | `1d5e129abb58f49b7d67adcab15d2145cfe7e444ac223422d99f61b627146f8f` |
+| `train_v4_positive.txt` | 3,015 | `3f6ede781f69f444157dd4e3deb996dc43afbb93888c561e22ed957ac0dac1b5` |
+| `train_v4_policy_negative.txt` | 176 | `b5569b68a25dab239358a88f28fd5f485156748e4e2db268e35312be2052a8af` |
+| `train_v4_paired_recovery.txt` | 193 | `f87a7536f7bcbfda52a010d2f5ae9176f37c9b715d4e042463d4ce4cf3de39e6` |
+| `dev_v4_tier1.txt` | 139 | `57cfd1a04d261af4d9f3d69421d0709289ff999f3f304584ebb0a17725854a95` |
+| `dev_v4_control.txt` | 277 | `cb31f3b7139a8a47c56d9cd50afcaccccf2c7e4ec5999bd5b5bb5c550c2c5afe` |
+| `v4_span_risk_decision_report.json` | — | `db1ee092f326dcc49241a8fac600ce15b0df1270b29c8a2d24098da23ef9ad5a` |
+
+服务器目录：
+
+```text
+/root/autodl-tmp/curious-vla-workspace/experiments/dataset_v3_controlled_overlap/semantic_audit/
+  v4_span_inspired_risk_capacity_20260831/       # preserved FAILED
+  v4_span_inspired_risk_capacity_20260831_r1/    # COMPLETE
+  v4_span_inspired_risk_decision_20260831/       # COMPLETE
+```
+
+## 9. 已知限制
+
+1. `critical proximity` 使用 expert-path 上的 actor-center separation，不是碰撞框 overlap、TTC，也不是候选 policy 的 counterfactual risk。
+2. construction/traffic response 表示复杂度，不自动等于危险；因此保留独立子标签，不与 proximity 混成单一强结论。
+3. traffic-control metadata 不保证信号灯像素在 `CAM_F0` 中清晰可辨；当前只是 input-support proxy。
+4. policy negative/recovery 来自 rollout reward tier 稳定性，仍受序列级 credit assignment、探索 support 和 reward calibration 影响。
+5. Train `map_location` 元数据为空；Dev 有 280 个 `intent=unknown`。在修复上游 metadata 前，不允许按 Train map 或 Dev intent 冻结 quota。
+6. 当前 2K 配方 negative/recovery 余量很小；任何 family quota、去重、日志 cap 或更严格视觉可见性要求都必须重新做容量门。
+
+## 10. 下一执行门
+
+在任何 GPU 训练前，必须完成以下事项：
+
+1. 将 Train Tier-1 family 按互斥优先级冻结：`critical proximity > construction response > signal response`；
+2. 在 positive / negative / recovery 各角色内分别做 family、intent、log-cap 的确定性容量检查；
+3. 明确 negative 与 recovery 共享 token 时对应的不同 rollout/reference 记录，不能仅重复同一监督目标；
+4. 生成精确 667/1,000/166/167 manifests 与 SHA256，并验证 train-only；
+5. 冻结评价报告协议：All Dev + Tier-1 + Control + 两个 Tier-1 子类型；
+6. 通过上述门后再决定是否执行最后一次 GPU 尝试。
+
+当前冻结决策：`V4 Tier-1 semantics accepted; training launch = false`。
