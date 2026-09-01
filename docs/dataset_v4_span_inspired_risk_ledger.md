@@ -1,7 +1,7 @@
 # Dataset V4 Span-Inspired Risk 执行台账
 
 > 状态日期：2026-09-01
-> 当前状态：Risk50 + Raw-PDMS（GPU-A）训练完成，在同源 matched Dev 上相对 RR 通过方向门但 Risk 主指标 CI 跨 0；Safety-Continuous（GPU-B）完成 500 updates 后因 Monitor 记录 bug 保留 `FAILED/1`，final checkpoint 经独立恢复门进入 exploratory Dev，但相对 GPU-A 明确退化并关闭 reward 晋级；Final 未访问；第 16 节旧 selector 已退回，第 17 节 current-reward selector 已冻结并开放正式 CPU replay/容量审计
+> 当前状态：Risk50 + Raw-PDMS（GPU-A）训练完成，在同源 matched Dev 上相对 RR 通过方向门但 Risk 主指标 CI 跨 0；Safety-Continuous（GPU-B）完成 500 updates 后因 Monitor 记录 bug 保留 `FAILED/1`，final checkpoint 经独立恢复门进入 exploratory Dev，但相对 GPU-A 明确退化并关闭 reward 晋级；Final 未访问；第 16 节旧 selector 已退回，第 17 节 current-reward MILP 容量门失败；第 19 节 CPU-only N1 FALS 数据集已物化并通过训练环境完整性门
 > 数据边界：读取冻结 Train Screen 与完整 Dev；`Final accessed = false`
 
 ## 1. 结论摘要
@@ -814,13 +814,7 @@ GPU-B 终态为 `FAILED/exit_code=1`，但训练主循环已完成 `500/500`；�
 
 正式启动门因此要求 GPU-B 具有一致的 `COMPLETE/0` 或 `FAILED/nonzero` 终态、`RUNNING` 不存在、GPU idle、8901 空闲，并把实际 terminal/exit code 写入 selector `run.env`，不得把 GPU-B 改写为成功。最近检查 GPU=`0/24,564 MiB`、utilization=`0%`、无 compute PID、8901 空闲，满足资源门。
 
-唯一允许的下一动作是运行：
-
-```text
-bash scripts/run_dataset_v4_grpo_selector_cpu.sh
-```
-
-一次性等待器已按用户要求停止并清理；没有恢复任何自动等待或临时 selector。2026-09-01 用户确认服务器已空闲，正式 CPU replay 获得执行窗口；当前状态为 `V4_SAFETY_BUCKET_SELECTOR_FORMAL_EXECUTION_AUTHORIZED`，不是数据集 READY。
+正式 CPU run `v4_safety_bucket_selector_20260901` 后续已完成，run 本身为 `COMPLETE/0`，但 30%/25%/20% 三档 joint MILP 均不可行，因此机械结论为 `V4_SAFETY_BUCKET_CAPACITY_GATE_FAILED`，没有物化可训练的 2K。4,005 条候选的 current-reward A/B/C/D=`296/1,407/1,678/624`，A+C=`1,974/4,005=49.29%`；这个比例只回答 safety-continuous 定义下的可学习容量，不作为第 19 节 raw-PDMS FALS 的比例。一次性等待器没有恢复，失败后也没有临时修改 anchor 比例、阈值、family/intent 或 log cap。
 
 ## 18. GPU-A / GPU-B 训练、matched Dev 与科学闭环
 
@@ -912,3 +906,90 @@ GPU-B − GPU-A：
 - RR 临时物化 actor `8,144,554,868 bytes`，连同本轮重复 ADAS/debug 共回收 `7,954,692 KiB`
 
 Stage-2 base、三个 LoRA、formal run、原 GPU-B `FAILED` 现场、recovery、三套 matched Dev、science report、access records、rollouts、scene metrics、logs、hash 与台账全部保留。GPU、Ray、Gunicorn/8901 均已回收；`Final accessed=false`。
+
+## 19. N1：Risk50-structure + raw-PDMS FALS selector
+
+### 19.1 冻结协议
+
+N1 不复用第 16 节 V3 selector 的 stable-label 目标，也不恢复第 17 节大型 MILP。它直接消费第 17 节已经生成的 4,005 条 Train-only、冻结 SFT `G=4` enriched rollout，不再次 reward replay，不读取 GPU-A/GPU-B rollout、Dev 或 Final：
+
+```text
+Mean       = mean(raw_pdms_1, ..., raw_pdms_4)
+Best       = max(raw_pdms_1, ..., raw_pdms_4)
+Headroom   = Best - Mean
+Difficulty = 1 - Mean
+FALS       = Difficulty * Headroom
+```
+
+约束继续继承 Risk50 的真实风险结构：总量=`2,000`，family proximity/construction/signal=`1,000/500/500`，max-per-log=`4`。确定性排序是：
+
+1. StrictClear-mixed；
+2. `FALS>0`；
+3. FALS 降序；
+4. Headroom 降序；
+5. fixed seed=`20260901` stable hash tie-break。
+
+第一档尝试 intent straight/left/right=`1,333/434/233`。本次线性 constrained-greedy 停在 1,995 条，只剩 construction 与 right 各缺 5 条，状态按预注册协议记为 `INTENT_GREEDY_INFEASIBLE`；这不是“数学上证明 intent 不可行”。第二档只移除 intent，family 与 log cap 不变，没有启动 MILP。selector rank 不作为训练 curriculum，最终 manifest 使用独立 stable hash 重新排序。
+
+### 19.2 真实风险池中的可学习比例
+
+raw-PDMS FALS 下，4,005 条真实风险候选的互斥角色为：
+
+| 角色/桶 | 数量 | 占候选池 | 含义 |
+|---|---:|---:|---|
+| direct safety contrast / A | 296 | 7.39% | 同一 G4 同时出现 StrictClear 安全与不安全 |
+| FALS learnable（非 A） | 2,385 | 59.55% | 非 mixed，但 raw PDMS 存在正 FALS |
+| random anchor | 1,324 | 33.06% | 零 Headroom；保留记录，只有配额需要时进入 N1 |
+| 可学习并集 | 2,681 | **66.94%** | A 或 FALS-learnable；本批 A 也全部为 FALS-positive |
+
+候选池 A/B/C-safe/C-unsafe/D=`296/1,307/2,384/1/17`；StrictClear all-safe/mixed/all-unsafe=`3,691/296/18`，A parse-induced=`5`。Train-only Headroom sensitivity 不重跑 selector：阈值 `0.0025/0.005/0.01` 的容量分别为 `2,611/2,458/2,065`，说明上述 `66.94%` 是无固定 Headroom 阈值的 FALS-positive 容量，不能与第 17 节 `49.29%` 混写。
+
+### 19.3 N1 最终组成与 selector 解释表
+
+fallback 后的最终 2K 精确满足 family=`1,000/500/500`、max-per-log=`4`，intent 自然分布为 straight/left/right=`1,440/377/183`；unique logs=`846`。learnable=`1,969（98.45%）`，anchor=`31（1.55%）`。296 个 mixed 保留 295 个；唯一未保留 token `e2704e11a50650d6` 所在 log 有 5 个 mixed，cap=4 下按协议保留 FALS 更高的 4 个，因此记录 `mixed_capacity_excluded=1`，没有删除 membership 记录。5 个 A parse-induced 全部进入最终 2K。
+
+| 指标 | Candidate 4005 | Learnable role | Anchor role | Final 2K |
+|---|---:|---:|---:|---:|
+| A | 296 | 295 | 0 | 295 |
+| A parse-induced | 5 | 5 | 0 | 5 |
+| B | 1,307 | 0 | 31 | 31 |
+| C-safe | 2,384 | 1,673 | 0 | 1,673 |
+| C-unsafe | 1 | 1 | 0 | 1 |
+| D | 17 | 0 | 0 | 0 |
+| Mean raw PDMS | 0.923756 | 0.871962 | 1.000000 | 0.873947 |
+| Mean Headroom | 0.037938 | 0.073040 | 0 | 0.071908 |
+| StrictClear mixed rate | 7.39% | 14.98% | 0 | 14.75% |
+| unique logs | 975 | 839 | 29 | 846 |
+| Overlap with Risk50 | 2,000 | 1,030 | 19 | 1,049 |
+| Overlap with Random | 1,001 | 518 | 8 | 526 |
+
+最终 N1 与旧 Risk50 overlap=`1,049`、Jaccard=`35.55%`；与 Random overlap=`526`、Jaccard=`15.14%`。相对候选池，Mean raw PDMS 从 `0.923756` 降到 `0.873947`，Mean Headroom 从 `0.037938` 升到 `0.071908`，mixed rate 从 `7.39%` 升到 `14.75%`，说明 selector 的实际作用是把预算移向“更难且组内有改进空间”的风险样本，而不是再次强化已经稳定满分的场景。
+
+### 19.4 物化、验证与边界
+
+- run id：`v4_risk50_fals_n1_20260901`
+- source commit：`b13017b82e8bef93036492c381a133f110b7157a`
+- 正式状态：`V4_RISK50_FALS_N1_READY`，run=`COMPLETE/0`
+- server tests：`7 passed`；source status 为空
+- `reward_replay=false`、`gpu_used=false`、`dev_accessed=false`、`final_accessed=false`
+- manifest=`2,000` rows/unique tokens；parquet=`2,000` rows，columns=`images/problem/answer`，manifest order exact，image references=`2,000`，missing images=`0`
+- parquet 已在正式 PyArrow `25.0.1` 环境写后回读，并由同服务器 PyArrow `21.0.0` 再次回读；本地旧 PyArrow `19.0.0` 对 `answer.gt: list<null>` 报 `Repetition level histogram size mismatch`。因此当前训练环境可直接使用，但向旧环境搬运前必须升级 reader 或做显式兼容转换，不能把本地旧 reader 失败误记成远端文件损坏。
+
+关键输出 SHA256：
+
+| 输出 | SHA256 |
+|---|---|
+| `risk50_fals_n1_2000.txt` | `a1432377aa86d22df680c0995145b4810a385199d1755f035b6ea5657b8231be` |
+| `risk50_fals_n1_2000.parquet` | `966c8b3548cc0bf81db0a9cc921b252277638f80af410db04a7564e744d0a363` |
+| `selector_membership.csv` | `989862b8652cf5f1892321dd19ed7806b63d02979ff31575d9086252cc0de9f8` |
+| `selector_explanation_table.csv` | `830a3202199c46e157a0d2ef8d5d82cdc28573c1ea59b802674c48298cd1b518` |
+| `v4_risk50_fals_n1_report.json` | `557ea8cd422f17c2e61dc5d5813e4cc85cb5f9158b726ca417007737169ea670` |
+
+远程正式目录：
+
+```text
+/root/autodl-tmp/curious-vla-workspace/experiments/dataset_v3_controlled_overlap/
+  semantic_audit/v4_risk50_fals_n1_20260901/
+```
+
+当前决策：N1 已完成数据集层面的 CPU 门，可作为下一轮独立 selector 对照输入；它没有获得 policy-level 提升结论，也不重开已经因 GPU-B matched Dev 退化而关闭的 reward 晋级路径。若后续要求 intent 严格对齐，应单独设计可扩展的 quota repair/min-cost-flow 对照，不得把本次 fallback N1 改写成 intent-matched 单变量实验。
