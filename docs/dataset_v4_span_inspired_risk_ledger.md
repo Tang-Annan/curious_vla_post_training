@@ -1,7 +1,7 @@
 # Dataset V4 Span-Inspired Risk 执行台账
 
 > 状态日期：2026-09-01
-> 当前状态：Risk50 + Raw-PDMS（GPU-A）训练完成，在同源 matched Dev 上相对 RR 通过方向门但 Risk 主指标 CI 跨 0；Safety-Continuous（GPU-B）完成 500 updates 后因 Monitor 记录 bug 保留 `FAILED/1`，final checkpoint 经独立恢复门进入 exploratory Dev，但相对 GPU-A 明确退化并关闭 reward 晋级；Final 未访问；第 16–17 节 selector 仍为未执行的独立后续方案
+> 当前状态：Risk50 + Raw-PDMS（GPU-A）训练完成，在同源 matched Dev 上相对 RR 通过方向门但 Risk 主指标 CI 跨 0；Safety-Continuous（GPU-B）完成 500 updates 后因 Monitor 记录 bug 保留 `FAILED/1`，final checkpoint 经独立恢复门进入 exploratory Dev，但相对 GPU-A 明确退化并关闭 reward 晋级；Final 未访问；第 16 节旧 selector 已退回，第 17 节 current-reward selector 已冻结并开放正式 CPU replay/容量审计
 > 数据边界：读取冻结 Train Screen 与完整 Dev；`Final accessed = false`
 
 ## 1. 结论摘要
@@ -659,6 +659,168 @@ NAVSIM scorer 新增三个逐候选字段，统一在 human-penalty 分支用同
 2. family 门记录为 `PARTIAL` 观察项而非阻断：新 reward 在全部 family 都提供连续区分（0.891），proximity 的 distinct 比例最高，中位 range 差异约 3% 且无反转；GPU-B 解释时把 proximity 切片作为次要指标报告；
 3. GPU-A 顺序不变：`Risk50 + Raw-PDMS`（已 READY）先行，回答数据本身价值；GPU-B 才把 reward 换成 `compute_score_safety_continuous`，其余 resolved config 与 GPU-A 逐字段一致；
 4. 审计产物：`v4_reward_audit_20260831_r5/results/reward_audit_report.json` SHA256=`6a65d087c84a14fdb2b7715a8f1fe7cd9b11908962dc7244215526216f80b569`，`candidate_reward_rows.csv`（8,000 rows）SHA256=`59f3c321b2ed9fc901ee7c5da211f97ae8b54b563fb15d3d89a54c76f7f1ffd5`；replay 产物 `_r4/enriched_risk50_reward.jsonl` SHA256=`00df412d7aa610f70d6203e15d96f8fd018ddb138c45dd70cc130d05a6fe1b87`；manifest/labels SHA 与第 13.3/12.4 节一致。
+
+## 16. V4 GRPO selector 与独立 2K 数据集（已退回）
+
+> 2026-09-01 修订：本节产物错误地把 V3 `pdms_scaled` 双块稳定标签作为新 selector 的 primary objective，没有按当前 safety-continuous reward 的 Mean/Best/Headroom/safety mix 重新分桶。代码与产物保留为历史对照，状态改为 `SUPERSEDED_DO_NOT_TRAIN`；不得送入 optimizer。
+
+### 16.1 可复用 rollout 与设计边界
+
+远程审计确认无需重新 rollout。可复用证据包括：
+
+- `v3_s1_screen8000_g4_seed20260827/rollouts.jsonl`：完整 Train Screen `8,000×4`；
+- `v3_s1_stability_capacity_audit_20260829/results/stability_capacity.csv`：Screen block 与独立 confirm block 的稳定性汇总；confirm 仅针对预冻结的 908 条候选，未进入 confirm 的 token 按 `random_anchor` 处理；
+- `v4_reward_gate_audit_20260901/enriched_risk50_reward.jsonl`：旧 Risk50 的 `2,000×4` safety-continuous replay。该文件只能审计旧 2K，不能给 4,005 条候选池中的新成员补 safety 字段，因此不用于新 membership 调阈值。
+
+selector 固定为两层 Train-only 门：
+
+1. 场景门仍是 current-visible 的 proximity/construction/signal 互斥候选池，共 4,005 条；
+2. 在 exact 2,000、family=`1000/500/500`、intent=`1333/434/233`、max-per-log=`4` 下做 lexicographic MILP：
+   - primary：最大化在两个独立 G4 block 中复现 `stable_severe`、`stable_mixed_recoverable` 或 `stable_near_risk` 的 token 数；
+   - secondary：最大化冻结 Screen block 中 `pdms_scaled headroom > GRPO eps=1e-6` 的 token 数；
+   - tie-break：seed=`20260901` 的稳定 SHA256 顺序。
+
+该设计不缩小数据集、不改变 family/intent、G、batch 或 500-update 预算；相对旧 Risk50 只改变同一语义候选池内的成员。稳定标签仍是 frozen-policy proxy，不是人工 correction pair；Screen signal 也不是 safety-continuous reward 的专属信号。
+
+### 16.2 正式物化结果
+
+- run id：`v4_grpo_selector_20260901`
+- source commit：`1fb29e476d8f3a2c7d35fb901f8779146830b8ac`
+- 状态：`COMPLETE`，exit code 0，wall time 1 秒
+- 执行隔离：实现文件上传到 `/tmp`，未修改 GPU-B 使用的 source checkout；`CUDA_VISIBLE_DEVICES` 为空，单核 affinity，I/O idle priority
+- 数据边界：Train only，Dev accessed=false，Final accessed=false，GPU used=false
+- GPU-B 并行状态：selector 完成后仍为 `RUNNING`，训练推进到 step 127；未启动额外 reward server，未触碰 8901 端口
+
+旧 Risk50 与新 selector 的对比：
+
+| 指标 | 旧 Risk50 2K | GRPO-selected 2K | 差值 |
+|---|---:|---:|---:|
+| two-block stable union | 140 | 247 | +107 |
+| stable severe flag | 110 | 196 | +86 |
+| stable mixed-recoverable flag | 126 | 220 | +94 |
+| stable near-risk flag | 30 | 51 | +21 |
+| Screen non-zero GRPO signal | 1,329 | 1,944 | +615 |
+| Screen zero-signal | 671 | 56 | -615 |
+| unique logs | 880 | 831 | -49 |
+| max per log | 4 | 4 | 0 |
+
+4,005 条候选中的 two-block stable union 总容量为 248；exact family/intent/log-cap 联合约束下最优解保留 247 条，即 `99.60%`。新旧 manifest 重叠 1,062 条，Jaccard=`36.15%`，不是对旧清单的排序改写。新数据集仍精确满足：
+
+- scenes=`2,000`，unique token=`2,000`；
+- family proximity/construction/signal=`1,000/500/500`；
+- intent straight/left/right=`1,333/434/233`；
+- unique logs=`831`，max per log=`4`；
+- parquet columns=`images/problem/answer`，manifest 顺序逐行一致；
+- image references=`2,000`，missing=`0`；
+- groups/update=`4` 时一轮仍为 `500 updates`。
+
+关键输出 SHA256：
+
+| 输出 | SHA256 |
+|---|---|
+| `grpo_selected_risk50_2000.txt` | `4808589c28e2b90db57f427186917dee3a2440a6ada0dcdcbbac4fea745d52ec` |
+| `grpo_selected_risk50_2000.parquet` | `86c9ee0616cb5c30ee1e3c10ec5e3afd741abb6022995d3483ecc1291d1545af` |
+| `selector_membership.csv` | `7ac1c1907f4fc39e694baa823c116876c19e01a5ac7224b72eda84224c9ec68e` |
+| `v4_grpo_selector_report.json` | `4ab529ddf3742305f3a1b63bb6d5780148ea20ef353811e86ebad450411525a4` |
+
+远程正式目录：
+
+```text
+/root/autodl-tmp/curious-vla-workspace/experiments/dataset_v3_controlled_overlap/
+  semantic_audit/v4_grpo_selector_20260901/
+```
+
+当前决策：原 `V4_GRPO_SELECTOR_DATASET_READY` 判定撤销，正式状态为 `SUPERSEDED_DO_NOT_TRAIN`。它不替换或修改正在运行的 GPU-B，也不再作为后续 selector 实验输入。
+
+## 17. Current-reward 分桶 + random anchor selector
+
+### 17.1 特征与互斥分桶
+
+每个 token 只使用冻结 SFT policy 的同一组 `G=4` rollout，按当前 `compute_score_safety_continuous` 计算：
+
+```text
+Mean     = mean(R1, R2, R3, R4)
+Best     = max(R1, R2, R3, R4)
+Headroom = Best - Mean
+strict_clear_i = parsed_ok_i
+                 AND no_at_fault_collisions_i == 1
+                 AND drivable_area_compliance_i == 1
+                 AND time_to_collision_within_bound_i == 1
+safe_count = sum(strict_clear_i)
+```
+
+这里的 `safe_count` 明确与最终评测 `StrictClear=L3` 对齐，即 Collision + DAC + TTC。reward 内部的 `hard_safe` 不是这个标签：它使用 candidate Collision + DAC + driving-direction + traffic-light compliance，但不包含 TTC；selector 只把它保留为诊断字段，并逐 rollout 报告与 StrictClear 的 disagreement，不参与分桶。
+
+不用多语义加权总分。四桶按固定优先级互斥：
+
+| bucket | 冻结定义 | selector 角色 |
+|---|---|---|
+| A | `0 < safe_count < 4` | 最高优先级；同组直接比较安全/不安全 |
+| B | `safe_count=4 AND Mean>=0.90 AND Headroom<0.005` | 基本学会；只允许通过 random anchor 保留 |
+| C | 非 A/B 且 `Headroom>=0.005` | 连续 reward 可区分；按 Headroom 在桶内补齐 |
+| D | 其余 `Headroom<0.005` | 低信号；只允许通过 random anchor 保留 |
+
+`0.005` 沿用项目已有 safety component non-regression tolerance。旧 Risk50 2K 的 Train-only 预审计中，A 类最小 Headroom=`0.15035`，说明 safety-mixed 与低信号边界天然分离；没有用 Dev/Final 或目标容量反推阈值。
+
+`recovery_candidate` 比 D 更严格：必须在 Screen block 与独立 Confirm block 中都满足 `safe_count=0 AND Headroom<0.005`。Confirm 只覆盖历史预冻结的 908 条候选；无第二块证据的 D 只保留为 `low_signal`，不得写成“持续完全不会”。
+
+### 17.2 旧 Risk50 2K 预审计边界
+
+上一版 A/B/C/D=`152/704/838/306` 使用的是 reward `hard_safe`，不能继续作为 StrictClear selector 的容量证据，已撤销其正式预审计含义。既有 `2,000×4` replay 后续可以重新计算 StrictClear 作为语义 smoke，但不能产生新的 2K membership：若从同一 2K 再取 learnable+anchor，并集仍是原数据。正式容量结论必须等待 4,005 条 Train-only 候选统一 replay 后生成。
+
+### 17.3 30%/25%/20% anchor 容量协议
+
+正式候选池恢复为 4,005 条 current-visible proximity/construction/signal，统一重放 current reward 后审计三档：
+
+| anchor | learnable/anchor | anchor family P/C/S | anchor intent S/L/R |
+|---:|---:|---|---|
+| 30% | 1,400 / 600 | 300/150/150 | 400/130/70 |
+| 25% | 1,500 / 500 | 250/125/125 | 333/109/58 |
+| 20% | 1,600 / 400 | 200/100/100 | 267/87/46 |
+
+执行顺序固定：
+
+1. 每个 token 同时建立互斥的 `learnable_i` 与 `anchor_i` 二元变量，在同一个 MILP 中联合求解；不得先物理抽取 anchor；
+2. anchor role 精确满足对应 family/intent 配额，但不得因 bucket 身份获得强制保留；learnable role 只允许 A/C，且所有 A 的 `learnable_i` 固定为 1，因此 A 不得进入 anchor；
+3. A 固定后，剩余 learnable 容量只按 C 的 safety-continuous Headroom 补齐；固定 seed=`20260901` 的 hash rank 是 anchor/learnable 的最终随机 tie term，不混合额外风险语义；
+4. learnable+anchor 合并后必须精确满足总 family=`1000/500/500`、intent=`1333/434/233`、max-per-log=`4`；
+5. 决策优先级预注册为 30% → 25% → 20%；每档都要求 joint MILP exact feasible 且全部 A 位于 learnable；若 20% 仍不能容纳全部 A，selector capacity gate 失败，不临时修改 anchor 比例、阈值、配额或桶定义；
+6. 所有 D 都保留在 `bucket_membership.csv`，双块持续失败子集另写 `recovery_candidate.txt`，不因未进入训练集而删除记录。
+
+正式报告额外拆分候选池、learnable role、anchor role 与最终 2K 中的 `A parse-induced`、`C-safe`（C 且 `safe_count=4`）和 `C-unsafe`（C 且 `safe_count=0`）。其中 `A parse-induced` 严格定义为：A 中至少一个 parse failure，且所有成功解析的 rollout 均为 StrictClear；它与仅仅“含 parse failure”的 `A parse-affected` 分开记录。
+
+阈值 sensitivity 只使用 Train replay，并同时报告 `0.0025/0.005/0.01` 下的 A/B/C/D、C-safe/C-unsafe、A+C 总容量以及 family/intent 容量。该报告不运行三个替代 selector，也不根据结果重新选择阈值；正式阈值继续冻结为 `0.005`。
+
+正式 replay 后必须生成 `selector_explanation_table.csv`，并在主 JSON 中内嵌同一张表：
+
+| 指标 | Candidate 4005 | Learnable role | Anchor role | Final 2K |
+|---|---:|---:|---:|---:|
+| A | 待 replay | 待求解 | 待求解 | 待求解 |
+| A parse-induced | 待 replay | 待求解 | 待求解 | 待求解 |
+| B | 待 replay | `0` | 待求解 | 待求解 |
+| C-safe | 待 replay | 待求解 | 待求解 | 待求解 |
+| C-unsafe | 待 replay | 待求解 | 待求解 | 待求解 |
+| D | 待 replay | `0` | 待求解 | 待求解 |
+| Mean reward | 待 replay | 待求解 | 待求解 | 待求解 |
+| Mean Headroom | 待 replay | 待求解 | 待求解 | 待求解 |
+| StrictClear mixed rate | 待 replay | 待求解 | 待求解 | 待求解 |
+| unique logs | 待 replay | 待求解 | 待求解 | 待求解 |
+| Overlap with Risk50 | 待 replay | 待求解 | 待求解 | 待求解 |
+| Overlap with Random | 待 replay | 待求解 | 待求解 | 待求解 |
+
+### 17.4 当前执行门
+
+GPU-B 终态为 `FAILED/exit_code=1`，但训练主循环已完成 `500/500`；第 18.2 节记录了完整失败与 recovery 证据。selector 不读取 GPU-B checkpoint、训练 rollout 或 Monitor，只读取冻结的 SFT Screen/Confirm rollout；GPU-B 对 selector 的唯一依赖是资源排他。
+
+正式启动门因此要求 GPU-B 具有一致的 `COMPLETE/0` 或 `FAILED/nonzero` 终态、`RUNNING` 不存在、GPU idle、8901 空闲，并把实际 terminal/exit code 写入 selector `run.env`，不得把 GPU-B 改写为成功。最近检查 GPU=`0/24,564 MiB`、utilization=`0%`、无 compute PID、8901 空闲，满足资源门。
+
+唯一允许的下一动作是运行：
+
+```text
+bash scripts/run_dataset_v4_grpo_selector_cpu.sh
+```
+
+一次性等待器已按用户要求停止并清理；没有恢复任何自动等待或临时 selector。2026-09-01 用户确认服务器已空闲，正式 CPU replay 获得执行窗口；当前状态为 `V4_SAFETY_BUCKET_SELECTOR_FORMAL_EXECUTION_AUTHORIZED`，不是数据集 READY。
 
 ## 18. GPU-A / GPU-B 训练、matched Dev 与科学闭环
 
