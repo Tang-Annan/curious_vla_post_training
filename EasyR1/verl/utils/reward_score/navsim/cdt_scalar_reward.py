@@ -35,8 +35,8 @@ def _canonical(value: Any, allowed: tuple[float, ...], name: str) -> float:
 
 def _nonnegative(value: Any, name: str) -> float:
     numeric = float(value)
-    if not math.isfinite(numeric) or numeric < 0.0:
-        raise ValueError(f"{name} must be finite and non-negative: {numeric}")
+    if math.isnan(numeric) or numeric < 0.0:
+        raise ValueError(f"{name} must be non-negative: {numeric}")
     return numeric
 
 

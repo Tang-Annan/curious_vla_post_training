@@ -133,6 +133,10 @@ def test_safety_continuous_reward_none_fields_are_safe() -> None:
     none_metrics["min_distance_to_actors"] = None
     assert REWARD.safety_continuous_reward(none_metrics) == 1.0
 
+    normalized_metrics = metrics(progress=1.0)
+    normalized_metrics["min_distance_to_actors"] = math.inf
+    assert REWARD.safety_continuous_reward(normalized_metrics) == 1.0
+
 
 _FIELD_MAP = {
     "collision": "no_at_fault_collisions",
