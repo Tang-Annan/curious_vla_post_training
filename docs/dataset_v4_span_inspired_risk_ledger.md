@@ -1,7 +1,7 @@
 # Dataset V4 Span-Inspired Risk 执行台账
 
-> 状态日期：2026-08-31
-> 当前状态：CPU-only 场景重标注、互斥容量与五模型难度闭环已完成；原 Tier-1 难度门失败，current-visible 修订获得历史模型支持；Risk50 数据门通过并已物化 READY；安全优先连续 reward 定义与 CPU 审计完成并冻结为 GPU-B 候选；未启动训练
+> 状态日期：2026-09-01
+> 当前状态：Risk50 + Raw-PDMS（GPU-A）训练完成，在同源 matched Dev 上相对 RR 通过方向门但 Risk 主指标 CI 跨 0；Safety-Continuous（GPU-B）完成 500 updates 后因 Monitor 记录 bug 保留 `FAILED/1`，final checkpoint 经独立恢复门进入 exploratory Dev，但相对 GPU-A 明确退化并关闭 reward 晋级；Final 未访问；第 16–17 节 selector 仍为未执行的独立后续方案
 > 数据边界：读取冻结 Train Screen 与完整 Dev；`Final accessed = false`
 
 ## 1. 结论摘要
@@ -659,3 +659,94 @@ NAVSIM scorer 新增三个逐候选字段，统一在 human-penalty 分支用同
 2. family 门记录为 `PARTIAL` 观察项而非阻断：新 reward 在全部 family 都提供连续区分（0.891），proximity 的 distinct 比例最高，中位 range 差异约 3% 且无反转；GPU-B 解释时把 proximity 切片作为次要指标报告；
 3. GPU-A 顺序不变：`Risk50 + Raw-PDMS`（已 READY）先行，回答数据本身价值；GPU-B 才把 reward 换成 `compute_score_safety_continuous`，其余 resolved config 与 GPU-A 逐字段一致；
 4. 审计产物：`v4_reward_audit_20260831_r5/results/reward_audit_report.json` SHA256=`6a65d087c84a14fdb2b7715a8f1fe7cd9b11908962dc7244215526216f80b569`，`candidate_reward_rows.csv`（8,000 rows）SHA256=`59f3c321b2ed9fc901ee7c5da211f97ae8b54b563fb15d3d89a54c76f7f1ffd5`；replay 产物 `_r4/enriched_risk50_reward.jsonl` SHA256=`00df412d7aa610f70d6203e15d96f8fd018ddb138c45dd70cc130d05a6fe1b87`；manifest/labels SHA 与第 13.3/12.4 节一致。
+
+## 18. GPU-A / GPU-B 训练、matched Dev 与科学闭环
+
+### 18.1 GPU-A：Risk50 + Raw-PDMS 技术终态
+
+- run id：`v4_risk50_raw_g4_b4_seed20260827`
+- source commit：`5844792a809dd15a550687b720da914fad99b6e9`
+- 状态：`COMPLETE`，exit code 0；`500/500 updates`、`2,000/2,000 groups`、`8,000/8,000 train rollouts`
+- Train Monitor：`0/100/200/300/400/500` 各 `256/256`；parse、clip、non-finite gates 全部通过
+- wall time：`27,981s（7:46:21）`；峰值显存 `21,266 MiB`
+- final LoRA：adapter SHA256=`8e9985f47987a8aa7ff5ca301e9396a6011b827d28f61148b1b93584d42b70fe`，config SHA256=`2323f39159be33a475a0a393741b08952f088aae7f27217e1e6185ad5abea2cc`
+- full actor 清理前已验证 Stage-2 base + LoRA 与原 1,113 个 tensors 逐项一致，其中 LoRA tensors=`288`，状态=`BASE_PLUS_LORA_EXACT_RECOVERY_PASS`。为 matched Dev 临时物化后再次验证 tensor 语义，Dev 完成后删除临时 full actor `8,144,554,868 bytes`；LoRA、训练/Dev rollouts、report、log、hash 与恢复证据保留。
+
+### 18.2 GPU-B：训练主体完成、原 formal run 失败与独立恢复门
+
+- run id：`v4_risk50_safety_g4_b4_seed20260827`
+- source commit：`1fb29e476d8f3a2c7d35fb901f8779146830b8ac`，source status 为空
+- 原 formal 状态：`FAILED`，exit code 1；原 marker 不修改、不补写 `COMPLETE`
+- 训练主体：experiment log 明确覆盖 step `1..500`，共 `500/500 updates`、`2,000/2,000 groups`、`8,000/8,000 train rollouts`；wall=`27,996s（7:46:36）`，峰值显存约 `24,081 MiB`
+- 失败点：六个 Monitor step 均只有 `253/256`，稳定缺少 token `5555e20bdf6c53ba`、`a148c0eb102a527f`、`e4d4b35a03025182`。三者都是无动态参与者场景；server 的 `null` 距离被 client 规范化为 `+inf`，旧 reward 又错误要求距离 finite，产生 `18=3×6` 次 `min_distance_to_actors ... inf` 异常。该问题没有出现在 8,000 条训练 rollout 中，因此未改变 optimizer 所见训练 reward，但使历史六点 Monitor 曲线不完整。
+- 最小修复只允许非负 `+inf` 表示“无参与者/安全距离封顶”，新增回归测试；没有放宽 formal verifier。
+- 独立 recovery run：`v4_risk50_safety_final_monitor_recovery_20260901`，source=`e43a7d7cb9249dc9be22a1d93634fe193b4680b8`，`COMPLETE/0`，不访问 Dev/Final。final checkpoint 重跑 Monitor=`256/256`，parse=`1.0`、clip=`0`、non-finite=`0`，PDMS-scaled=`0.901163`、StrictClear=`0.980469`；状态=`CHECKPOINT_USABLE_FOR_EXPLORATORY_DEV`。
+- recovery 不能重建历史 `0/100/200/300/400/500` 的三条缺失轨迹；它只证明 final checkpoint 的完整训练日志、final Monitor health 与进入 matched exploratory Dev 的技术可用性。
+- GPU-B full actor 删除前，Stage-2 base + LoRA 与原 1,113 个 tensors 逐项一致，LoRA tensors=`288`，状态=`BASE_PLUS_LORA_EXACT_RECOVERY_PASS`。adapter SHA256=`e3761316bc8566866d6603b897d7c6f5f0a584b35cb8128f8c3bd74fa289c0f6`，config SHA256=`e443e99582463f2037fb2e820886f819c3c5c8cbb42bbb6d556bb08d17ac9c7f`。
+
+### 18.3 三模型同协议 matched Dev 416
+
+RR、GPU-A、GPU-B 全部在 source=`e43a7d7cb9249dc9be22a1d93634fe193b4680b8` 下重新执行：
+
+- 冻结 Dev=`416`，Natural/Tail=`210/206`；evaluation seed=`20260827`
+- `n=1`、temperature=`0.6`、top-p=`0.95`、max response length=`512`
+- 同一 Stage-2 base、parser、metric cache、输入 hashes 与 evaluator
+- current-visible Risk/Control=`214/202`；response-complexity=`76`
+- 三个 run 均 `COMPLETE/0`、416 unique tokens、clip=`0`、指标 finite；Final accessed=`false`
+- RR full actor 早于本轮被删除，无法追溯证明与原 full actor 逐 tensor 同一；本轮验证保留 adapter 与组合模型 LoRA tensors 一致并成功物化，adapter SHA256=`7836880df0b5b36de80f05fa133136df875218720bfef74c5024e325ebe7132e`。该边界不影响三者均按当前 source 从各自保留 LoRA 进行 matched inference，但不得改写成历史 full-state byte identity 证明。
+
+主指标：
+
+| 模型 | All Dev PDMS-scaled | All StrictClear | Risk PDMS-scaled | Risk StrictClear | Control PDMS-scaled | Control StrictClear |
+|---|---:|---:|---:|---:|---:|---:|
+| RR | 0.757413 | 0.783654 | 0.700921 | 0.728972 | 0.817262 | 0.841584 |
+| GPU-A | 0.769043 | 0.798077 | 0.711790 | 0.738318 | 0.829698 | 0.861386 |
+| GPU-B | 0.753000 | 0.781250 | 0.691946 | 0.719626 | 0.817681 | 0.846535 |
+
+Risk 214 的 candidate safety 均值：
+
+| 模型 | Collision | DAC | Direction | Traffic-light | TTC |
+|---|---:|---:|---:|---:|---:|
+| RR | 0.735981 | 0.976636 | 0.978972 | 0.887850 | 0.747664 |
+| GPU-A | 0.745327 | 0.976636 | 0.974299 | 0.892523 | 0.747664 |
+| GPU-B | 0.726636 | 0.971963 | 0.971963 | 0.892523 | 0.738318 |
+
+### 18.4 paired log-cluster bootstrap 与机械结论
+
+统计协议为 fixed seed=`20260901`、20,000 次 paired `log_name` cluster bootstrap。方向门在读取三个新 Dev 结果前冻结：Risk PDMS-scaled/StrictClear 点估计均上升、All Dev PDMS-scaled 不下降、Control PDMS-scaled `>=-0.01`、Risk/Control safety component drop 不超过 `0.005`；GPU-B 另要求 Risk 至少一个 safety component 上升。Risk 两个主指标 CI lower 都 `>0` 才允许写“统计支持的提升”。
+
+GPU-A − RR：
+
+- Risk PDMS-scaled：`+0.010869`，95% CI=`[-0.003804,+0.025646]`
+- Risk StrictClear：`+0.009346`，95% CI=`[-0.009390,+0.027149]`
+- All Dev PDMS-scaled：`+0.011630`，95% CI=`[+0.001549,+0.022801]`
+- Control PDMS-scaled：`+0.012436`，95% CI=`[+0.000603,+0.029892]`
+- Risk candidate safety delta：Collision `+0.009346`、DAC `0`、Direction `-0.004673`、Traffic-light `+0.004673`、TTC `0`
+- 全部方向/非退化门通过，但 Risk 两个主 CI 均跨 0；机械状态=`DIRECTIONAL_EXPLORATORY_PASS`。结论限定为：Risk50 数据选择在单 seed、已访问 Dev 上方向性优于 RR，且 All Dev/Control 的 PDMS-scaled paired CI 为正；证据不足以声称 Risk slice 上统计稳定提升或训练 seed 稳定性。
+
+GPU-B − GPU-A：
+
+- Risk PDMS-scaled：`-0.019844`，95% CI=`[-0.037533,-0.000123]`
+- Risk StrictClear：`-0.018692`，95% CI=`[-0.037634,0]`
+- All Dev PDMS-scaled：`-0.016044`，95% CI=`[-0.029382,-0.005242]`
+- Control PDMS-scaled：`-0.012017`，95% CI=`[-0.029079,-0.000189]`
+- Risk candidate safety delta：Collision `-0.018692`、DAC `-0.004673`、Direction `-0.002336`、Traffic-light `0`、TTC `-0.009346`
+- 所有预注册方向门失败，Risk 没有任何 safety component 上升；机械状态=`NO_IMPROVEMENT_GATE`。Safety-Continuous 的训练侧区分度与无反转审计成立，但没有转化为 final policy 增益，反而在 Risk、All Dev、Control 与安全分项上退化。GPU-B 不晋级，按第 11.2 节顺序停止门关闭 GPU-C；不得用 selector、PPO、seed 或阈值变更补救本对照。
+
+### 18.5 产物、hash 与空间闭环
+
+正式 science run：`v4_post_training_science_20260901`，source=`e43a7d7cb9249dc9be22a1d93634fe193b4680b8`，`COMPLETE/0`，source clean、资源回收、磁盘剩余约 `34 GiB`。
+
+| 输出 | SHA256 |
+|---|---|
+| `model_slice_metrics.csv` | `4f0f164b7a3aeec9773276e07522eaf739a8033840f2137ce45c60737007a50f` |
+| `paired_deltas.csv` | `18b239af6931dc0b338d34926b2770c3f09775491ea572b594bae87dee922e51` |
+| `v4_post_training_science_report.json` | `04c29c05fbdd7c78fcade401e8bdbf6bcd017713f633b056c731cc0bc04d5291` |
+
+空间清理仅删除已复制、hash 固化且有显式恢复边界的文件：
+
+- GPU-B full actor `8,144,550,392 bytes`，精确可由 Stage-2 + LoRA 恢复；连同重复 debug/ADAS 共回收 `7,978,692 KiB`
+- GPU-A 临时物化 actor `8,144,554,868 bytes`，连同重复 debug/ADAS 共回收 `7,975,168 KiB`
+- RR 临时物化 actor `8,144,554,868 bytes`，连同本轮重复 ADAS/debug 共回收 `7,954,692 KiB`
+
+Stage-2 base、三个 LoRA、formal run、原 GPU-B `FAILED` 现场、recovery、三套 matched Dev、science report、access records、rollouts、scene metrics、logs、hash 与台账全部保留。GPU、Ray、Gunicorn/8901 均已回收；`Final accessed=false`。
