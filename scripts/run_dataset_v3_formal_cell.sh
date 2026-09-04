@@ -40,7 +40,7 @@ SELECTOR_ROOT="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/selecto
 V4_PREP_ROOT="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/training_prepare/v4_risk50_rr_aligned_prepare_20260831_r1/results"
 V4_SAFETY_PREP_ROOT="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/training_prepare/v4_risk50_safety_aligned_prepare_20260901/results"
 V5_DATASET_RUN="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/semantic_audit/v5_risk_fals_datasets_20260904_r1"
-V5_PREP_ROOT="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/training_prepare/v5_risk_fals_gpu_prepare_20260904_r1/results"
+V5_PREP_ROOT="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/training_prepare/v5_risk_fals_gpu_prepare_20260904_r2/results"
 DATA_ROOT="$WORKSPACE_ROOT/data/dataset_v3_controlled_overlap"
 CACHE_ROOT="$DATA_ROOT/metric_cache"
 MANIFEST_ROOT="$WORKSPACE_ROOT/manifests/dataset_v3_controlled_overlap"
@@ -109,7 +109,8 @@ elif [[ "$CELL" == "V5-RISK50" || "$CELL" == "V5-RISK50-FALS" ]]; then
         "$V5_PREP_ROOT/v5_training_prepare_report.json" "$V5_PREP_ROOT/dataloader_smoke_report.json"
     if [[ "$CELL" == "V5-RISK50-FALS" ]]; then
         FIRST_RUN="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/formal_runs/v5_risk50_raw_g4_b4_seed${SEED}"
-        [[ -e "$FIRST_RUN/COMPLETE" && "$(cat "$FIRST_RUN/exit_code")" == 0 ]] || { echo "V5-RISK50 must complete before V5-RISK50-FALS" >&2; exit 1; }
+        [[ -e "$FIRST_RUN/COMPLETE" && -e "$FIRST_RUN/result_sha256.txt" && "$(cat "$FIRST_RUN/exit_code")" == 0 ]] || { echo "V5-RISK50 must complete before V5-RISK50-FALS" >&2; exit 1; }
+        sha256sum -c "$FIRST_RUN/result_sha256.txt" >/dev/null
         "$PYTHON" -c 'import json,sys; report=json.load(open(sys.argv[1])); assert report["status"] == "COMPLETE" and report["cell"] == "V5-RISK50"' \
             "$FIRST_RUN/training_report.json"
     fi

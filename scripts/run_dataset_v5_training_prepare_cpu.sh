@@ -16,7 +16,7 @@ RISK50_RUN="$EXPERIMENT_ROOT/formal_runs/v5_risk50_raw_g4_b4_seed20260827"
 FALS_RUN="$EXPERIMENT_ROOT/formal_runs/v5_risk50_fals_raw_g4_b4_seed20260827"
 RISK50_DEBUG="$PROJECT_ROOT/EasyR1/checkpoints/debug/v5_risk50_raw_g4_b4_seed20260827"
 FALS_DEBUG="$PROJECT_ROOT/EasyR1/checkpoints/debug/v5_risk50_fals_raw_g4_b4_seed20260827"
-RUN_DIR="$EXPERIMENT_ROOT/training_prepare/v5_risk_fals_gpu_prepare_20260904_r1"
+RUN_DIR="$EXPERIMENT_ROOT/training_prepare/v5_risk_fals_gpu_prepare_20260904_r2"
 
 for path in "$PYTHON" "$DATASET_RUN/COMPLETE" "$DATASET_RUN/results/v5_risk_fals_dataset_report.json" \
     "$RR/COMPLETE" "$RR/checkpoints/experiment_config.json" "$RR/model_sha256.txt" \
@@ -36,7 +36,7 @@ date +%s > "$RUN_DIR/start_epoch.txt"
 git -C "$PROJECT_ROOT" rev-parse HEAD > "$RUN_DIR/source_commit.txt"
 git -C "$PROJECT_ROOT" status --porcelain > "$RUN_DIR/source_status.txt"
 git -C "$PROJECT_ROOT" diff --name-status "$(cat "$RR/source_commit.txt")..HEAD" > "$RUN_DIR/rr_to_current_source_diff.txt"
-printf 'run_id=v5_risk_fals_gpu_prepare_20260904_r1\ncuda_visible_devices=empty\ndev_accessed=false\nfinal_accessed=false\ngpu_used=false\ntraining_launched=false\n' > "$RUN_DIR/run.env"
+printf 'run_id=v5_risk_fals_gpu_prepare_20260904_r2\ncuda_visible_devices=empty\ndev_accessed=false\nfinal_accessed=false\ngpu_used=false\ntraining_launched=false\n' > "$RUN_DIR/run.env"
 
 cleanup() {
     status=$?
@@ -53,7 +53,8 @@ cd "$WORKSPACE_ROOT"
 sha256sum -c "$RR/model_sha256.txt" > "$RUN_DIR/model_hash_check.txt"
 cd "$PROJECT_ROOT"
 export CUDA_VISIBLE_DEVICES=
-"$PYTHON" -m pytest tests/test_v5_risk_fals_datasets.py tests/test_v5_training_prepare.py -q \
+"$PYTHON" -m pytest tests/test_v5_risk_fals_datasets.py tests/test_v5_training_prepare.py \
+    tests/test_export_training_evidence.py -q \
     --basetemp="/tmp/pytest_v5_training_prepare_20260904_$$"
 "$PYTHON" -m compileall -q projects/dataset_v3/v5_risk_fals_datasets.py \
     projects/dataset_v3/v5_training_prepare.py projects/dataset_v3/formal_pipeline.py \

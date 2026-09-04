@@ -204,6 +204,18 @@ def prepare(args: argparse.Namespace) -> None:
             "required_first_cell": "V5-RISK50",
             "required_status": "COMPLETE",
             "required_exit_code": 0,
+            "verify_first_run_result_sha256": True,
+        },
+        "training_evidence": {
+            "export_after_each_v5_run": True,
+            "files": [
+                "training_history.csv",
+                "training_curves.svg",
+                "training_curve_summary.json",
+                "representative_train_samples.jsonl",
+                "training_evidence_manifest.json",
+            ],
+            "included_in_result_sha256": True,
         },
         "datasets": dataset_reports,
         "train_monitor": monitor_report,
