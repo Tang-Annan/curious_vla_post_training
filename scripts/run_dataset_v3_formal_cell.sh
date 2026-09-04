@@ -23,10 +23,13 @@ case "$CELL" in
     V3-TC-PPO2) CELL_TAG=tc_ppo2; SELECTOR=tailmix; REWARD_TAG=cdt; REWARD_FUNCTION=compute_score_cdt_task ;;
     V4-RISK50) CELL_TAG=risk50; SELECTOR=risk50; REWARD_TAG=raw; REWARD_FUNCTION=compute_score_raw_pdms ;;
     V4-RISK50-SAFETY) CELL_TAG=risk50_safety; SELECTOR=risk50; REWARD_TAG=safety; REWARD_FUNCTION=compute_score_safety_continuous ;;
+    V5-RISK50) CELL_TAG=risk50; SELECTOR=risk50; REWARD_TAG=raw; REWARD_FUNCTION=compute_score_raw_pdms ;;
+    V5-RISK50-FALS) CELL_TAG=risk50_fals; SELECTOR=risk50_fals; REWARD_TAG=raw; REWARD_FUNCTION=compute_score_raw_pdms ;;
     *) echo "Unsupported formal cell: $CELL" >&2; exit 2 ;;
 esac
 if [[ "$CELL" == "V3-TC-PPO2" && "$PPO_EPOCHS" != 2 ]]; then echo "V3-TC-PPO2 requires --ppo-epochs 2" >&2; exit 2; fi
 if [[ "$CELL" != "V3-TC-PPO2" && "$PPO_EPOCHS" != 1 ]]; then echo "PPO epochs may only change for V3-TC-PPO2" >&2; exit 2; fi
+if [[ "$CELL" == V5-* && "$SEED" != 20260827 ]]; then echo "V5 cells require the frozen seed 20260827" >&2; exit 2; fi
 
 WORKSPACE_ROOT=/root/autodl-tmp/curious-vla-workspace
 PROJECT_ROOT="$WORKSPACE_ROOT/src/curious_vla_v3"
@@ -36,6 +39,8 @@ MODEL="$WORKSPACE_ROOT/models/sft_stage2"
 SELECTOR_ROOT="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/selector_freeze/v3_s1_selector_freeze_20260829/results"
 V4_PREP_ROOT="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/training_prepare/v4_risk50_rr_aligned_prepare_20260831_r1/results"
 V4_SAFETY_PREP_ROOT="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/training_prepare/v4_risk50_safety_aligned_prepare_20260901/results"
+V5_DATASET_RUN="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/semantic_audit/v5_risk_fals_datasets_20260904_r1"
+V5_PREP_ROOT="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/training_prepare/v5_risk_fals_gpu_prepare_20260904_r1/results"
 DATA_ROOT="$WORKSPACE_ROOT/data/dataset_v3_controlled_overlap"
 CACHE_ROOT="$DATA_ROOT/metric_cache"
 MANIFEST_ROOT="$WORKSPACE_ROOT/manifests/dataset_v3_controlled_overlap"
@@ -47,6 +52,14 @@ elif [[ "$CELL" == "V4-RISK50-SAFETY" ]]; then
     TRAIN_MANIFEST="$V4_PREP_ROOT/risk50_train_2000.txt"
     TRAIN_PARQUET="$V4_PREP_ROOT/risk50_train_2000.parquet"
     FROZEN_CONFIG="$V4_SAFETY_PREP_ROOT/risk50_safety_aligned_config.json"
+elif [[ "$CELL" == "V5-RISK50" ]]; then
+    TRAIN_MANIFEST="$V5_DATASET_RUN/results/v5_risk50_2000.txt"
+    TRAIN_PARQUET="$V5_DATASET_RUN/results/v5_risk50_2000.parquet"
+    FROZEN_CONFIG="$V5_PREP_ROOT/v5_risk50_raw_config.json"
+elif [[ "$CELL" == "V5-RISK50-FALS" ]]; then
+    TRAIN_MANIFEST="$V5_DATASET_RUN/results/v5_risk50_fals_2000.txt"
+    TRAIN_PARQUET="$V5_DATASET_RUN/results/v5_risk50_fals_2000.parquet"
+    FROZEN_CONFIG="$V5_PREP_ROOT/v5_risk50_fals_raw_config.json"
 else
     TRAIN_MANIFEST="$SELECTOR_ROOT/${SELECTOR}_train_2000.txt"
     TRAIN_PARQUET="$SELECTOR_ROOT/${SELECTOR}_train_2000.parquet"
@@ -59,6 +72,10 @@ if [[ "$CELL" == "V4-RISK50" ]]; then
     RUN_ID="v4_risk50_raw_g4_b4_seed${SEED}"
 elif [[ "$CELL" == "V4-RISK50-SAFETY" ]]; then
     RUN_ID="v4_risk50_safety_g4_b4_seed${SEED}"
+elif [[ "$CELL" == "V5-RISK50" ]]; then
+    RUN_ID="v5_risk50_raw_g4_b4_seed${SEED}"
+elif [[ "$CELL" == "V5-RISK50-FALS" ]]; then
+    RUN_ID="v5_risk50_fals_raw_g4_b4_seed${SEED}"
 else
     RUN_ID="v3_${CELL_TAG}_${SELECTOR}_${REWARD_TAG}_g4_b4_seed${SEED}"
 fi
@@ -82,6 +99,20 @@ elif [[ "$CELL" == "V4-RISK50-SAFETY" ]]; then
     sha256sum -c "$V4_SAFETY_PREP_ROOT/../result_sha256.txt" >/dev/null
     "$PYTHON" -c 'import json,sys; report=json.load(open(sys.argv[1])); assert report["status"] == "V4_RISK50_SAFETY_ALIGNED_READY" and report["gpu_training_authorized"] is True' \
         "$V4_SAFETY_PREP_ROOT/v4_risk50_safety_prepare_report.json"
+elif [[ "$CELL" == "V5-RISK50" || "$CELL" == "V5-RISK50-FALS" ]]; then
+    [[ -e "$V5_PREP_ROOT/../COMPLETE" && -e "$V5_DATASET_RUN/COMPLETE" && -e "$FROZEN_CONFIG" ]] || { echo "V5 preparation is incomplete" >&2; exit 1; }
+    [[ "$(cat "$V5_PREP_ROOT/../exit_code")" == 0 && "$(cat "$V5_DATASET_RUN/exit_code")" == 0 ]] || { echo "V5 preparation failed" >&2; exit 1; }
+    [[ "$(git -C "$PROJECT_ROOT" rev-parse HEAD)" == "$(cat "$V5_PREP_ROOT/../source_commit.txt")" ]] || { echo "Source changed after V5 preparation" >&2; exit 1; }
+    sha256sum -c "$V5_PREP_ROOT/../result_sha256.txt" >/dev/null
+    sha256sum -c "$V5_DATASET_RUN/result_sha256.txt" >/dev/null
+    "$PYTHON" -c 'import json,sys; report=json.load(open(sys.argv[1])); smoke=json.load(open(sys.argv[2])); assert report["status"] == "V5_GPU_PREPARATION_READY" and smoke["status"] == "V5_DATALOADER_SMOKE_PASS"' \
+        "$V5_PREP_ROOT/v5_training_prepare_report.json" "$V5_PREP_ROOT/dataloader_smoke_report.json"
+    if [[ "$CELL" == "V5-RISK50-FALS" ]]; then
+        FIRST_RUN="$WORKSPACE_ROOT/experiments/dataset_v3_controlled_overlap/formal_runs/v5_risk50_raw_g4_b4_seed${SEED}"
+        [[ -e "$FIRST_RUN/COMPLETE" && "$(cat "$FIRST_RUN/exit_code")" == 0 ]] || { echo "V5-RISK50 must complete before V5-RISK50-FALS" >&2; exit 1; }
+        "$PYTHON" -c 'import json,sys; report=json.load(open(sys.argv[1])); assert report["status"] == "COMPLETE" and report["cell"] == "V5-RISK50"' \
+            "$FIRST_RUN/training_report.json"
+    fi
 fi
 [[ ! -e "$RUN_DIR" ]] || { echo "Refusing to overwrite formal cell: $RUN_DIR" >&2; exit 1; }
 [[ ! -e "$EASYR1_ROOT/checkpoints/debug/$RUN_ID" ]] || { echo "Debug output exists" >&2; exit 1; }
@@ -152,7 +183,7 @@ export NAVSIM_STAT_PATH="$PROJECT_ROOT/stats/trajectory_stats_train.json"
 export NAVSIM_TRAJ_PARSER_FUNC=verl.utils.reward_score.navsim.helper:parse_trajectory_string_after_tag
 export TENSORBOARD_DIR="$RUN_DIR/tensorboard"
 cd "$EASYR1_ROOT"
-if [[ "$CELL" == "V4-RISK50" || "$CELL" == "V4-RISK50-SAFETY" ]]; then
+if [[ -n "$FROZEN_CONFIG" ]]; then
     "$PYTHON" -m verl.trainer.main config="$FROZEN_CONFIG"
 else
     "$PYTHON" -m verl.trainer.main \
@@ -184,8 +215,18 @@ cd "$PROJECT_ROOT"
     --experiment-config "$RUN_DIR/checkpoints/experiment_config.json" \
     --experiment-log "$RUN_DIR/checkpoints/experiment_log.jsonl" --rollouts "$RUN_DIR/rollouts.jsonl" \
     --output "$RUN_DIR/training_report.json"
+if [[ "$CELL" == V5-* ]]; then
+    "$PYTHON" -m projects.safe_grpo.export_training_evidence \
+        --experiment-log "$RUN_DIR/checkpoints/experiment_log.jsonl" \
+        --gpu-memory "$RUN_DIR/gpu_memory.csv" --train-rollouts "$RUN_DIR/rollouts.jsonl" \
+        --output-dir "$RUN_DIR/training_evidence"
+fi
 sha256sum "$RUN_DIR/training_report.json" "$RUN_DIR/rollouts.jsonl" \
     "$RUN_DIR/checkpoints/experiment_config.json" "$RUN_DIR/checkpoints/experiment_log.jsonl" \
     "$RUN_DIR/checkpoints/checkpoint_tracker.json" "$FINAL_ACTOR/lora_adapter/adapter_model.safetensors" \
     "$FINAL_ACTOR/lora_adapter/adapter_config.json" > "$RUN_DIR/result_sha256.txt"
+if [[ "$CELL" == V5-* ]]; then
+    find "$RUN_DIR/training_evidence" -maxdepth 1 -type f -print0 | sort -z | \
+        xargs -0 sha256sum >> "$RUN_DIR/result_sha256.txt"
+fi
 touch "$RUN_DIR/COMPLETE"

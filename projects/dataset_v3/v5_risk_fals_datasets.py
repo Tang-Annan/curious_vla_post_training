@@ -38,6 +38,7 @@ IMMEDIATE_RADIUS_M = {"vehicle": 5.0, "vru": 10.0}
 CONFLICT_RADIUS_M = {"vehicle": 3.0, "vru": 5.0}
 VRU_NAMES = {"pedestrian", "bicycle"}
 HEADROOM_THRESHOLDS = (0.0025, 0.005, 0.01)
+FALS_SCALE = 10**12
 
 
 def _actor_kind(name: str) -> str | None:
@@ -177,7 +178,7 @@ def extract_risk_labels(
     targets_by_log: dict[str, list[str]],
     workers: int,
 ) -> dict[str, dict[str, Any]]:
-    raw_paths = {path.stem: path for path in raw_logs.rglob("*.pkl")}
+    raw_paths = _index_raw_logs(raw_logs.rglob("*.pkl"))
     missing_logs = set(targets_by_log) - set(raw_paths)
     if missing_logs:
         raise ValueError(f"Missing raw logs: {sorted(missing_logs)[:5]}")
@@ -196,6 +197,33 @@ def extract_risk_labels(
             if completed % 100 == 0 or completed == len(futures):
                 print(f"raw_logs={completed}/{len(futures)}", flush=True)
     return result
+
+
+def _index_raw_logs(paths: Any) -> dict[str, Path]:
+    indexed: dict[str, Path] = {}
+    for path in paths:
+        if path.stem in indexed:
+            raise ValueError(
+                f"Duplicate raw log stem {path.stem}: {indexed[path.stem]} and {path}"
+            )
+        indexed[path.stem] = path
+    return indexed
+
+
+def _index_exact_rows(
+    rows: list[dict[str, str]], expected_tokens: set[str], source: str
+) -> dict[str, dict[str, str]]:
+    indexed: dict[str, dict[str, str]] = {}
+    for row in rows:
+        token = row["token"]
+        if token in indexed:
+            raise ValueError(f"Duplicate {source} token: {token}")
+        indexed[token] = row
+    if len(rows) != EXPECTED_SCREEN or set(indexed) != expected_tokens:
+        raise ValueError(
+            f"{source} must contain exactly {EXPECTED_SCREEN} rows covering frozen Screen"
+        )
+    return indexed
 
 
 def _truthy(row: dict[str, str], key: str) -> bool:
@@ -271,6 +299,10 @@ def _stable_cost(namespace: str, token: str) -> float:
     return int(stable_key(SEED, namespace, token)[:13], 16) / float(16**13)
 
 
+def _fals_quantized(row: dict[str, Any]) -> int:
+    return int(round(float(row["fals"]) * FALS_SCALE))
+
+
 def _solve(
     rows: list[dict[str, Any]],
     objective: Callable[[dict[str, Any]], float],
@@ -278,7 +310,7 @@ def _solve(
     family_quotas: dict[str, int],
     intent_quotas: dict[str, int],
     log_cap: int,
-    exact_features: list[tuple[Callable[[dict[str, Any]], bool], int]] | None = None,
+    exact_features: list[tuple[Callable[[dict[str, Any]], float], int]] | None = None,
 ) -> list[dict[str, Any]]:
     ordered = sorted(rows, key=lambda row: str(row["token"]))
     matrix_rows: list[int] = []
@@ -287,25 +319,29 @@ def _solve(
     lower: list[float] = []
     upper: list[float] = []
 
-    def add(indices: list[int], low: float, high: float) -> None:
+    def add(values: list[tuple[int, float]], low: float, high: float) -> None:
         constraint_index = len(lower)
-        for index in indices:
+        for index, value in values:
             matrix_rows.append(constraint_index)
             matrix_columns.append(index)
-            matrix_values.append(1.0)
+            matrix_values.append(value)
         lower.append(low)
         upper.append(high)
 
-    add(list(range(len(ordered))), TOTAL_SCENES, TOTAL_SCENES)
+    add([(index, 1.0) for index in range(len(ordered))], TOTAL_SCENES, TOTAL_SCENES)
     for family, quota in family_quotas.items():
         add(
-            [index for index, row in enumerate(ordered) if row["exclusive_family"] == family],
+            [
+                (index, 1.0)
+                for index, row in enumerate(ordered)
+                if row["exclusive_family"] == family
+            ],
             quota,
             quota,
         )
     for intent, quota in intent_quotas.items():
         add(
-            [index for index, row in enumerate(ordered) if row["intent"] == intent],
+            [(index, 1.0) for index, row in enumerate(ordered) if row["intent"] == intent],
             quota,
             quota,
         )
@@ -313,9 +349,17 @@ def _solve(
     for index, row in enumerate(ordered):
         by_log[str(row["log_name"])].append(index)
     for indices in by_log.values():
-        add(indices, 0, log_cap)
-    for predicate, value in exact_features or []:
-        add([index for index, row in enumerate(ordered) if predicate(row)], value, value)
+        add([(index, 1.0) for index in indices], 0, log_cap)
+    for feature, expected in exact_features or []:
+        add(
+            [
+                (index, float(feature(row)))
+                for index, row in enumerate(ordered)
+                if feature(row) != 0
+            ],
+            expected,
+            expected,
+        )
 
     matrix = coo_matrix(
         (matrix_values, (matrix_rows, matrix_columns)),
@@ -326,7 +370,7 @@ def _solve(
         integrality=np.ones(len(ordered)),
         bounds=Bounds(np.zeros(len(ordered)), np.ones(len(ordered))),
         constraints=LinearConstraint(matrix, np.asarray(lower), np.asarray(upper)),
-        options={"time_limit": 300},
+        options={"time_limit": 300, "mip_rel_gap": 0.0},
     )
     if not result.success or result.x is None:
         raise ValueError(f"Exact 2K MILP is infeasible: {result.message}")
@@ -359,7 +403,7 @@ def select_risk50_fals(
     family_quotas: dict[str, int] = FAMILY_QUOTAS,
     intent_quotas: dict[str, int] = INTENT_QUOTAS,
     log_cap: int = LOG_CAP,
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     candidates = [row for row in rows if row["exclusive_family"] in family_quotas]
     risk_fals = lambda row: row["exclusive_family"] == "risk" and bool(row["fals_positive"])
     any_fals = lambda row: bool(row["fals_positive"])
@@ -391,10 +435,9 @@ def select_risk50_fals(
         exact_features=[(risk_fals, max_risk_fals), (any_fals, max_total_fals)],
     )
     max_mixed = sum(mixed(row) for row in stage3)
-    selected = _solve(
+    stage4 = _solve(
         candidates,
-        lambda row: -float(row["fals"])
-        + 1e-9 * _stable_cost("v5-risk50-fals", str(row["token"])),
+        lambda row: -float(_fals_quantized(row)),
         family_quotas=family_quotas,
         intent_quotas=intent_quotas,
         log_cap=log_cap,
@@ -404,10 +447,37 @@ def select_risk50_fals(
             (mixed, max_mixed),
         ],
     )
+    max_fals_quantized = sum(_fals_quantized(row) for row in stage4)
+    hash_rank = {
+        str(row["token"]): rank
+        for rank, row in enumerate(
+            sorted(
+                candidates,
+                key=lambda row: _stable_cost("v5-risk50-fals", str(row["token"])),
+            )
+        )
+    }
+    selected = _solve(
+        candidates,
+        lambda row: float(hash_rank[str(row["token"])]),
+        family_quotas=family_quotas,
+        intent_quotas=intent_quotas,
+        log_cap=log_cap,
+        exact_features=[
+            (risk_fals, max_risk_fals),
+            (any_fals, max_total_fals),
+            (mixed, max_mixed),
+            (_fals_quantized, max_fals_quantized),
+        ],
+    )
     return selected, {
         "max_risk_fals": max_risk_fals,
         "max_total_fals": max_total_fals,
         "max_mixed_after_fals": max_mixed,
+        "fals_quantization_scale": FALS_SCALE,
+        "max_fals_quantized": max_fals_quantized,
+        "stage4_raw_fals_sum": sum(float(row["fals"]) for row in stage4),
+        "selected_raw_fals_sum": sum(float(row["fals"]) for row in selected),
     }
 
 
@@ -490,12 +560,15 @@ def run(args: argparse.Namespace) -> None:
     if set(screen_tokens) & set(monitor_tokens):
         raise ValueError("Frozen Screen overlaps the Train Monitor")
 
-    master_rows = read_csv(args.master_index)
     screen_set = set(screen_tokens)
-    master = {row["token"]: row for row in master_rows if row["token"] in screen_set}
-    scene_labels = {row["token"]: row for row in read_csv(args.scene_labels)}
-    if set(master) != screen_set or set(scene_labels) != screen_set:
-        raise ValueError("Master index or scene labels do not exactly cover Screen")
+    master = _index_exact_rows(
+        [row for row in read_csv(args.master_index) if row["token"] in screen_set],
+        screen_set,
+        "Screen master subset",
+    )
+    scene_labels = _index_exact_rows(
+        read_csv(args.scene_labels), screen_set, "scene labels"
+    )
     targets_by_log: dict[str, list[str]] = defaultdict(list)
     for token in screen_tokens:
         targets_by_log[master[token]["log_name"]].append(token)
@@ -591,6 +664,7 @@ def run(args: argparse.Namespace) -> None:
             "projected_conflict_radius_m": CONFLICT_RADIUS_M,
             "minimum_closing_speed_mps": MIN_CLOSING_SPEED_MPS,
             "fals": "(1 - mean(raw_pdms_G4)) * (max(raw_pdms_G4) - mean(raw_pdms_G4))",
+            "rollout_group_validation": "exactly 4 rows per token; source schema has no independent generation id",
         },
         "selection_protocol": {
             "family_quotas": FAMILY_QUOTAS,
@@ -601,7 +675,8 @@ def run(args: argparse.Namespace) -> None:
                 "maximize FALS-positive risk count",
                 "maximize total FALS-positive count",
                 "maximize StrictClear-mixed count",
-                "maximize FALS, then stable-hash tie-break",
+                f"maximize integer-quantized FALS (scale={FALS_SCALE})",
+                "fix the first four optima, then stable-hash-rank tie-break",
             ],
         },
         "pool": pool_summary,

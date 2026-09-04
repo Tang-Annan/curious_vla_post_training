@@ -14,7 +14,7 @@ MONITOR_MANIFEST="$MANIFEST_ROOT/train_monitor_256.txt"
 SCENE_LABELS="$EXPERIMENT_ROOT/semantic_audit/v4_span_inspired_risk_capacity_20260831_r1/results/train_scene_labels.csv"
 SCREEN_ENRICHED="$EXPERIMENT_ROOT/rollout_bank/v3_s1_metric_replay_20260829/screen_rollouts_enriched.jsonl"
 SCREEN_PARQUET="$DATASET_ROOT/hf/grpo_screen.parquet"
-RUN_DIR="$EXPERIMENT_ROOT/semantic_audit/v5_risk_fals_datasets_20260904"
+RUN_DIR="$EXPERIMENT_ROOT/semantic_audit/v5_risk_fals_datasets_20260904_r1"
 
 for path in "$PYTHON" "$RAW_LOGS" "$MASTER" "$SCREEN_MANIFEST" "$MONITOR_MANIFEST" \
     "$SCENE_LABELS" "$SCREEN_ENRICHED" "$SCREEN_PARQUET" "$WORKSPACE_ROOT/data"; do
@@ -28,7 +28,7 @@ touch "$RUN_DIR/RUNNING"
 date +%s > "$RUN_DIR/start_epoch.txt"
 git -C "$PROJECT_ROOT" rev-parse HEAD > "$RUN_DIR/source_commit.txt"
 git -C "$PROJECT_ROOT" status --porcelain > "$RUN_DIR/source_status.txt"
-printf 'run_id=v5_risk_fals_datasets_20260904\nworkers=1\ncuda_visible_devices=empty\ntrain_screen=8000\nreward_source=frozen_sft_g4_raw_pdms\ndev_accessed=false\nfinal_accessed=false\ngpu_used=false\ntraining_launched=false\n' \
+printf 'run_id=v5_risk_fals_datasets_20260904_r1\nworkers=1\ncuda_visible_devices=empty\ntrain_screen=8000\nreward_source=frozen_sft_g4_raw_pdms\ndev_accessed=false\nfinal_accessed=false\ngpu_used=false\ntraining_launched=false\n' \
     > "$RUN_DIR/run.env"
 
 cleanup() {

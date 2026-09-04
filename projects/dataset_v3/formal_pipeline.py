@@ -29,10 +29,14 @@ CELL_REWARD = {
     "V3-TC-PPO2": "compute_score_cdt_task",
     "V4-RISK50": "compute_score_raw_pdms",
     "V4-RISK50-SAFETY": "compute_score_safety_continuous",
+    "V5-RISK50": "compute_score_raw_pdms",
+    "V5-RISK50-FALS": "compute_score_raw_pdms",
 }
 CELL_METADATA = {
     "V4-RISK50": {"selector": "Risk50", "reward": "Raw-PDMS"},
     "V4-RISK50-SAFETY": {"selector": "Risk50", "reward": "Safety-Continuous"},
+    "V5-RISK50": {"selector": "Risk50", "reward": "Raw-PDMS"},
+    "V5-RISK50-FALS": {"selector": "Risk50+FALS", "reward": "Raw-PDMS"},
 }
 # V3-018 freezes ppo_epochs=2 only for the last TC-PPO2 optimizer attempt; the
 # frozen M0 protocol keeps ppo_epochs=1 for the original matrix cells.
