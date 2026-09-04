@@ -127,22 +127,67 @@ FALS-positive Primary 虽有 953 条，但 family、intent 和 `max-per-log=4` �
 - remote result：`/root/autodl-tmp/curious-vla-workspace/experiments/dataset_v3_controlled_overlap/semantic_audit/v5_risk_fals_datasets_20260904/`
 - runner：`scripts/run_dataset_v5_risk_fals_prepare_cpu.sh`
 - workers：`1`
-- 当前状态：`READY_TO_EXECUTE_CPU`
-- 当前 source commit：待首次提交后回填
+- 当前状态：`COMPLETE/exit_code=0`
+- source commit：`c9e1a8f7c93eccfef26e2e3f7a11b84801221584`
+- source status：空；wall time=`205 s`
 - `training_launched=false`、`gpu_used=false`、`dev_accessed=false`、`final_accessed=false`
 
-正式 runner 先执行 focused tests、compile、shell syntax 和 `git diff --check`，再扫描 frozen Screen 的原始 Train logs。输出目录存在时拒绝覆盖，终态必须由 `COMPLETE/exit_code=0` 或 `FAILED/nonzero` 明确记录。
+正式 runner 已先执行 focused tests（`4 passed`）、compile、shell syntax 和 `git diff --check`，再扫描 frozen Screen 的 1,063 个原始 Train logs。输出目录存在时拒绝覆盖，正式 run 已生成 `COMPLETE` marker 和 `exit_code=0`。
 
 ## 7. 实测数据分布与完整性
 
-本节只在正式 CPU run 完成后从 `v5_risk_fals_dataset_report.json` 回填；运行前不得把预审计值改写成已物化结果。
-
 | 数据集 | exact total | family R/C/S | intent S/L/R | max/log | FALS-positive | anchors | 状态 |
 |---|---:|---|---|---:|---:|---:|---|
-| V5-RISK50 | 待运行 | 待运行 | 待运行 | 待运行 | 待运行 | 不适用 | `PENDING` |
-| V5-RISK50-FALS | 待运行 | 待运行 | 待运行 | 待运行 | 待运行 | 待运行 | `PENDING` |
+| V5-RISK50 | 2,000 | 1,000/500/500 | 1,333/434/233 | 4 | 1,375 | 不适用 | `READY` |
+| V5-RISK50-FALS | 2,000 | 1,000/500/500 | 1,333/434/233 | 4 | 1,895 | 105 | `READY` |
 
-两套数据 overlap/Jaccard、unique logs、risk reason 分解、Mean raw-PDMS、Mean Headroom、Mean FALS、StrictClear-mixed 和全部输出 SHA-256 同样待正式报告回填。
+方案 B 的 family 分解与预注册值精确一致：risk=`940 FALS + 60 anchors`，construction=`455 + 45`，signal=`500 + 0`。这确认 FALS 约束把可学习 risk 从普通 Risk50 的 706 提升到 940，但在现有 family/intent/log-cap 下仍不能达到 1,000。
+
+两套数据的诊断分布：
+
+| 指标 | V5-RISK50 | V5-RISK50-FALS |
+|---|---:|---:|
+| unique logs | 873 | 850 |
+| Mean raw-PDMS | 0.914837 | 0.880628 |
+| Mean Headroom | 0.043886 | 0.067029 |
+| Mean FALS | 0.013929 | 0.021478 |
+| StrictClear-mixed | 200 | 297 |
+| Headroom≥0.0025 | 1,341 | 1,852 |
+| Headroom≥0.005 | 1,258 | 1,782 |
+| Headroom≥0.01 | 1,052 | 1,558 |
+
+Primary Risk 的 current-state reason 分解：
+
+| reason | V5-RISK50 | V5-RISK50-FALS |
+|---|---:|---:|
+| immediate proximity | 255 | 249 |
+| projected conflict | 882 | 886 |
+| dynamic addition | 745 | 751 |
+| lateral convergence | 81 | 80 |
+| immediate vehicle / VRU | 39 / 220 | 32 / 219 |
+| projected vehicle / VRU | 549 / 383 | 565 / 372 |
+
+两套 manifest overlap=`1,254`，Jaccard=`45.6664%`。两个 parquet 均为 2,000 rows、`images/problem/answer` schema、2,000 个 image references、missing images=`0`、manifest order exact。Train Monitor overlap=`0`；Dev/Final 均未访问。
+
+### 7.1 输出 SHA-256
+
+| 输出 | SHA-256 |
+|---|---|
+| `v5_risk50_2000.txt` | `73c184ef2aac954f40ac9a3b87c7e335f5a554b4885ac9bf351e3562e2e9db9b` |
+| `v5_risk50_2000.parquet` | `3e1a6ff35bd97bdcadf93ad574e9c5b91c02e9368ab2c227dc4a3317162650c0` |
+| `v5_risk50_fals_2000.txt` | `3372c73f65154260c8c3305597fc1d723e542d6e73bbfcc732f39fda7897112f` |
+| `v5_risk50_fals_2000.parquet` | `3df9e3a57a2656328b5abe540842e32d006781cfd366d6fc1400b25128243329` |
+| `v5_scene_fals_membership.csv` | `09a1fd63a01dbfc62ff70dd9516caa1075f9af4778433cce99c9fc47cb828343` |
+| `v5_risk_fals_dataset_report.json` | `55fca20bae054699f77c1b1b8f20292e4fbfd3e7c78384c3b9f33cf12fd61648` |
+
+完整 run 已同步到本地：
+
+```text
+D:\Desktop\curious_vla\artifacts\dataset_v5_risk_fals_20260904\
+  v5_risk_fals_datasets_20260904\
+```
+
+本地逐文件 SHA-256 与远程 `result_sha256.txt` 一致；两个 manifest 均为 2,000 rows/2,000 unique tokens，实测 overlap=1,254。本地 PyArrow `19.0.0` 读取 `answer.gt: list<null>` 时仍触发已知的 `Repetition level histogram size mismatch`，远程 PyArrow `25.0.1` 已对两个文件完成写后回读。因此该现象是旧 reader 兼容边界，不是 parquet 损坏；后续远程训练可直接使用，若迁移到本地训练环境须先使用兼容 reader。
 
 ## 8. 未来两轮 GRPO 冻结顺序
 
