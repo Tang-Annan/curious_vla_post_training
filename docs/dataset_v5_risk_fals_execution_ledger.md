@@ -1,6 +1,6 @@
 # Dataset V5 Risk / FALS 闭环台账
 
-> 当前阶段：`DATA_PREPARATION_ONLY`。执行资源为 `0.5 vCPU / no GPU`；本阶段只生成与核验两套 2K 训练数据，不启动 GRPO、不加载 policy checkpoint、不访问 Dev/Final。未来训练顺序与证据要求在本台账冻结，但须等待独立 GPU 阶段显式启动。
+> 当前阶段：`GPU_PREPARATION_READY`。执行资源仍为 `0.5 vCPU / no GPU`；corrected `Risk50+FALS` 已重新物化，两套 2K 数据、raw-PDMS 配置、顺序门、真实 dataloader smoke 与训练曲线导出入口均已冻结。当前未启动 GRPO、未加载 policy checkpoint、未访问 Dev/Final；切换 GPU 实例后可从第 1 轮正常训练入口开始。
 
 ## 1. 本轮目标与执行边界
 
@@ -65,7 +65,10 @@ FALS       = Difficulty * Headroom
 1. 最大化 FALS-positive risk；
 2. 固定第 1 项最优值后，最大化全部 FALS-positive；
 3. 固定前两项后，最大化 StrictClear-mixed；
-4. 固定前三项后，最大化 FALS 总和，以 seed=`20260904` stable hash 打破并列。
+4. 固定前三项后，最大化整数化 FALS 总和，其中 `FALS_q=round(FALS×10^12)`；
+5. 固定前四项全部最优值后，才以 seed=`20260904` stable-hash rank 打破并列。
+
+第 4、5 层是两个独立 MILP。stable hash 不再作为 FALS objective 的浮点扰动项，因此不会为了 hash 牺牲任何 `FALS_q`。
 
 非 FALS-positive 但因 exact quota 必须保留的 token 记为 anchor。FALS 只影响第二套数据的 membership，不改变 risk 定义和 raw-PDMS reward。
 
@@ -120,7 +123,7 @@ FALS-positive Primary 虽有 953 条，但 family、intent 和 `max-per-log=4` �
 
 另有 862 个 raw risk token 满足 `Headroom≥0.005`。该 sensitivity 只描述更严格信号容量，不替换 `FALS>0` 的正式方案 B 定义。
 
-## 6. CPU 数据准备运行
+## 6. 初版 CPU 数据准备运行（已由 corrected r1 取代）
 
 - run id：`v5_risk_fals_datasets_20260904`
 - remote source：`/root/autodl-tmp/curious-vla-workspace/src/curious_vla_v3`
@@ -134,7 +137,7 @@ FALS-positive Primary 虽有 953 条，但 family、intent 和 `max-per-log=4` �
 
 正式 runner 已先执行 focused tests（`4 passed`）、compile、shell syntax 和 `git diff --check`，再扫描 frozen Screen 的 1,063 个原始 Train logs。输出目录存在时拒绝覆盖，正式 run 已生成 `COMPLETE` marker 和 `exit_code=0`。
 
-## 7. 实测数据分布与完整性
+## 7. 初版实测数据分布与完整性（仅保留历史审计）
 
 | 数据集 | exact total | family R/C/S | intent S/L/R | max/log | FALS-positive | anchors | 状态 |
 |---|---:|---|---|---:|---:|---:|---|
@@ -203,3 +206,111 @@ artifacts/dataset_v5_risk_fals_20260904/<run_id>/training_evidence/
 ```
 
 至少保留 `training_history.csv`、`training_curves.svg`、`training_curve_summary.json`、`training_evidence_manifest.json` 及其 SHA-256。曲线是展示证据，结论仍以原始训练 JSONL/CSV 和固定评测为准。本轮 CPU 数据准备不会产生这些训练曲线，也不得伪造占位曲线。
+
+## 9. 训练前修复闭环
+
+训练前复查确认并修复两项阻断问题：
+
+1. 原实现把 `-FALS + 1e-9×stable_hash` 写在同一目标中，无法保证严格 lexicographic。现改为五阶段求解；第 4 层最大化 `FALS_q`，第 5 层通过 exact weighted constraint 固定 `max_fals_quantized` 后再做 hash tie-break，且 `mip_rel_gap=0`。
+2. 原实现会在建字典时静默覆盖重复的 Screen master token、scene-label token 或 raw-log stem。现均在建索引前显式检查并直接失败；current-frame annotation arrays 仍要求对齐，track token 仍要求非空且唯一。冻结 rollout schema 没有独立 generation/sample ID，因此只声明并验证每个 token 恰好 4 rows，不把内容相同的独立采样误判为重复。
+
+回归覆盖包括：receding TTC、超过 4 秒 horizon、lateral crossing、annotation 对齐、重复 track token、重复 master/labels/raw stem、binding log cap、不可避免 anchors、risk-FALS 对 total-FALS 的优先级、StrictClear-mixed 优先级、旧浮点扰动尺度反例，以及第 5 层不改变前四层最优值。正式 corrected data runner 为 `16 passed`；最终 GPU-preflight runner 为 `23 passed`。本地连同 formal/config/exporter 相关测试为 `31 passed`。
+
+## 10. Corrected 数据物化结果
+
+- run id：`v5_risk_fals_datasets_20260904_r1`
+- source commit：`44dafb512928967588253916c0969f42f2313402`
+- 状态：`COMPLETE/exit_code=0`
+- wall time：`204 s`
+- raw logs：完整扫描 `1,063/1,063`
+- 边界：`gpu_used=false`、`training_launched=false`、`dev_accessed=false`、`final_accessed=false`
+
+严格最优值：
+
+| 层级 | corrected 最优值 |
+|---|---:|
+| risk FALS-positive | 940 |
+| total FALS-positive | 1,895 |
+| StrictClear-mixed | 297 |
+| `FALS_q` sum，scale=`10^12` | 42,956,168,591,389 |
+| raw FALS sum | 42.956168591389265 |
+
+corrected `Risk50` 与初版 byte-identical，2,000/2,000 token 不变。corrected `Risk50+FALS` 与初版 overlap=`1,940/2,000`，两侧各替换 60 个 token，证明旧混合 objective 的 hash 扰动确实改变了应由 FALS 决定的 membership。两套 corrected 数据之间 overlap=`1,255`。
+
+| 指标 | corrected V5-RISK50 | corrected V5-RISK50-FALS |
+|---|---:|---:|
+| total | 2,000 | 2,000 |
+| family R/C/S | 1,000/500/500 | 1,000/500/500 |
+| intent S/L/R | 1,333/434/233 | 1,333/434/233 |
+| max/log | 4 | 4 |
+| FALS-positive | 1,375 | 1,895 |
+| risk FALS-positive | 706 | 940 |
+| StrictClear-mixed | 200 | 297 |
+| unique logs | 873 | 865 |
+| mean raw-PDMS | 0.914837 | 0.880044 |
+| mean FALS | 0.013929 | 0.021478 |
+
+corrected 输出 SHA-256：
+
+| 输出 | SHA-256 |
+|---|---|
+| `v5_risk50_2000.txt` | `73c184ef2aac954f40ac9a3b87c7e335f5a554b4885ac9bf351e3562e2e9db9b` |
+| `v5_risk50_2000.parquet` | `3e1a6ff35bd97bdcadf93ad574e9c5b91c02e9368ab2c227dc4a3317162650c0` |
+| `v5_risk50_fals_2000.txt` | `eafbc47a5977808d77635f43da80159da90eacafef712e5d6843ec34592c1400` |
+| `v5_risk50_fals_2000.parquet` | `adcf63a38f8723a3c611b1f298574b978d9f77cbf595817cf30d06beb6ed461b` |
+| `v5_scene_fals_membership.csv` | `b595455cd939c7202f1cf4eec3e4ee314d604a0654f80b58045d98f433992c46` |
+| `v5_risk_fals_dataset_report.json` | `84974e57050b8116d8d27911f9c107d1d0275f0d47ccd1cb300c6a6db783e785` |
+
+远程与本地 `result_sha256.txt` 已逐文件一致。本地证据目录：
+
+```text
+D:\Desktop\curious_vla\artifacts\dataset_v5_risk_fals_20260904\v5_risk_fals_datasets_20260904_r1\
+```
+
+## 11. GPU 前最终准备状态
+
+- run id：`v5_risk_fals_gpu_prepare_20260904_r2`
+- source commit：`687531fe12ffd0921febbde3d92bb61d9f98b6a6`
+- 状态：`V5_GPU_PREPARATION_READY`，`COMPLETE/exit_code=0`
+- wall time：`416 s`
+- 可用磁盘：`36,448,317,440 bytes`，满足 30 GiB 门
+- SFT Stage-2：两个 model shards、`config.json`、index 共 4 项 SHA 全部 `OK`
+- 两套 parquet：各 2,000 rows，schema 与 RR reference 一致，manifest order exact，图像 `2,000/2,000` 存在
+- Train Monitor：256 rows，schema/order exact，图像 `256/256` 存在；两套 optimizer data overlap 均为 0
+- 真实 loader smoke：两套均为 2,000 rows，抽样 `0/666/1333/1999`，batch=`4`，`input_ids=[4,3072]`
+- future formal/debug dirs：全部不存在
+- GPU idle 与 reward port 8901：延迟到 GPU 启动瞬间检查
+
+两份 runnable config 相对历史 RR resolved config 只允许并实测只改变：
+
+```text
+data.train_files
+trainer.experiment_name
+trainer.save_checkpoint_path
+```
+
+其余冻结为：相同 Stage-2 独立初始化、Raw-PDMS、standard GRPO、seed=`20260827`、`G=4`、4 groups/update、LR=`1e-6`、PPO epoch=`1`、LoRA rank 8 attention-only、KL=`0.01/low_var_kl`、2,000 groups、8,000 train rollouts、500 updates、Monitor=`0/100/200/300/400/500`。
+
+| 配置 | SHA-256 |
+|---|---|
+| `v5_risk50_raw_config.json` | `b96c1a225a00e42f8ff3840b7c17bc9f5315089055553a88ce025c9fcb3a1f21` |
+| `v5_risk50_fals_raw_config.json` | `0b3603bc795cd1ab93421d68fb817bcb1a2d2241c7a21f62c22899d1847aad08` |
+| `dataloader_smoke_report.json` | `129aec3839ab542e2c88ed58507e41fd48ae35a1b8fe870a8c57282296e705c9` |
+| `v5_training_prepare_report.json` | `c9376d385f10f267cc8bacc25d3c43cccf45c4e3d13e2f8d2abc599949fac4ac` |
+
+本地预检证据目录：
+
+```text
+D:\Desktop\curious_vla\artifacts\dataset_v5_risk_fals_20260904\v5_risk_fals_gpu_prepare_20260904_r2\
+```
+
+正常训练入口固定为：
+
+```bash
+bash scripts/run_dataset_v3_formal_cell.sh --cell V5-RISK50 --seed 20260827
+bash scripts/run_dataset_v3_formal_cell.sh --cell V5-RISK50-FALS --seed 20260827
+```
+
+必须顺序执行。第二条命令会在创建 run 前验证第一轮 `COMPLETE`、`exit_code=0`、`training_report.status=COMPLETE`、`training_report.cell=V5-RISK50`，并逐文件执行第一轮 `result_sha256.txt`。两轮均从同一个 Stage-2 初始化，第二轮不继承第一轮 checkpoint。
+
+每轮训练成功后自动导出并纳入 `result_sha256.txt`：`training_history.csv`、`training_curves.svg`、`training_curve_summary.json`、`representative_train_samples.jsonl`、`training_evidence_manifest.json`。训练完成后按既有 artifacts 约定完整下载到本地，不使用占位曲线。
